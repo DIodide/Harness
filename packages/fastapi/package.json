@@ -1,0 +1,13 @@
+{
+    "name": "@harness/fastapi",
+    "version": "1.0.0",
+    "description": "FastAPI backend for Harness",
+    "private": true,
+    "scripts": {
+        "dev": ".venv/bin/uvicorn app.main:app --reload --port 8000",
+        "start": ".venv/bin/uvicorn app.main:app --port 8000",
+        "lint": ".venv/bin/ruff check .",
+        "format": ".venv/bin/ruff format .",
+        "setup": "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+    }
+}

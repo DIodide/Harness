@@ -67,6 +67,10 @@
         "typescript": "5.9.2",
       },
     },
+    "packages/fastapi": {
+      "name": "@harness/fastapi",
+      "version": "1.0.0",
+    },
   },
   "packages": {
     "@acemir/cssom": ["@acemir/cssom@0.9.31", "", {}, "sha512-ZnR3GSaH+/vJ0YlHau21FjfLYjMpYVIzTD8M8vIEQvIGxeOXyXdzCI140rrCY862p/C/BbzWsjc1dgnM9mkoTA=="],
@@ -232,6 +236,8 @@
     "@floating-ui/utils": ["@floating-ui/utils@0.2.10", "", {}, "sha512-aGTxbpbg8/b5JfU1HXSrbH3wXZuLPJcNEcZQFMxLs3oSzgtVu6nFPkbbGGUvBcUjKV2YyB9Wxxabo+HEH9tcRQ=="],
 
     "@harness/convex-backend": ["@harness/convex-backend@workspace:packages/convex-backend"],
+
+    "@harness/fastapi": ["@harness/fastapi@workspace:packages/fastapi"],
 
     "@harness/web": ["@harness/web@workspace:apps/web"],
 
