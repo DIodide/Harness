@@ -5,12 +5,15 @@ if [ "$branch" = "main" ]; then
   exit 1
 fi
 
-valid_pattern="^(feat|fix|chore|docs|refactor|test|ci|style|perf)/.+$"
+if [ "$branch" = "staging" ]; then
+  exit 0
+fi
+
+valid_pattern="^[a-zA-Z0-9_-]+/.+$"
 
 if ! echo "$branch" | grep -qE "$valid_pattern"; then
   echo "Invalid branch name: $branch"
-  echo "Branch names must follow: <type>/<description>"
-  echo "Allowed types: feat, fix, chore, docs, refactor, test, ci, style, perf"
+  echo "Branch names must follow: <category>/<description>"
   echo "Example: feat/add-user-auth"
   exit 1
 fi
