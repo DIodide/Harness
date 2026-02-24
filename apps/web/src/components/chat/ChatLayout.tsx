@@ -1,8 +1,8 @@
-import { useState } from "react";
-import { Sidebar } from "./Sidebar";
 import { Menu } from "lucide-react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Sidebar } from "./Sidebar";
 
 interface ChatLayoutProps {
 	conversationId?: string;
@@ -19,10 +19,10 @@ interface ChatLayoutProps {
 export function ChatLayout({
 	conversationId,
 	harnessId,
-	model,
+	model: _model,
 	userId,
 	onHarnessChange,
-	onModelChange,
+	onModelChange: _onModelChange,
 	onConversationSelect,
 	onNewChat,
 	children,
@@ -47,7 +47,11 @@ export function ChatLayout({
 			<Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
 				<div className="md:hidden fixed top-3 left-3 z-40">
 					<SheetTrigger asChild>
-						<Button variant="ghost" size="icon" className="bg-card/80 backdrop-blur">
+						<Button
+							variant="ghost"
+							size="icon"
+							className="bg-card/80 backdrop-blur"
+						>
 							<Menu className="size-5" />
 						</Button>
 					</SheetTrigger>

@@ -1,15 +1,19 @@
-import { useState, useEffect } from "react";
 import { useUser } from "@clerk/tanstack-react-start";
-import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
-import { ChatLayout } from "@/components/chat/ChatLayout";
+import {
+	createFileRoute,
+	useNavigate,
+	useParams,
+} from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
 import { ChatHeader } from "@/components/chat/ChatHeader";
-import { MessageList } from "@/components/chat/MessageList";
 import { ChatInput } from "@/components/chat/ChatInput";
+import { ChatLayout } from "@/components/chat/ChatLayout";
+import { MessageList } from "@/components/chat/MessageList";
+import { useConversation, useConversations } from "@/hooks/useConversations";
 import { useHarness } from "@/hooks/useHarnesses";
-import { useConversations, useConversation } from "@/hooks/useConversations";
 import { useMessages } from "@/hooks/useMessages";
 import { useSendMessage } from "@/hooks/useSendMessage";
-import toast from "react-hot-toast";
 
 export const Route = createFileRoute("/chat/$conversationId")({
 	component: ConversationPage,
@@ -80,7 +84,7 @@ function ConversationPage() {
 		navigate({ to: "/chat/$conversationId", params: { conversationId: id } });
 	};
 
-	const handleHarnessChange = (id: string) => {
+	const handleHarnessChange = (_id: string) => {
 		// Can't change harness on existing conversation
 	};
 

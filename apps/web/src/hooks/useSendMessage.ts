@@ -1,11 +1,12 @@
-import { useCallback, useState } from "react";
-import { useMutation } from "convex/react";
 import { api } from "@harness/backend/convex/_generated/api";
+import { useMutation } from "convex/react";
+import { useCallback, useState } from "react";
 import { env } from "@/env";
 
-const FASTAPI_URL = typeof window !== "undefined"
-	? (env.VITE_FASTAPI_URL ?? "http://localhost:8000")
-	: "http://localhost:8000";
+const FASTAPI_URL =
+	typeof window !== "undefined"
+		? (env.VITE_FASTAPI_URL ?? "http://localhost:8000")
+		: "http://localhost:8000";
 
 export function useSendMessage() {
 	const [isSending, setIsSending] = useState(false);

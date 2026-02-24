@@ -1,5 +1,5 @@
-import { useQuery } from "convex/react";
 import { api } from "@harness/backend/convex/_generated/api";
+import { useQuery } from "convex/react";
 
 export function useHarnesses() {
 	const harnesses = useQuery(api.harnesses.list);
@@ -10,9 +10,6 @@ export function useHarnesses() {
 }
 
 export function useHarness(id: string | undefined) {
-	const harness = useQuery(
-		api.harnesses.get,
-		id ? { id: id as any } : "skip",
-	);
+	const harness = useQuery(api.harnesses.get, id ? { id: id as any } : "skip");
 	return { harness, isLoading: harness === undefined };
 }

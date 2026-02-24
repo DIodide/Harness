@@ -1,15 +1,19 @@
-import { useState, useEffect } from "react";
 import { useUser } from "@clerk/tanstack-react-start";
-import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
-import { ChatLayout } from "@/components/chat/ChatLayout";
+import {
+	createFileRoute,
+	useNavigate,
+	useSearch,
+} from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
 import { ChatHeader } from "@/components/chat/ChatHeader";
-import { MessageList } from "@/components/chat/MessageList";
 import { ChatInput } from "@/components/chat/ChatInput";
-import { useHarnesses, useHarness } from "@/hooks/useHarnesses";
+import { ChatLayout } from "@/components/chat/ChatLayout";
+import { MessageList } from "@/components/chat/MessageList";
 import { useConversations } from "@/hooks/useConversations";
+import { useHarness, useHarnesses } from "@/hooks/useHarnesses";
 import { useMessages } from "@/hooks/useMessages";
 import { useSendMessage } from "@/hooks/useSendMessage";
-import toast from "react-hot-toast";
 
 export const Route = createFileRoute("/chat/")({
 	component: ChatPage,
@@ -27,9 +31,9 @@ function ChatPage() {
 	const userId = user?.id ?? "";
 	const [harnessId, setHarnessId] = useState<string | undefined>();
 	const [model, setModel] = useState("openai/gpt-4o");
-	const [activeConversationId, setActiveConversationId] = useState<string | undefined>(
-		search.c || undefined,
-	);
+	const [activeConversationId, setActiveConversationId] = useState<
+		string | undefined
+	>(search.c || undefined);
 
 	const { harnesses } = useHarnesses();
 	const { harness } = useHarness(harnessId);
@@ -110,7 +114,9 @@ function ChatPage() {
 
 	const handleConversationSelect = (id: string) => {
 		setActiveConversationId(id);
-		const conv = conversations.find((c: { _id: string; harnessId: string; model: string }) => c._id === id);
+		const conv = conversations.find(
+			(c: { _id: string; harnessId: string; model: string }) => c._id === id,
+		);
 		if (conv) {
 			setHarnessId(conv.harnessId);
 			setModel(conv.model);

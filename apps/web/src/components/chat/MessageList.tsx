@@ -3,12 +3,24 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./MessageBubble";
 import { StreamingIndicator } from "./StreamingIndicator";
 
+interface ToolCall {
+	id?: string;
+	name: string;
+	arguments?: string;
+}
+
+interface ToolResult {
+	tool_call_id: string;
+	name: string;
+	result: string;
+}
+
 interface Message {
 	_id: string;
 	role: "user" | "assistant" | "system" | "tool";
 	content: string;
-	toolCalls?: any;
-	toolResults?: any;
+	toolCalls?: ToolCall[];
+	toolResults?: ToolResult[];
 	isStreaming: boolean;
 	isError: boolean;
 	createdAt: number;
@@ -21,10 +33,13 @@ interface MessageListProps {
 
 export function MessageList({ messages, isStreaming }: MessageListProps) {
 	const bottomRef = useRef<HTMLDivElement>(null);
+	const messageCount = messages.length;
+	const lastContent = messages[messageCount - 1]?.content;
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: deps used as scroll triggers when messages change
 	useEffect(() => {
 		bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-	}, [messages, isStreaming]);
+	}, [messageCount, lastContent, isStreaming]);
 
 	if (messages.length === 0) {
 		return (

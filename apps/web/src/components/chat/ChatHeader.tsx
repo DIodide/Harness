@@ -5,17 +5,17 @@ import {
 	Layers,
 	Settings2,
 } from "lucide-react";
-import { ModelSelector } from "./ModelSelector";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useHarness } from "@/hooks/useHarnesses";
-import { McpConnectionStatus } from "./McpConnectionStatus";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useHarness } from "@/hooks/useHarnesses";
 import ClerkHeader from "@/integrations/clerk/header-user";
+import { McpConnectionStatus } from "./McpConnectionStatus";
+import { ModelSelector } from "./ModelSelector";
 
 const ICON_MAP: Record<string, React.ElementType> = {
 	briefcase: Briefcase,

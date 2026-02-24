@@ -1,16 +1,15 @@
 import {
 	Briefcase,
+	Check,
 	Code,
 	GraduationCap,
 	Layers,
-	Check,
 	Link2,
 	Link2Off,
 } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useHarnesses } from "@/hooks/useHarnesses";
 import { useMcpConnections } from "@/hooks/useMcpConnections";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 
 const ICON_MAP: Record<string, React.ElementType> = {
 	briefcase: Briefcase,
@@ -35,9 +34,9 @@ export function HarnessSelector({
 	if (isLoading) {
 		return (
 			<div className="space-y-2">
-				{Array.from({ length: 3 }).map((_, i) => (
-					<Skeleton key={i} className="h-14 w-full rounded-md" />
-				))}
+				<Skeleton key="skel-0" className="h-14 w-full rounded-md" />
+				<Skeleton key="skel-1" className="h-14 w-full rounded-md" />
+				<Skeleton key="skel-2" className="h-14 w-full rounded-md" />
 			</div>
 		);
 	}
@@ -65,7 +64,10 @@ export function HarnessSelector({
 					>
 						<div
 							className="size-8 rounded-md flex items-center justify-center flex-shrink-0"
-							style={{ backgroundColor: `${harness.color}20`, color: harness.color }}
+							style={{
+								backgroundColor: `${harness.color}20`,
+								color: harness.color,
+							}}
 						>
 							<Icon className="size-4" />
 						</div>
@@ -85,7 +87,8 @@ export function HarnessSelector({
 									<Link2Off className="size-2.5 text-muted-foreground" />
 								)}
 								<span className="text-[10px] text-muted-foreground font-mono">
-									{harness.mcpServers.length} MCP{harness.mcpServers.length !== 1 ? "s" : ""}
+									{harness.mcpServers.length} MCP
+									{harness.mcpServers.length !== 1 ? "s" : ""}
 								</span>
 							</div>
 						</div>

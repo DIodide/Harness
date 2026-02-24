@@ -1,14 +1,26 @@
+import { AlertTriangle, Bot, User } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { AlertTriangle, User, Bot } from "lucide-react";
 import { ToolCallDisplay } from "./ToolCallDisplay";
+
+interface ToolCall {
+	id?: string;
+	name: string;
+	arguments?: string;
+}
+
+interface ToolResult {
+	tool_call_id: string;
+	name: string;
+	result: string;
+}
 
 interface Message {
 	_id: string;
 	role: "user" | "assistant" | "system" | "tool";
 	content: string;
-	toolCalls?: any;
-	toolResults?: any;
+	toolCalls?: ToolCall[];
+	toolResults?: ToolResult[];
 	isStreaming: boolean;
 	isError: boolean;
 }
@@ -27,9 +39,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 			{/* Avatar */}
 			<div
 				className={`size-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-					isUser
-						? "bg-secondary"
-						: "bg-primary/10"
+					isUser ? "bg-secondary" : "bg-primary/10"
 				}`}
 			>
 				{isUser ? (
@@ -40,14 +50,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 			</div>
 
 			{/* Content */}
-			<div
-				className={`flex-1 min-w-0 ${isUser ? "flex justify-end" : ""}`}
-			>
+			<div className={`flex-1 min-w-0 ${isUser ? "flex justify-end" : ""}`}>
 				<div
 					className={`inline-block max-w-full ${
-						isUser
-							? "bg-secondary rounded-2xl rounded-tr-sm px-4 py-2.5"
-							: ""
+						isUser ? "bg-secondary rounded-2xl rounded-tr-sm px-4 py-2.5" : ""
 					}`}
 				>
 					{message.isError && (
@@ -79,10 +85,14 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 				{/* Tool calls */}
 				{message.toolCalls && message.toolResults && (
 					<div className="mt-2 space-y-1.5">
-						{(message.toolResults as any[]).map((result: any, i: number) => (
+						{message.toolResults.map((result) => (
 							<ToolCallDisplay
-								key={i}
-								toolCall={message.toolCalls[i]}
+								key={result.tool_call_id}
+								toolCall={
+									message.toolCalls?.find(
+										(tc) => tc.id === result.tool_call_id,
+									) ?? { name: result.name }
+								}
 								toolResult={result}
 							/>
 						))}

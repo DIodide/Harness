@@ -1,9 +1,9 @@
 import { ExternalLink, Link2, Link2Off, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { useMcpConnections } from "@/hooks/useMcpConnections";
-import { useHarness } from "@/hooks/useHarnesses";
+import { Button } from "@/components/ui/button";
 import { env } from "@/env";
+import { useHarness } from "@/hooks/useHarnesses";
+import { useMcpConnections } from "@/hooks/useMcpConnections";
 
 const FASTAPI_URL =
 	typeof window !== "undefined"
@@ -60,37 +60,34 @@ export function McpConnectionStatus({
 							)}
 						</div>
 
-						{server.authType === "oauth" && (
-							<>
-								{connected ? (
-									<Button
-										variant="ghost"
-										size="icon-xs"
-										className="text-muted-foreground hover:text-destructive"
-										onClick={() =>
-											removeConnection({
-												userId,
-												serverName: server.name,
-											})
-										}
-									>
-										<X className="size-3" />
-									</Button>
-								) : (
-									<Button
-										variant="outline"
-										size="xs"
-										className="text-primary border-primary/30 hover:bg-primary/10"
-										onClick={() => {
-											window.location.href = `${FASTAPI_URL}/auth/${server.name}/start?user_id=${userId}`;
-										}}
-									>
-										<ExternalLink className="size-3 mr-1" />
-										Connect
-									</Button>
-								)}
-							</>
-						)}
+						{server.authType === "oauth" &&
+							(connected ? (
+								<Button
+									variant="ghost"
+									size="icon-xs"
+									className="text-muted-foreground hover:text-destructive"
+									onClick={() =>
+										removeConnection({
+											userId,
+											serverName: server.name,
+										})
+									}
+								>
+									<X className="size-3" />
+								</Button>
+							) : (
+								<Button
+									variant="outline"
+									size="xs"
+									className="text-primary border-primary/30 hover:bg-primary/10"
+									onClick={() => {
+										window.location.href = `${FASTAPI_URL}/auth/${server.name}/start?user_id=${userId}`;
+									}}
+								>
+									<ExternalLink className="size-3 mr-1" />
+									Connect
+								</Button>
+							))}
 					</div>
 				);
 			})}

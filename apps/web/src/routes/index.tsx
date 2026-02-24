@@ -1,15 +1,14 @@
+import { SignInButton, useUser } from "@clerk/tanstack-react-start";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useUser } from "@clerk/tanstack-react-start";
-import { SignInButton } from "@clerk/tanstack-react-start";
 import {
+	ArrowRight,
 	Briefcase,
 	Code,
-	GraduationCap,
-	ArrowRight,
-	Layers,
-	Zap,
-	Shield,
 	GitBranch,
+	GraduationCap,
+	Layers,
+	Shield,
+	Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useHarnesses } from "@/hooks/useHarnesses";
@@ -44,23 +43,25 @@ function LandingPage() {
 								Harness
 							</span>
 						</div>
-						{isLoaded && (
-							<>
-								{isSignedIn ? (
-									<Button
-										onClick={() => navigate({ to: "/chat", search: { connected: undefined, c: undefined } })}
-										className="gap-2"
-									>
-										Open Chat
-										<ArrowRight className="size-4" />
-									</Button>
-								) : (
-									<SignInButton mode="modal">
-										<Button variant="outline">Sign In</Button>
-									</SignInButton>
-								)}
-							</>
-						)}
+						{isLoaded &&
+							(isSignedIn ? (
+								<Button
+									onClick={() =>
+										navigate({
+											to: "/chat",
+											search: { connected: undefined, c: undefined },
+										})
+									}
+									className="gap-2"
+								>
+									Open Chat
+									<ArrowRight className="size-4" />
+								</Button>
+							) : (
+								<SignInButton mode="modal">
+									<Button variant="outline">Sign In</Button>
+								</SignInButton>
+							))}
 					</nav>
 
 					<div className="text-center max-w-3xl mx-auto">
@@ -69,20 +70,24 @@ function LandingPage() {
 							MCP-Powered AI Chat
 						</div>
 						<h1 className="text-5xl md:text-6xl font-bold tracking-tight mb-6 leading-[1.1]">
-							Your AI, your{" "}
-							<span className="text-primary">tools</span>,{" "}
+							Your AI, your <span className="text-primary">tools</span>,{" "}
 							<br className="hidden md:block" />
 							your harness.
 						</h1>
 						<p className="text-lg text-muted-foreground max-w-xl mx-auto mb-10 leading-relaxed">
-							Connect to Notion, GitHub, Linear, and more through MCP.
-							Switch between pre-configured harnesses that give your AI
-							the right tools for the job.
+							Connect to Notion, GitHub, Linear, and more through MCP. Switch
+							between pre-configured harnesses that give your AI the right tools
+							for the job.
 						</p>
 						{isSignedIn ? (
 							<Button
 								size="lg"
-								onClick={() => navigate({ to: "/chat", search: { connected: undefined, c: undefined } })}
+								onClick={() =>
+									navigate({
+										to: "/chat",
+										search: { connected: undefined, c: undefined },
+									})
+								}
 								className="gap-2 text-base px-8 glow-teal"
 							>
 								Start Chatting
@@ -128,39 +133,48 @@ function LandingPage() {
 						Available Harnesses
 					</h2>
 					<div className="grid md:grid-cols-3 gap-4">
-						{harnesses.map((h: { _id: string; icon: string; color: string; name: string; description: string; mcpServers: { name: string; url: string; authType: string }[] }) => {
-							const Icon = ICON_MAP[h.icon] ?? Layers;
-							return (
-								<div
-									key={h._id}
-									className="border border-border rounded-xl p-5 bg-card hover:border-primary/30 transition-colors"
-								>
+						{harnesses.map(
+							(h: {
+								_id: string;
+								icon: string;
+								color: string;
+								name: string;
+								description: string;
+								mcpServers: { name: string; url: string; authType: string }[];
+							}) => {
+								const Icon = ICON_MAP[h.icon] ?? Layers;
+								return (
 									<div
-										className="size-10 rounded-lg flex items-center justify-center mb-3"
-										style={{
-											backgroundColor: `${h.color}15`,
-											color: h.color,
-										}}
+										key={h._id}
+										className="border border-border rounded-xl p-5 bg-card hover:border-primary/30 transition-colors"
 									>
-										<Icon className="size-5" />
+										<div
+											className="size-10 rounded-lg flex items-center justify-center mb-3"
+											style={{
+												backgroundColor: `${h.color}15`,
+												color: h.color,
+											}}
+										>
+											<Icon className="size-5" />
+										</div>
+										<h3 className="font-semibold mb-1">{h.name}</h3>
+										<p className="text-sm text-muted-foreground mb-3">
+											{h.description}
+										</p>
+										<div className="flex gap-1.5 flex-wrap">
+											{h.mcpServers.map((s: { name: string }) => (
+												<span
+													key={s.name}
+													className="text-[10px] font-mono px-2 py-0.5 rounded bg-secondary text-muted-foreground"
+												>
+													{s.name}
+												</span>
+											))}
+										</div>
 									</div>
-									<h3 className="font-semibold mb-1">{h.name}</h3>
-									<p className="text-sm text-muted-foreground mb-3">
-										{h.description}
-									</p>
-									<div className="flex gap-1.5 flex-wrap">
-										{h.mcpServers.map((s: { name: string }) => (
-											<span
-												key={s.name}
-												className="text-[10px] font-mono px-2 py-0.5 rounded bg-secondary text-muted-foreground"
-											>
-												{s.name}
-											</span>
-										))}
-									</div>
-								</div>
-							);
-						})}
+								);
+							},
+						)}
 					</div>
 				</div>
 			)}

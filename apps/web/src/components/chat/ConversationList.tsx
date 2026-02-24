@@ -1,7 +1,7 @@
 import { MessageSquare, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useConversations } from "@/hooks/useConversations";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useConversations } from "@/hooks/useConversations";
 
 interface ConversationListProps {
 	userId: string;
@@ -20,9 +20,9 @@ export function ConversationList({
 	if (isLoading) {
 		return (
 			<div className="space-y-2 px-1">
-				{Array.from({ length: 3 }).map((_, i) => (
-					<Skeleton key={i} className="h-10 w-full rounded-md" />
-				))}
+				<Skeleton key="skel-0" className="h-10 w-full rounded-md" />
+				<Skeleton key="skel-1" className="h-10 w-full rounded-md" />
+				<Skeleton key="skel-2" className="h-10 w-full rounded-md" />
 			</div>
 		);
 	}
@@ -41,17 +41,15 @@ export function ConversationList({
 			{conversations.map((conv) => {
 				const isActive = conv._id === activeConversationId;
 				return (
-					<div
+					<button
 						key={conv._id}
-						className={`group flex items-center gap-2 px-2.5 py-2 rounded-md cursor-pointer transition-colors ${
+						type="button"
+						className={`group w-full flex items-center gap-2 px-2.5 py-2 rounded-md cursor-pointer transition-colors text-left ${
 							isActive
 								? "bg-sidebar-accent text-sidebar-accent-foreground"
 								: "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
 						}`}
 						onClick={() => onSelect(conv._id)}
-						onKeyDown={(e) => e.key === "Enter" && onSelect(conv._id)}
-						role="button"
-						tabIndex={0}
 					>
 						<span className="truncate text-sm flex-1">{conv.title}</span>
 						<Button
@@ -65,7 +63,7 @@ export function ConversationList({
 						>
 							<Trash2 className="size-3" />
 						</Button>
-					</div>
+					</button>
 				);
 			})}
 		</div>

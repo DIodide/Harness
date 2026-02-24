@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState } from "react";
 import { ArrowUp } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 

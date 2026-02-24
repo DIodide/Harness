@@ -1,12 +1,15 @@
-import { useState } from "react";
 import { ChevronDown, ChevronRight, Wrench } from "lucide-react";
+import { useState } from "react";
 
 interface ToolCallDisplayProps {
 	toolCall: { id?: string; name: string; arguments?: string };
 	toolResult: { name: string; result: string };
 }
 
-export function ToolCallDisplay({ toolCall, toolResult }: ToolCallDisplayProps) {
+export function ToolCallDisplay({
+	toolCall,
+	toolResult,
+}: ToolCallDisplayProps) {
 	const [expanded, setExpanded] = useState(false);
 
 	return (

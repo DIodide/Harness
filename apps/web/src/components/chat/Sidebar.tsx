@@ -1,10 +1,10 @@
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import ClerkHeader from "@/integrations/clerk/header-user";
 import { ConversationList } from "./ConversationList";
 import { HarnessSelector } from "./HarnessSelector";
-import ClerkHeader from "@/integrations/clerk/header-user";
 
 interface SidebarProps {
 	userId: string;
@@ -29,7 +29,9 @@ export function Sidebar({
 			<div className="p-4 flex items-center justify-between">
 				<div className="flex items-center gap-2">
 					<div className="size-7 rounded-md bg-primary flex items-center justify-center">
-						<span className="text-primary-foreground font-bold text-sm font-mono">H</span>
+						<span className="text-primary-foreground font-bold text-sm font-mono">
+							H
+						</span>
 					</div>
 					<span className="font-semibold text-sidebar-foreground tracking-tight">
 						Harness
