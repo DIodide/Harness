@@ -37,6 +37,12 @@ dist
 # Debug
 *.log
 
+# Python
+__pycache__
+*.pyc
+.venv
+venv
+
 # Misc
 .DS_Store
 *.pem
