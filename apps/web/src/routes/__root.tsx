@@ -15,7 +15,6 @@ import { createServerFn } from "@tanstack/react-start";
 import type { ConvexReactClient } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 
-import Header from "../components/Header";
 import appCss from "../styles.css?url";
 
 const fetchClerkAuth = createServerFn({ method: "GET" }).handler(async () => {
@@ -77,9 +76,7 @@ function RootComponent() {
 	return (
 		<ClerkProvider>
 			<ConvexProviderWithClerk client={context.convexClient} useAuth={useAuth}>
-				<Header />
-				<Outlet />{" "}
-				{/* This is where the content of the route will be rendered */}
+				<Outlet />
 			</ConvexProviderWithClerk>
 		</ClerkProvider>
 	);
@@ -87,7 +84,7 @@ function RootComponent() {
 
 function RootDocument({ children }: { children: React.ReactNode }) {
 	return (
-		<html lang="en">
+		<html lang="en" className="dark">
 			<head>
 				<HeadContent />
 			</head>

@@ -11,6 +11,9 @@ const config = defineConfig({
 	resolve: {
 		alias: {
 			"@": fileURLToPath(new URL("./src", import.meta.url)),
+			"@harness/backend": fileURLToPath(
+				new URL("../../packages/backend", import.meta.url),
+			),
 		},
 	},
 	plugins: [

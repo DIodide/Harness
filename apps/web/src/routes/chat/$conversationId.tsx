@@ -1,57 +1,41 @@
 import { useState, useEffect } from "react";
 import { useUser } from "@clerk/tanstack-react-start";
-import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { ChatLayout } from "@/components/chat/ChatLayout";
 import { ChatHeader } from "@/components/chat/ChatHeader";
 import { MessageList } from "@/components/chat/MessageList";
 import { ChatInput } from "@/components/chat/ChatInput";
-import { useHarnesses, useHarness } from "@/hooks/useHarnesses";
-import { useConversations } from "@/hooks/useConversations";
+import { useHarness } from "@/hooks/useHarnesses";
+import { useConversations, useConversation } from "@/hooks/useConversations";
 import { useMessages } from "@/hooks/useMessages";
 import { useSendMessage } from "@/hooks/useSendMessage";
 import toast from "react-hot-toast";
 
-export const Route = createFileRoute("/chat/")({
-	component: ChatPage,
-	validateSearch: (search: Record<string, unknown>) => ({
-		connected: (search.connected as string) || undefined,
-		c: (search.c as string) || undefined,
-	}),
+export const Route = createFileRoute("/chat/$conversationId")({
+	component: ConversationPage,
 });
 
-function ChatPage() {
+function ConversationPage() {
 	const { isSignedIn, user, isLoaded } = useUser();
 	const navigate = useNavigate();
-	const search = useSearch({ from: "/chat/" });
+	const { conversationId } = useParams({ from: "/chat/$conversationId" });
 
 	const userId = user?.id ?? "";
-	const [harnessId, setHarnessId] = useState<string | undefined>();
-	const [model, setModel] = useState("openai/gpt-4o");
-	const [activeConversationId, setActiveConversationId] = useState<string | undefined>(
-		search.c || undefined,
-	);
 
-	const { harnesses } = useHarnesses();
+	const { conversation } = useConversation(conversationId);
+	const [model, setModel] = useState("openai/gpt-4o");
+	const harnessId = conversation?.harnessId;
+
 	const { harness } = useHarness(harnessId);
 	const { conversations, createConversation } = useConversations(userId);
-	const { messages, isStreaming } = useMessages(activeConversationId);
+	const { messages, isStreaming } = useMessages(conversationId);
 	const { sendMessage, isSending } = useSendMessage();
 
-	// Auto-select first harness
 	useEffect(() => {
-		if (!harnessId && harnesses.length > 0) {
-			setHarnessId(harnesses[0]._id);
+		if (conversation?.model) {
+			setModel(conversation.model);
 		}
-	}, [harnesses, harnessId]);
-
-	// Show toast on OAuth callback
-	useEffect(() => {
-		if (search.connected) {
-			toast.success(`Connected to ${search.connected}`, {
-				className: "bg-card text-foreground border border-border",
-			});
-		}
-	}, [search.connected]);
+	}, [conversation?.model]);
 
 	if (!isLoaded) {
 		return (
@@ -73,31 +57,15 @@ function ChatPage() {
 	const handleSend = async (content: string) => {
 		if (!harnessId || !userId) return;
 
-		let convId: string | undefined = activeConversationId;
-
-		if (!convId) {
-			const title =
-				content.length > 50 ? `${content.slice(0, 50)}...` : content;
-			convId = await createConversation({
-				userId,
-				harnessId: harnessId as any,
-				title,
-				model,
-			});
-			setActiveConversationId(convId);
-		}
-
-		if (!convId) return;
-
 		try {
 			await sendMessage({
-				conversationId: convId,
+				conversationId,
 				harnessId,
 				model,
 				userId,
 				content,
 			});
-		} catch (_err) {
+		} catch {
 			toast.error("Failed to send message", {
 				className: "bg-card text-foreground border border-border",
 			});
@@ -105,25 +73,24 @@ function ChatPage() {
 	};
 
 	const handleNewChat = () => {
-		setActiveConversationId(undefined);
+		navigate({ to: "/chat" });
 	};
 
 	const handleConversationSelect = (id: string) => {
-		setActiveConversationId(id);
-		const conv = conversations.find((c: { _id: string; harnessId: string; model: string }) => c._id === id);
-		if (conv) {
-			setHarnessId(conv.harnessId);
-			setModel(conv.model);
-		}
+		navigate({ to: "/chat/$conversationId", params: { conversationId: id } });
+	};
+
+	const handleHarnessChange = (id: string) => {
+		// Can't change harness on existing conversation
 	};
 
 	return (
 		<ChatLayout
-			conversationId={activeConversationId}
+			conversationId={conversationId}
 			harnessId={harnessId}
 			model={model}
 			userId={userId}
-			onHarnessChange={setHarnessId}
+			onHarnessChange={handleHarnessChange}
 			onModelChange={setModel}
 			onConversationSelect={handleConversationSelect}
 			onNewChat={handleNewChat}
