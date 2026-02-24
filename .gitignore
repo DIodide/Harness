@@ -30,6 +30,8 @@ dist
 .tanstack
 .vinxi
 .wrangler
+.vite
+
 
 # TypeScript
 *.tsbuildinfo
