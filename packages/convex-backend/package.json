@@ -1,5 +1,5 @@
 {
-    "name": "@harness/backend",
+    "name": "@harness/convex-backend",
     "version": "1.0.0",
     "description": "Convex backend for Harness",
     "private": true,

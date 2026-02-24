@@ -54,8 +54,8 @@
         "vitest": "^3.0.5",
       },
     },
-    "packages/backend": {
-      "name": "@harness/backend",
+    "packages/convex-backend": {
+      "name": "@harness/convex-backend",
       "version": "1.0.0",
       "dependencies": {
         "convex": "^1.31.7",
@@ -231,7 +231,7 @@
 
     "@floating-ui/utils": ["@floating-ui/utils@0.2.10", "", {}, "sha512-aGTxbpbg8/b5JfU1HXSrbH3wXZuLPJcNEcZQFMxLs3oSzgtVu6nFPkbbGGUvBcUjKV2YyB9Wxxabo+HEH9tcRQ=="],
 
-    "@harness/backend": ["@harness/backend@workspace:packages/backend"],
+    "@harness/convex-backend": ["@harness/convex-backend@workspace:packages/convex-backend"],
 
     "@harness/web": ["@harness/web@workspace:apps/web"],
 

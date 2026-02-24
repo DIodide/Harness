@@ -3,13 +3,13 @@ Team Members: Ibraheem Amin (lead) Abu Ahmed, Cole Ramer, Richard Wang, John Wu
 
 ## Convex Database
 ```
-cd packages/backend
+cd packages/convex-backend
 bun install
 npx convex login
 npx convex dev
 ```
 Create a new cloud deployment following the instructions, then a
-.env.local file will generate under `packages/backend`
+.env.local file will generate under `packages/convex-backend`
 
 Copy over the environment variable that ends in `.cloud` to 
 a new .env.local variable under apps/web, then set VITE_CONVEX_URL:
@@ -30,7 +30,7 @@ Finally, set the CLERK_JWT_ISSUER_DOMAIN variable on the
 Convex Dashboard.
 ```bash
 # Either go to convex dashboard manually or run
-cd packages/backend
+cd packages/convex-backend
 npx convex dashboard
 ```
 Navigate to settings -> environment variables and set
