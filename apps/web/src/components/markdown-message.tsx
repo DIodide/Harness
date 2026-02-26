@@ -53,7 +53,7 @@ const components: Components = {
 
 		if (isBlock) {
 			return (
-				<div className="my-3 overflow-hidden border border-border">
+				<div className="not-prose my-3 overflow-hidden border border-border">
 					<div className="flex items-center justify-between bg-muted/50 px-3 py-1.5">
 						<span className="font-mono text-[10px] text-muted-foreground">
 							{match?.[1]}
@@ -61,7 +61,10 @@ const components: Components = {
 						<CopyButton text={codeText} />
 					</div>
 					<div className="overflow-x-auto bg-muted/30 p-3">
-						<code className={cn("text-xs", className)} {...props}>
+						<code
+							className={cn("text-[13px] leading-relaxed", className)}
+							{...props}
+						>
 							{children}
 						</code>
 					</div>
@@ -71,7 +74,7 @@ const components: Components = {
 
 		return (
 			<code
-				className="border border-border bg-muted/50 px-1 py-0.5 font-mono text-xs"
+				className="border border-border bg-muted/50 px-1 py-0.5 font-mono text-[13px]"
 				{...props}
 			>
 				{children}
@@ -95,7 +98,7 @@ const components: Components = {
 
 	table({ children, ...props }) {
 		return (
-			<div className="my-3 overflow-x-auto border border-border">
+			<div className="not-prose my-3 overflow-x-auto border border-border">
 				<table className="w-full text-xs" {...props}>
 					{children}
 				</table>
@@ -128,7 +131,7 @@ const rehypePlugins = [rehypeHighlight];
 
 export function MarkdownMessage({ content }: { content: string }) {
 	return (
-		<div className="markdown-message prose-sm">
+		<div className="prose prose-sm prose-neutral max-w-none prose-headings:font-medium prose-headings:tracking-tight prose-p:leading-relaxed prose-strong:font-semibold prose-code:before:content-none prose-code:after:content-none">
 			<ReactMarkdown
 				remarkPlugins={remarkPlugins}
 				rehypePlugins={rehypePlugins}
