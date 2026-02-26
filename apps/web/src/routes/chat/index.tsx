@@ -75,8 +75,10 @@ function ChatPage() {
 		convexQuery(api.conversations.list, {}),
 	);
 
-	const [activeHarnessId, setActiveHarnessId] = useState<string | null>(null);
-	const [activeConvoId, setActiveConvoId] = useState<string | null>(null);
+	const [activeHarnessId, setActiveHarnessId] =
+		useState<Id<"harnesses"> | null>(null);
+	const [activeConvoId, setActiveConvoId] =
+		useState<Id<"conversations"> | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
 
 	useEffect(() => {
@@ -130,13 +132,13 @@ function ChatPage() {
 				/>
 
 				{activeConvoId ? (
-					<ChatMessages conversationId={activeConvoId as Id<"conversations">} />
+					<ChatMessages conversationId={activeConvoId} />
 				) : (
 					<EmptyChat />
 				)}
 
 				<ChatInput
-					conversationId={activeConvoId as Id<"conversations"> | null}
+					conversationId={activeConvoId}
 					harnessId={activeHarnessId}
 					onConvoCreated={setActiveConvoId}
 				/>
@@ -153,13 +155,13 @@ function ChatSidebar({
 	onClose,
 }: {
 	conversations: Array<{
-		_id: string;
+		_id: Id<"conversations">;
 		title: string;
 		lastMessageAt: number;
 	}>;
-	activeConvoId: string | null;
-	onSelect: (id: string | null) => void;
-	harnessId: string | null;
+	activeConvoId: Id<"conversations"> | null;
+	onSelect: (id: Id<"conversations"> | null) => void;
+	harnessId: Id<"harnesses"> | null;
 	onClose: () => void;
 }) {
 	const removeConvo = useMutation({
@@ -241,7 +243,7 @@ function ChatSidebar({
 											onClick={(e) => {
 												e.stopPropagation();
 												removeConvo.mutate({
-													id: convo._id as never,
+													id: convo._id,
 												});
 											}}
 										>
@@ -281,18 +283,18 @@ function ChatHeader({
 	onToggleSidebar,
 }: {
 	harness?: {
-		_id: string;
+		_id: Id<"harnesses">;
 		name: string;
 		model: string;
 		status: string;
 	};
 	harnesses: Array<{
-		_id: string;
+		_id: Id<"harnesses">;
 		name: string;
 		model: string;
 		status: string;
 	}>;
-	onSwitchHarness: (id: string) => void;
+	onSwitchHarness: (id: Id<"harnesses">) => void;
 	sidebarOpen: boolean;
 	onToggleSidebar: () => void;
 }) {
@@ -472,8 +474,8 @@ function ChatInput({
 	onConvoCreated,
 }: {
 	conversationId: Id<"conversations"> | null;
-	harnessId: string | null;
-	onConvoCreated: (id: string) => void;
+	harnessId: Id<"harnesses"> | null;
+	onConvoCreated: (id: Id<"conversations">) => void;
 }) {
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -508,21 +510,22 @@ function ChatInput({
 		if (!convoId) {
 			const newId = await createConvo.mutateAsync({
 				title: content.slice(0, 60),
-				harnessId: harnessId as Id<"harnesses">,
+				harnessId,
 			});
-			convoId = newId as Id<"conversations">;
-			onConvoCreated(newId as string);
+			convoId = newId;
+			onConvoCreated(newId);
 		}
 
+		const activeConvoId = convoId;
 		await sendMessage.mutateAsync({
-			conversationId: convoId,
+			conversationId: activeConvoId,
 			role: "user",
 			content,
 		});
 
 		setTimeout(async () => {
 			await sendMessage.mutateAsync({
-				conversationId: convoId as Id<"conversations">,
+				conversationId: activeConvoId,
 				role: "assistant",
 				content: `This is a placeholder response. In production, this would be streamed from the ${harnessId ? "configured" : "default"} LLM.\n\nYour message: "${content}"`,
 			});
@@ -597,7 +600,7 @@ function ChatSkeleton() {
 
 function groupByDate(
 	conversations: Array<{
-		_id: string;
+		_id: Id<"conversations">;
 		title: string;
 		lastMessageAt: number;
 	}>,

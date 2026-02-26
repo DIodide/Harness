@@ -1,5 +1,6 @@
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
+import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import {
@@ -59,7 +60,9 @@ function HarnessesPage() {
 		mutationFn: useConvexMutation(api.harnesses.remove),
 	});
 
-	const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+	const [deleteTarget, setDeleteTarget] = useState<Id<"harnesses"> | null>(
+		null,
+	);
 
 	if (isLoading) {
 		return <LoadingSkeleton />;
@@ -70,16 +73,16 @@ function HarnessesPage() {
 	const drafts = harnesses?.filter((h) => h.status === "draft") ?? [];
 
 	const handleToggleStatus = (
-		id: string,
+		id: Id<"harnesses">,
 		current: "started" | "stopped" | "draft",
 	) => {
 		const newStatus = current === "started" ? "stopped" : "started";
-		updateHarness.mutate({ id: id as never, status: newStatus });
+		updateHarness.mutate({ id, status: newStatus });
 	};
 
 	const handleDelete = () => {
 		if (deleteTarget) {
-			removeHarness.mutate({ id: deleteTarget as never });
+			removeHarness.mutate({ id: deleteTarget });
 			setDeleteTarget(null);
 		}
 	};
@@ -177,15 +180,18 @@ function HarnessGroup({
 }: {
 	title: string;
 	harnesses: Array<{
-		_id: string;
+		_id: Id<"harnesses">;
 		name: string;
 		model: string;
 		status: "started" | "stopped" | "draft";
 		mcps: string[];
 		skills: string[];
 	}>;
-	onToggle: (id: string, status: "started" | "stopped" | "draft") => void;
-	onDelete: (id: string) => void;
+	onToggle: (
+		id: Id<"harnesses">,
+		status: "started" | "stopped" | "draft",
+	) => void;
+	onDelete: (id: Id<"harnesses">) => void;
 }) {
 	return (
 		<div>
@@ -214,15 +220,18 @@ function HarnessCard({
 	onDelete,
 }: {
 	harness: {
-		_id: string;
+		_id: Id<"harnesses">;
 		name: string;
 		model: string;
 		status: "started" | "stopped" | "draft";
 		mcps: string[];
 		skills: string[];
 	};
-	onToggle: (id: string, status: "started" | "stopped" | "draft") => void;
-	onDelete: (id: string) => void;
+	onToggle: (
+		id: Id<"harnesses">,
+		status: "started" | "stopped" | "draft",
+	) => void;
+	onDelete: (id: Id<"harnesses">) => void;
 }) {
 	const isDraft = harness.status === "draft";
 
