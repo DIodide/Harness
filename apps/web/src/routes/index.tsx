@@ -2,7 +2,6 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import {
 	ArrowLeftRight,
 	ArrowRight,
-	Bot,
 	Code,
 	Database,
 	Globe,
@@ -147,6 +146,35 @@ const terminalLines: {
 ];
 
 const ease = [0.16, 1, 0.3, 1] as const;
+
+/* ─────────────────────── Logo ─────────────────────── */
+
+function HarnessMark({
+	size = 24,
+	className,
+}: {
+	size?: number;
+	className?: string;
+}) {
+	return (
+		<svg
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			className={className}
+			aria-hidden="true"
+		>
+			<path d="M7 4v16" strokeWidth="2.5" />
+			<path d="M17 4v16" strokeWidth="2.5" />
+			<path d="M7 12 C9.5 8, 14.5 8, 17 12" strokeWidth="2" />
+			<path d="M7 12 C9.5 16, 14.5 16, 17 12" strokeWidth="2" />
+		</svg>
+	);
+}
 
 /* ─────────────────────── Utility Components ─────────────────────── */
 
@@ -309,8 +337,8 @@ function NetworkGraph() {
 				animate={isInView ? { scale: 1, opacity: 1 } : {}}
 				transition={{ duration: 0.5, delay: 0.15, ease }}
 			>
-				<div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-black shadow-xl shadow-black/10">
-					<Bot size={28} className="text-white" />
+				<div className="flex h-16 w-16 items-center justify-center bg-primary shadow-xl shadow-primary/20">
+					<HarnessMark size={28} className="text-primary-foreground" />
 				</div>
 			</motion.div>
 
@@ -337,7 +365,7 @@ function NetworkGraph() {
 								delay: i * 0.3,
 							}}
 						>
-							<div className="flex h-12 w-12 items-center justify-center rounded-xl border border-black/[0.06] bg-white shadow-sm transition-shadow hover:shadow-md">
+							<div className="flex h-12 w-12 items-center justify-center border border-black/[0.06] bg-white shadow-sm transition-shadow hover:shadow-md">
 								<node.icon
 									size={20}
 									strokeWidth={1.5}
@@ -361,7 +389,7 @@ function AnimatedTerminal() {
 
 	return (
 		<div ref={ref} className="mx-auto w-full max-w-2xl">
-			<div className="overflow-hidden rounded-xl border border-white/[0.06] bg-[#0a0a0a] shadow-2xl shadow-black/40">
+			<div className="overflow-hidden border border-white/[0.06] bg-[#0a0a0a] shadow-2xl shadow-black/40">
 				<div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
 					<div className="h-3 w-3 rounded-full bg-white/10" />
 					<div className="h-3 w-3 rounded-full bg-white/10" />
@@ -504,8 +532,9 @@ function LandingNav() {
 			<div className="mx-auto flex h-16 max-w-[76rem] items-center justify-between px-6 lg:px-12">
 				<Link
 					to="/"
-					className="text-lg font-semibold tracking-tight text-black"
+					className="flex items-center gap-2 text-lg font-semibold tracking-tight text-black"
 				>
+					<HarnessMark size={22} />
 					Harness
 				</Link>
 
@@ -564,7 +593,7 @@ function LandingNav() {
 										.getElementById("features")
 										?.scrollIntoView({ behavior: "smooth" });
 								}}
-								className="rounded-lg px-3 py-2.5 text-left text-[15px] font-medium transition-colors hover:bg-black/[0.03]"
+								className="px-3 py-2.5 text-left text-[15px] font-medium transition-colors hover:bg-black/[0.03]"
 							>
 								Features
 							</button>
@@ -576,7 +605,7 @@ function LandingNav() {
 										.getElementById("how-it-works")
 										?.scrollIntoView({ behavior: "smooth" });
 								}}
-								className="rounded-lg px-3 py-2.5 text-left text-[15px] font-medium transition-colors hover:bg-black/[0.03]"
+								className="px-3 py-2.5 text-left text-[15px] font-medium transition-colors hover:bg-black/[0.03]"
 							>
 								How It Works
 							</button>
@@ -710,7 +739,7 @@ function FeaturesSection() {
 								<Card className="h-full gap-0 border-black/[0.04] bg-white py-0 shadow-none transition-shadow hover:shadow-lg hover:shadow-black/[0.04]">
 									<CardContent className="p-7">
 										<motion.div
-											className="mb-5 flex h-11 w-11 items-center justify-center rounded-lg border border-black/[0.06] bg-[#fafafa]"
+											className="mb-5 flex h-11 w-11 items-center justify-center border border-black/[0.06] bg-[#fafafa]"
 											whileHover={{ scale: 1.1, rotate: 5 }}
 											transition={{ duration: 0.2 }}
 										>
@@ -830,7 +859,7 @@ function HowItWorksSection() {
 										damping: 15,
 									}}
 								>
-									<div className="flex h-11 w-11 items-center justify-center rounded-full border border-white/[0.1] bg-[#111]">
+									<div className="flex h-11 w-11 items-center justify-center border border-white/[0.1] bg-[#111]">
 										<span className="font-mono text-sm font-medium text-white/60">
 											{s.num}
 										</span>
@@ -869,38 +898,47 @@ function CTASection() {
 				className="right-[8%] bottom-[10%] h-96 w-96 bg-black/[0.015]"
 				delay={3}
 			/>
-			<GradientOrb
-				className="left-[45%] top-[55%] h-60 w-60 bg-black/[0.01]"
-				delay={6}
-			/>
 
 			<div className="relative mx-auto max-w-[76rem] px-6 lg:px-12">
-				<FadeIn className="mx-auto max-w-2xl text-center">
-					<Badge variant="secondary" className="mb-6 font-medium">
-						Get Started
-					</Badge>
-					<h2
-						className="mb-6 text-[clamp(1.75rem,4vw,3.5rem)] font-medium leading-[1.1] tracking-tight"
-						style={{ textWrap: "balance" }}
+				<div className="mx-auto max-w-2xl text-center">
+					<motion.div
+						initial={{ opacity: 0, scale: 0.85 }}
+						whileInView={{ opacity: 1, scale: 1 }}
+						viewport={{ once: true, margin: "-60px" }}
+						transition={{ duration: 0.7, ease }}
+						className="mb-10"
 					>
-						Ready to equip your agents?
-					</h2>
-					<p className="mx-auto mb-10 max-w-md text-[15px] leading-[1.6] text-black/55">
-						Join the next generation of AI-powered workflows. Set up your first
-						harness in minutes.
-					</p>
-					<div className="flex flex-wrap items-center justify-center gap-4">
-						<Button size="lg" asChild>
-							<Link to="/chat">
-								Get Started Free
-								<ArrowRight size={16} />
-							</Link>
-						</Button>
-						<Button variant="outline" size="lg" asChild>
-							<a href="#features">See Features</a>
-						</Button>
-					</div>
-				</FadeIn>
+						<div className="mx-auto flex h-24 w-24 items-center justify-center bg-primary">
+							<div className="harness-glow">
+								<HarnessMark size={48} className="text-primary-foreground" />
+							</div>
+						</div>
+					</motion.div>
+
+					<FadeIn>
+						<h2
+							className="mb-6 text-[clamp(1.75rem,4vw,3.5rem)] font-medium leading-[1.1] tracking-tight"
+							style={{ textWrap: "balance" }}
+						>
+							Ready to equip your agents?
+						</h2>
+						<p className="mx-auto mb-10 max-w-md text-[15px] leading-[1.6] text-black/55">
+							Join the next generation of AI-powered workflows. Set up your
+							first harness in minutes.
+						</p>
+						<div className="flex flex-wrap items-center justify-center gap-4">
+							<Button size="lg" asChild>
+								<Link to="/chat">
+									Get Started Free
+									<ArrowRight size={16} />
+								</Link>
+							</Button>
+							<Button size="lg" variant="outline" asChild>
+								<a href="#features">See Features</a>
+							</Button>
+						</div>
+					</FadeIn>
+				</div>
 			</div>
 		</section>
 	);
@@ -914,7 +952,8 @@ function LandingFooter() {
 			<div className="mx-auto max-w-[76rem] px-6 lg:px-12">
 				<div className="grid gap-10 sm:grid-cols-12 sm:gap-8">
 					<div className="sm:col-span-4">
-						<span className="text-lg font-semibold tracking-tight">
+						<span className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+							<HarnessMark size={20} />
 							Harness
 						</span>
 						<p className="mt-2 max-w-[14rem] text-sm leading-relaxed text-black/40">
