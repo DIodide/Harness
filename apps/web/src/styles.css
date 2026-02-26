@@ -2,6 +2,8 @@
 
 @import 'tw-animate-css';
 
+@import 'highlight.js/styles/github-dark.css';
+
 @custom-variant dark (&:is(.dark *));
 
 @font-face {
@@ -165,4 +167,88 @@ code {
     drop-shadow(0 0 18px rgba(255, 255, 255, 0.35))
     drop-shadow(0 0 45px rgba(255, 255, 255, 0.15))
     drop-shadow(0 0 90px rgba(255, 255, 255, 0.08));
+}
+
+/* Markdown message prose styles */
+.markdown-message {
+  line-height: 1.65;
+}
+
+.markdown-message > *:first-child {
+  margin-top: 0;
+}
+
+.markdown-message > *:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-message h1,
+.markdown-message h2,
+.markdown-message h3,
+.markdown-message h4,
+.markdown-message h5,
+.markdown-message h6 {
+  font-weight: 600;
+  margin-top: 1.25em;
+  margin-bottom: 0.5em;
+  line-height: 1.3;
+  color: var(--foreground);
+}
+
+.markdown-message h1 { font-size: 1.25em; }
+.markdown-message h2 { font-size: 1.125em; }
+.markdown-message h3 { font-size: 1em; }
+
+.markdown-message p {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+.markdown-message ul,
+.markdown-message ol {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+  padding-left: 1.5em;
+}
+
+.markdown-message ul {
+  list-style-type: disc;
+}
+
+.markdown-message ol {
+  list-style-type: decimal;
+}
+
+.markdown-message li {
+  margin-top: 0.2em;
+  margin-bottom: 0.2em;
+}
+
+.markdown-message li > ul,
+.markdown-message li > ol {
+  margin-top: 0.2em;
+  margin-bottom: 0.2em;
+}
+
+.markdown-message blockquote {
+  border-left: 2px solid var(--border);
+  padding-left: 0.75em;
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  color: var(--muted-foreground);
+}
+
+.markdown-message hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1em 0;
+}
+
+.markdown-message strong {
+  font-weight: 600;
+}
+
+.markdown-message .hljs {
+  background: transparent;
+  padding: 0;
 }
