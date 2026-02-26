@@ -2,10 +2,7 @@ import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-function Card({
-	className,
-	...props
-}: React.ComponentProps<"div">) {
+function Card({ className, ...props }: React.ComponentProps<"div">) {
 	return (
 		<div
 			data-slot="card"
@@ -78,10 +75,7 @@ function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
 	return (
 		<div
 			data-slot="card-footer"
-			className={cn(
-				"flex items-center border-t p-4",
-				className,
-			)}
+			className={cn("flex items-center border-t p-4", className)}
 			{...props}
 		/>
 	);
