@@ -86,26 +86,26 @@ function RootComponent() {
 	return (
 		<ClerkProvider>
 			<ConvexProviderWithClerk client={context.convexClient} useAuth={useAuth}>
-			<TooltipProvider delayDuration={300}>
-				{isChromeless ? (
-					<Outlet />
-				) : (
-					<div className="flex h-screen overflow-hidden">
-						<div className="flex flex-1 flex-col overflow-hidden">
-							<Outlet />
+				<TooltipProvider delayDuration={300}>
+					{isChromeless ? (
+						<Outlet />
+					) : (
+						<div className="flex h-screen overflow-hidden">
+							<div className="flex flex-1 flex-col overflow-hidden">
+								<Outlet />
+							</div>
 						</div>
-					</div>
-				)}
-				<Toaster
-					position="bottom-right"
-					toastOptions={{
-						style: {
-							borderRadius: "0px",
-							fontSize: "13px",
-						},
-					}}
-				/>
-			</TooltipProvider>
+					)}
+					<Toaster
+						position="bottom-right"
+						toastOptions={{
+							style: {
+								borderRadius: "0px",
+								fontSize: "13px",
+							},
+						}}
+					/>
+				</TooltipProvider>
 			</ConvexProviderWithClerk>
 		</ClerkProvider>
 	);
