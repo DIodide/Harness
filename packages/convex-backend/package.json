@@ -1,0 +1,22 @@
+{
+    "name": "@harness/convex-backend",
+    "version": "1.0.0",
+    "description": "Convex backend for Harness",
+    "private": true,
+    "scripts": {
+        "dev": "convex dev",
+        "setup": "convex dev --until-success",
+        "codegen": "convex codegen",
+        "deploy": "convex deploy",
+        "check-types": "tsc --noEmit -p convex"
+    },
+    "dependencies": {
+        "convex": "^1.31.7",
+        "zod": "^4.3.5"
+    },
+    "devDependencies": {
+        "dotenv": "^16.6.1",
+        "tsx": "^4.7.0",
+        "typescript": "5.9.2"
+    }
+}
