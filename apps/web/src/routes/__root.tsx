@@ -9,6 +9,7 @@ import {
 	Outlet,
 	Scripts,
 	useRouteContext,
+	useRouterState,
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { createServerFn } from "@tanstack/react-start";
@@ -73,13 +74,14 @@ export const Route = createRootRouteWithContext<{
 
 function RootComponent() {
 	const context = useRouteContext({ from: Route.id });
+	const pathname = useRouterState({ select: (s) => s.location.pathname });
+	const isLandingPage = pathname === "/";
 
 	return (
 		<ClerkProvider>
 			<ConvexProviderWithClerk client={context.convexClient} useAuth={useAuth}>
-				<Header />
-				<Outlet />{" "}
-				{/* This is where the content of the route will be rendered */}
+				{!isLandingPage && <Header />}
+				<Outlet />
 			</ConvexProviderWithClerk>
 		</ClerkProvider>
 	);
