@@ -576,8 +576,7 @@ function ChatMessages({
 		pendingDoneContent !== null &&
 		lastMsg?.role === "assistant" &&
 		lastMsg.content === pendingDoneContent;
-	const showStreamingBubble =
-		streamingContent !== null && !convexHasMessage;
+	const showStreamingBubble = streamingContent !== null && !convexHasMessage;
 
 	// Clear streaming state once Convex has synced — fire in effect to avoid setState during render
 	useEffect(() => {
@@ -615,50 +614,49 @@ function ChatMessages({
 		<div ref={scrollRef} className="flex-1 overflow-y-auto">
 			<div className="mx-auto max-w-3xl px-4 py-6">
 				{messages?.map((msg, i) => {
-				// Skip entrance animation for the message that just replaced the streaming bubble
-				const isJustSynced =
-					convexHasMessage && msg._id === lastMsg?._id;
-				return (
-					<motion.div
-						key={msg._id}
-						initial={isJustSynced ? false : { opacity: 0, y: 8 }}
-						animate={{ opacity: 1, y: 0 }}
-						transition={isJustSynced ? { duration: 0 } : { delay: i * 0.03 }}
-						className={cn(
-							"mb-6 flex gap-3",
-							msg.role === "user" && "justify-end",
-						)}
-					>
-						{msg.role === "assistant" && (
-							<Avatar className="h-7 w-7 shrink-0">
-								<AvatarFallback className="bg-foreground text-background text-[10px]">
-									<Sparkles size={12} />
-								</AvatarFallback>
-							</Avatar>
-						)}
-						<div
+					// Skip entrance animation for the message that just replaced the streaming bubble
+					const isJustSynced = convexHasMessage && msg._id === lastMsg?._id;
+					return (
+						<motion.div
+							key={msg._id}
+							initial={isJustSynced ? false : { opacity: 0, y: 8 }}
+							animate={{ opacity: 1, y: 0 }}
+							transition={isJustSynced ? { duration: 0 } : { delay: i * 0.03 }}
 							className={cn(
-								"max-w-[80%] text-sm leading-relaxed",
-								msg.role === "user"
-									? "bg-foreground px-3.5 py-2.5 text-background"
-									: "text-foreground",
+								"mb-6 flex gap-3",
+								msg.role === "user" && "justify-end",
 							)}
 						>
-							{msg.role === "assistant" ? (
-								<MarkdownMessage content={msg.content} />
-							) : (
-								<p className="whitespace-pre-wrap">{msg.content}</p>
+							{msg.role === "assistant" && (
+								<Avatar className="h-7 w-7 shrink-0">
+									<AvatarFallback className="bg-foreground text-background text-[10px]">
+										<Sparkles size={12} />
+									</AvatarFallback>
+								</Avatar>
 							)}
-						</div>
-						{msg.role === "user" && (
-							<Avatar className="h-7 w-7 shrink-0">
-								<AvatarFallback className="bg-muted text-foreground text-[10px]">
-									U
-								</AvatarFallback>
-							</Avatar>
-						)}
-					</motion.div>
-				);
+							<div
+								className={cn(
+									"max-w-[80%] text-sm leading-relaxed",
+									msg.role === "user"
+										? "bg-foreground px-3.5 py-2.5 text-background"
+										: "text-foreground",
+								)}
+							>
+								{msg.role === "assistant" ? (
+									<MarkdownMessage content={msg.content} />
+								) : (
+									<p className="whitespace-pre-wrap">{msg.content}</p>
+								)}
+							</div>
+							{msg.role === "user" && (
+								<Avatar className="h-7 w-7 shrink-0">
+									<AvatarFallback className="bg-muted text-foreground text-[10px]">
+										U
+									</AvatarFallback>
+								</Avatar>
+							)}
+						</motion.div>
+					);
 				})}
 
 				{showStreamingBubble && (
