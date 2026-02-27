@@ -1,10 +1,9 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     openrouter_api_key: str = ""
     convex_url: str = ""
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
     frontend_url: str = "http://localhost:3001"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
