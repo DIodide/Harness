@@ -12,6 +12,7 @@ import type * as conversations from "../conversations.js";
 import type * as harnesses from "../harnesses.js";
 import type * as messages from "../messages.js";
 import type * as seed from "../seed.js";
+import type * as userSettings from "../userSettings.js";
 
 import type {
   ApiFromModules,
@@ -24,6 +25,7 @@ declare const fullApi: ApiFromModules<{
   harnesses: typeof harnesses;
   messages: typeof messages;
   seed: typeof seed;
+  userSettings: typeof userSettings;
 }>;
 
 /**

@@ -41,7 +41,8 @@ export const create = mutation({
 		}
 
 		return await ctx.db.insert("conversations", {
-			...args,
+			title: args.title,
+			lastHarnessId: args.harnessId,
 			userId: identity.subject,
 			lastMessageAt: Date.now(),
 		});

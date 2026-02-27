@@ -65,7 +65,7 @@ export const seedAll = internalMutation({
 
 		const c1 = await ctx.db.insert("conversations", {
 			title: "Help me refactor the auth module",
-			harnessId: h1,
+			lastHarnessId: h1,
 			userId,
 			lastMessageAt: Date.now() - 1800000,
 		});
@@ -96,7 +96,7 @@ export const seedAll = internalMutation({
 
 		const c2 = await ctx.db.insert("conversations", {
 			title: "Write unit tests for the API",
-			harnessId: h1,
+			lastHarnessId: h1,
 			userId,
 			lastMessageAt: Date.now() - 7200000,
 		});
@@ -115,7 +115,7 @@ export const seedAll = internalMutation({
 
 		const c3 = await ctx.db.insert("conversations", {
 			title: "Debug the WebSocket connection",
-			harnessId: h1,
+			lastHarnessId: h1,
 			userId,
 			lastMessageAt: Date.now() - 90000000,
 		});
@@ -135,7 +135,7 @@ export const seedAll = internalMutation({
 
 		const c4 = await ctx.db.insert("conversations", {
 			title: "Explain Kubernetes networking",
-			harnessId: h2,
+			lastHarnessId: h2,
 			userId,
 			lastMessageAt: Date.now() - 180000000,
 		});
@@ -188,6 +188,14 @@ export const clearAll = internalMutation({
 			await ctx.db.delete(h._id);
 		}
 
+		const settings = await ctx.db
+			.query("userSettings")
+			.withIndex("by_user", (q) => q.eq("userId", userId))
+			.unique();
+		if (settings) {
+			await ctx.db.delete(settings._id);
+		}
+
 		return {
 			deleted: {
 				harnesses: harnesses.length,
@@ -225,6 +233,14 @@ export const clearAndReseed = internalMutation({
 			await ctx.db.delete(h._id);
 		}
 
+		const settings = await ctx.db
+			.query("userSettings")
+			.withIndex("by_user", (q) => q.eq("userId", userId))
+			.unique();
+		if (settings) {
+			await ctx.db.delete(settings._id);
+		}
+
 		// Re-run seed inline (can't call other mutations from a mutation)
 		const h1 = await ctx.db.insert("harnesses", {
 			name: "Coding Assistant",
@@ -258,7 +274,7 @@ export const clearAndReseed = internalMutation({
 
 		const c1 = await ctx.db.insert("conversations", {
 			title: "Help me refactor the auth module",
-			harnessId: h1,
+			lastHarnessId: h1,
 			userId,
 			lastMessageAt: Date.now() - 1800000,
 		});

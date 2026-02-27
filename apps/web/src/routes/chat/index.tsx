@@ -74,6 +74,9 @@ function ChatPage() {
 	const { data: conversations } = useQuery(
 		convexQuery(api.conversations.list, {}),
 	);
+	const { data: userSettings } = useQuery(
+		convexQuery(api.userSettings.get, {}),
+	);
 
 	const [activeHarnessId, setActiveHarnessId] =
 		useState<Id<"harnesses"> | null>(null);
@@ -93,6 +96,28 @@ function ChatPage() {
 			navigate({ to: "/onboarding" });
 		}
 	}, [harnesses, navigate]);
+
+	const handleSelectConversation = useCallback(
+		(convoId: Id<"conversations"> | null) => {
+			setActiveConvoId(convoId);
+
+			if (
+				convoId &&
+				userSettings?.autoSwitchHarness &&
+				conversations &&
+				harnesses
+			) {
+				const convo = conversations.find((c) => c._id === convoId);
+				if (
+					convo?.lastHarnessId &&
+					harnesses.some((h) => h._id === convo.lastHarnessId)
+				) {
+					setActiveHarnessId(convo.lastHarnessId);
+				}
+			}
+		},
+		[userSettings, conversations, harnesses],
+	);
 
 	if (harnessesLoading || !harnesses || harnesses.length === 0) {
 		return <ChatSkeleton />;
@@ -114,7 +139,7 @@ function ChatPage() {
 						<ChatSidebar
 							conversations={conversations ?? []}
 							activeConvoId={activeConvoId}
-							onSelect={setActiveConvoId}
+							onSelect={handleSelectConversation}
 							harnessId={activeHarnessId}
 							onClose={() => setSidebarOpen(false)}
 						/>
@@ -140,7 +165,7 @@ function ChatPage() {
 				<ChatInput
 					conversationId={activeConvoId}
 					harnessId={activeHarnessId}
-					onConvoCreated={setActiveConvoId}
+					onConvoCreated={handleSelectConversation}
 				/>
 			</div>
 		</div>
@@ -158,6 +183,7 @@ function ChatSidebar({
 		_id: Id<"conversations">;
 		title: string;
 		lastMessageAt: number;
+		lastHarnessId?: Id<"harnesses">;
 	}>;
 	activeConvoId: Id<"conversations"> | null;
 	onSelect: (id: Id<"conversations"> | null) => void;
@@ -521,6 +547,7 @@ function ChatInput({
 			conversationId: activeConvoId,
 			role: "user",
 			content,
+			harnessId: harnessId ?? undefined,
 		});
 
 		setTimeout(async () => {
@@ -528,6 +555,7 @@ function ChatInput({
 				conversationId: activeConvoId,
 				role: "assistant",
 				content: `This is a placeholder response. In production, this would be streamed from the ${harnessId ? "configured" : "default"} LLM.\n\nYour message: "${content}"`,
+				harnessId: harnessId ?? undefined,
 			});
 		}, 800);
 	};
@@ -603,6 +631,7 @@ function groupByDate(
 		_id: Id<"conversations">;
 		title: string;
 		lastMessageAt: number;
+		lastHarnessId?: Id<"harnesses">;
 	}>,
 ) {
 	const now = Date.now();

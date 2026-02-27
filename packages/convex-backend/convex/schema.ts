@@ -18,17 +18,21 @@ export default defineSchema({
 
 	conversations: defineTable({
 		title: v.string(),
-		harnessId: v.id("harnesses"),
+		lastHarnessId: v.optional(v.id("harnesses")),
 		userId: v.string(),
 		lastMessageAt: v.number(),
 	})
 		.index("by_user", ["userId"])
-		.index("by_user_last_message", ["userId", "lastMessageAt"])
-		.index("by_harness", ["harnessId"]),
+		.index("by_user_last_message", ["userId", "lastMessageAt"]),
 
 	messages: defineTable({
 		conversationId: v.id("conversations"),
 		role: v.union(v.literal("user"), v.literal("assistant")),
 		content: v.string(),
 	}).index("by_conversation", ["conversationId"]),
+
+	userSettings: defineTable({
+		userId: v.string(),
+		autoSwitchHarness: v.boolean(),
+	}).index("by_user", ["userId"]),
 });

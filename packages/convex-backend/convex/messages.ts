@@ -22,6 +22,7 @@ export const send = mutation({
 		conversationId: v.id("conversations"),
 		role: v.union(v.literal("user"), v.literal("assistant")),
 		content: v.string(),
+		harnessId: v.optional(v.id("harnesses")),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -35,9 +36,15 @@ export const send = mutation({
 			role: args.role,
 			content: args.content,
 		});
-		await ctx.db.patch(args.conversationId, {
+
+		const patch: { lastMessageAt: number; lastHarnessId?: typeof args.harnessId } = {
 			lastMessageAt: Date.now(),
-		});
+		};
+		if (args.harnessId) {
+			patch.lastHarnessId = args.harnessId;
+		}
+		await ctx.db.patch(args.conversationId, patch);
+
 		return id;
 	},
 });
