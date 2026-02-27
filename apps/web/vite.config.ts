@@ -12,6 +12,9 @@ const config = defineConfig({
 			"@": fileURLToPath(new URL("./src", import.meta.url)),
 		},
 	},
+	optimizeDeps: {
+		include: ["use-sync-external-store/shim/index.js"],
+	},
 	plugins: [
 		devtools(),
 		// this is the plugin that enables path aliases

@@ -1,6 +1,5 @@
 {
   "lockfileVersion": 1,
-  "configVersion": 1,
   "workspaces": {
     "": {
       "name": "my-turborepo",
@@ -43,6 +42,7 @@
         "tailwind-merge": "^3.0.2",
         "tailwindcss": "^4.1.18",
         "tw-animate-css": "^1.3.6",
+        "use-sync-external-store": "^1.6.0",
         "vite-tsconfig-paths": "^6.0.2",
         "zod": "^4.1.11",
       },

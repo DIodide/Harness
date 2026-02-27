@@ -33,7 +33,7 @@
     "highlight.js": "^11.11.1",
     "lucide-react": "^0.561.0",
     "motion": "^12.34.3",
-"radix-ui": "^1.4.3",
+    "radix-ui": "^1.4.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-hot-toast": "^2.6.0",
@@ -43,6 +43,7 @@
     "tailwind-merge": "^3.0.2",
     "tailwindcss": "^4.1.18",
     "tw-animate-css": "^1.3.6",
+    "use-sync-external-store": "^1.6.0",
     "vite-tsconfig-paths": "^6.0.2",
     "zod": "^4.1.11"
   },
