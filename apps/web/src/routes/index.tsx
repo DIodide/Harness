@@ -19,13 +19,14 @@ import {
 	useScroll,
 	useTransform,
 } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { HarnessMark } from "../components/harness-mark";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Separator } from "../components/ui/separator";
+import { generateFloatingDots } from "../lib/floating-dots";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/")({
@@ -443,14 +444,7 @@ function GradientOrb({
 }
 
 function FloatingDots() {
-	const dots = Array.from({ length: 24 }, (_, i) => ({
-		id: i,
-		x: Math.random() * 100,
-		y: Math.random() * 100,
-		size: 1.5 + Math.random() * 2,
-		duration: 4 + Math.random() * 6,
-		delay: Math.random() * 3,
-	}));
+	const dots = useMemo(() => generateFloatingDots(), []);
 
 	return (
 		<div className="pointer-events-none absolute inset-0 overflow-hidden">
