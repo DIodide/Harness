@@ -2,9 +2,10 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    openrouter_api_key: str = ""
+    openrouter_api_key: str  # required, no default; if unset, app will not start
     convex_url: str = ""
-    frontend_url: str = "http://localhost:3001"
+    frontend_url: str = "http://localhost:3000"
+    junction_engine_url: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
@@ -20,3 +21,14 @@ AVAILABLE_MODELS = [
     {"id": "x-ai/grok-3", "name": "Grok 3"},
     {"id": "x-ai/grok-3-mini", "name": "Grok 3 Mini"},
 ]
+
+# Maps short model names (stored in harness.model) to full OpenRouter model IDs
+MODEL_MAP = {
+    "gpt-4o": "openai/gpt-4o",
+    "claude-sonnet-4": "anthropic/claude-sonnet-4",
+    "claude-opus-4": "anthropic/claude-opus-4",
+    "gemini-2.5-pro": "google/gemini-2.5-pro-preview-06-05",
+    "gpt-4.1-mini": "openai/gpt-4.1-mini",
+    "grok-3": "x-ai/grok-3",
+    "grok-3-mini": "x-ai/grok-3-mini",
+}
