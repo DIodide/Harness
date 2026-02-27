@@ -19,12 +19,14 @@ import {
 	useScroll,
 	useTransform,
 } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { HarnessMark } from "../components/harness-mark";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Separator } from "../components/ui/separator";
+import { generateFloatingDots } from "../lib/floating-dots";
 import { cn } from "../lib/utils";
 
 export const Route = createFileRoute("/")({
@@ -146,35 +148,6 @@ const terminalLines: {
 ];
 
 const ease = [0.16, 1, 0.3, 1] as const;
-
-/* ─────────────────────── Logo ─────────────────────── */
-
-function HarnessMark({
-	size = 24,
-	className,
-}: {
-	size?: number;
-	className?: string;
-}) {
-	return (
-		<svg
-			width={size}
-			height={size}
-			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
-			strokeLinecap="round"
-			strokeLinejoin="round"
-			className={className}
-			aria-hidden="true"
-		>
-			<path d="M7 4v16" strokeWidth="2.5" />
-			<path d="M17 4v16" strokeWidth="2.5" />
-			<path d="M7 12 C9.5 8, 14.5 8, 17 12" strokeWidth="2" />
-			<path d="M7 12 C9.5 16, 14.5 16, 17 12" strokeWidth="2" />
-		</svg>
-	);
-}
 
 /* ─────────────────────── Utility Components ─────────────────────── */
 
@@ -471,14 +444,7 @@ function GradientOrb({
 }
 
 function FloatingDots() {
-	const dots = Array.from({ length: 24 }, (_, i) => ({
-		id: i,
-		x: Math.random() * 100,
-		y: Math.random() * 100,
-		size: 1.5 + Math.random() * 2,
-		duration: 4 + Math.random() * 6,
-		delay: Math.random() * 3,
-	}));
+	const dots = useMemo(() => generateFloatingDots(), []);
 
 	return (
 		<div className="pointer-events-none absolute inset-0 overflow-hidden">

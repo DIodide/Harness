@@ -16,8 +16,11 @@ import { createServerFn } from "@tanstack/react-start";
 import type { ConvexReactClient } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 
-import Header from "../components/Header";
+import { Toaster } from "react-hot-toast";
+import { TooltipProvider } from "../components/ui/tooltip";
 import appCss from "../styles.css?url";
+
+const CHROMELESS_ROUTES = ["/", "/sign-in", "/onboarding"];
 
 const fetchClerkAuth = createServerFn({ method: "GET" }).handler(async () => {
 	const { userId, getToken } = await auth();
@@ -62,8 +65,6 @@ export const Route = createRootRouteWithContext<{
 	beforeLoad: async (ctx) => {
 		const { userId, token } = await fetchClerkAuth();
 
-		// During SSR only (the only time serverHttpClient exists),
-		// set the Clerk auth token to make HTTP queries with.
 		if (token) {
 			ctx.context.convexQueryClient.serverHttpClient?.setAuth(token);
 		}
@@ -80,13 +81,31 @@ export const Route = createRootRouteWithContext<{
 function RootComponent() {
 	const context = useRouteContext({ from: Route.id });
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
-	const isLandingPage = pathname === "/";
+	const isChromeless = CHROMELESS_ROUTES.includes(pathname);
 
 	return (
 		<ClerkProvider>
 			<ConvexProviderWithClerk client={context.convexClient} useAuth={useAuth}>
-				{!isLandingPage && <Header />}
-				<Outlet />
+				<TooltipProvider delayDuration={300}>
+					{isChromeless ? (
+						<Outlet />
+					) : (
+						<div className="flex h-screen overflow-hidden">
+							<div className="flex flex-1 flex-col overflow-hidden">
+								<Outlet />
+							</div>
+						</div>
+					)}
+					<Toaster
+						position="bottom-right"
+						toastOptions={{
+							style: {
+								borderRadius: "0px",
+								fontSize: "13px",
+							},
+						}}
+					/>
+				</TooltipProvider>
 			</ConvexProviderWithClerk>
 		</ClerkProvider>
 	);

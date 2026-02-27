@@ -9,12 +9,30 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SignInRouteImport } from './routes/sign-in'
+import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as HarnessesIndexRouteImport } from './routes/harnesses/index'
 import { Route as ChatIndexRouteImport } from './routes/chat/index'
 
+const SignInRoute = SignInRouteImport.update({
+  id: '/sign-in',
+  path: '/sign-in',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HarnessesIndexRoute = HarnessesIndexRouteImport.update({
+  id: '/harnesses/',
+  path: '/harnesses/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChatIndexRoute = ChatIndexRouteImport.update({
@@ -25,37 +43,70 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/onboarding': typeof OnboardingRoute
+  '/sign-in': typeof SignInRoute
   '/chat/': typeof ChatIndexRoute
+  '/harnesses/': typeof HarnessesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/onboarding': typeof OnboardingRoute
+  '/sign-in': typeof SignInRoute
   '/chat': typeof ChatIndexRoute
+  '/harnesses': typeof HarnessesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/onboarding': typeof OnboardingRoute
+  '/sign-in': typeof SignInRoute
   '/chat/': typeof ChatIndexRoute
+  '/harnesses/': typeof HarnessesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/chat/'
+  fullPaths: '/' | '/onboarding' | '/sign-in' | '/chat/' | '/harnesses/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/chat'
-  id: '__root__' | '/' | '/chat/'
+  to: '/' | '/onboarding' | '/sign-in' | '/chat' | '/harnesses'
+  id: '__root__' | '/' | '/onboarding' | '/sign-in' | '/chat/' | '/harnesses/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  OnboardingRoute: typeof OnboardingRoute
+  SignInRoute: typeof SignInRoute
   ChatIndexRoute: typeof ChatIndexRoute
+  HarnessesIndexRoute: typeof HarnessesIndexRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/sign-in': {
+      id: '/sign-in'
+      path: '/sign-in'
+      fullPath: '/sign-in'
+      preLoaderRoute: typeof SignInRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/onboarding': {
+      id: '/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof OnboardingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/harnesses/': {
+      id: '/harnesses/'
+      path: '/harnesses'
+      fullPath: '/harnesses/'
+      preLoaderRoute: typeof HarnessesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/chat/': {
@@ -70,7 +121,10 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  OnboardingRoute: OnboardingRoute,
+  SignInRoute: SignInRoute,
   ChatIndexRoute: ChatIndexRoute,
+  HarnessesIndexRoute: HarnessesIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
