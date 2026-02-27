@@ -1,3 +1,4 @@
+import { useClerk } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
@@ -12,6 +13,7 @@ import {
 	ArrowUp,
 	ChevronDown,
 	Cpu,
+	LogOut,
 	MessageSquare,
 	PanelLeftClose,
 	PanelLeftOpen,
@@ -33,6 +35,14 @@ import { MarkdownMessage } from "../../components/markdown-message";
 import { Avatar, AvatarFallback } from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { Checkbox } from "../../components/ui/checkbox";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
+} from "../../components/ui/dialog";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -204,6 +214,8 @@ function ChatSidebar({
 
 	const grouped = groupByDate(conversations);
 
+	const [settingsOpen, setSettingsOpen] = useState(false);
+
 	return (
 		<div className="flex h-full w-[280px] flex-col bg-background">
 			<div className="flex items-center justify-between px-3 py-3">
@@ -284,7 +296,7 @@ function ChatSidebar({
 			</ScrollArea>
 
 			<Separator />
-			<div className="p-2">
+			<div className="space-y-0.5 p-2">
 				<Button
 					variant="ghost"
 					size="sm"
@@ -296,8 +308,99 @@ function ChatSidebar({
 						Manage Harnesses
 					</Link>
 				</Button>
+				<Button
+					variant="ghost"
+					size="sm"
+					className="w-full justify-start"
+					onClick={() => setSettingsOpen(true)}
+				>
+					<Settings size={12} />
+					Settings
+				</Button>
 			</div>
+
+			<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 		</div>
+	);
+}
+
+function SettingsDialog({
+	open,
+	onOpenChange,
+}: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+}) {
+	const { signOut } = useClerk();
+	const navigate = useNavigate();
+	const { data: userSettings } = useQuery(
+		convexQuery(api.userSettings.get, {}),
+	);
+	const updateSettings = useMutation({
+		mutationFn: useConvexMutation(api.userSettings.update),
+	});
+
+	const handleSignOut = async () => {
+		await signOut();
+		navigate({ to: "/sign-in" });
+	};
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="sm:max-w-sm">
+				<DialogHeader>
+					<DialogTitle className="text-sm">Settings</DialogTitle>
+					<DialogDescription>Manage your preferences.</DialogDescription>
+				</DialogHeader>
+
+				<div className="space-y-4">
+					<div>
+						<p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+							Behavior
+						</p>
+						<label
+							htmlFor="auto-switch"
+							className="flex items-center justify-between gap-3 py-1.5"
+						>
+							<div>
+								<p className="text-xs font-medium text-foreground">
+									Auto-switch harness
+								</p>
+								<p className="text-[11px] text-muted-foreground">
+									Switch to a conversation's harness when selected.
+								</p>
+							</div>
+							<Checkbox
+								id="auto-switch"
+								checked={userSettings?.autoSwitchHarness ?? true}
+								onCheckedChange={(checked) => {
+									updateSettings.mutate({
+										autoSwitchHarness: checked === true,
+									});
+								}}
+							/>
+						</label>
+					</div>
+
+					<Separator />
+
+					<div>
+						<p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+							Account
+						</p>
+						<Button
+							variant="ghost"
+							size="sm"
+							className="w-full justify-start text-muted-foreground hover:text-foreground"
+							onClick={handleSignOut}
+						>
+							<LogOut size={12} />
+							Sign out
+						</Button>
+					</div>
+				</div>
+			</DialogContent>
+		</Dialog>
 	);
 }
 
