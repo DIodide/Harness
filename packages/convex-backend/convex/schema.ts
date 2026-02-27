@@ -23,6 +23,7 @@ export default defineSchema({
 		lastMessageAt: v.number(),
 	})
 		.index("by_user", ["userId"])
+		.index("by_user_last_message", ["userId", "lastMessageAt"])
 		.index("by_harness", ["harnessId"]),
 
 	messages: defineTable({
