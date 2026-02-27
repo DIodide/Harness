@@ -7,7 +7,9 @@ export const list = query({
 		if (!identity) return [];
 		return await ctx.db
 			.query("conversations")
-			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.withIndex("by_user_last_message", (q) =>
+				q.eq("userId", identity.subject),
+			)
 			.order("desc")
 			.collect();
 	},
@@ -32,6 +34,12 @@ export const create = mutation({
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
+
+		const harness = await ctx.db.get(args.harnessId);
+		if (!harness || harness.userId !== identity.subject) {
+			throw new Error("Harness not found");
+		}
+
 		return await ctx.db.insert("conversations", {
 			...args,
 			userId: identity.subject,
