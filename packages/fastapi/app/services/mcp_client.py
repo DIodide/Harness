@@ -1,8 +1,11 @@
 import json
+import logging
 
 import httpx
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _get_server_url(mcp_name: str) -> str | None:
@@ -22,6 +25,7 @@ async def list_tools(client: httpx.AsyncClient, mcp_names: list[str]) -> list[di
     for name in mcp_names:
         url = _get_server_url(name)
         if not url:
+            logger.warning("No server URL resolved for MCP '%s' — skipping", name)
             continue
         try:
             resp = await client.post(
@@ -48,8 +52,12 @@ async def list_tools(client: httpx.AsyncClient, mcp_names: list[str]) -> list[di
                         },
                     }
                 )
-        except (httpx.HTTPError, KeyError):
-            # MCP server unavailable or malformed response — skip
+            logger.debug("Loaded %d tools from MCP '%s'", len(server_tools), name)
+        except httpx.HTTPError as e:
+            logger.error("HTTP error fetching tools from MCP '%s' at %s: %s", name, url, e)
+            continue
+        except KeyError as e:
+            logger.error("Malformed response from MCP '%s': missing key %s", name, e)
             continue
 
     return tools
@@ -67,14 +75,17 @@ async def call_tool(client: httpx.AsyncClient, tool_name: str, arguments: dict) 
     """
     parts = tool_name.split("__", 1)
     if len(parts) != 2:
+        logger.error("Invalid tool name format: %s", tool_name)
         return json.dumps({"error": f"Invalid tool name format: {tool_name}"})
 
     server_name, actual_tool = parts
     url = _get_server_url(server_name)
     if not url:
+        logger.error("Unknown MCP server: %s", server_name)
         return json.dumps({"error": f"Unknown MCP server: {server_name}"})
 
     try:
+        logger.debug("Calling tool '%s' on MCP '%s'", actual_tool, server_name)
         resp = await client.post(
             url,
             json={
@@ -91,5 +102,9 @@ async def call_tool(client: httpx.AsyncClient, tool_name: str, arguments: dict) 
         # MCP tool results are an array of content blocks; extract text
         texts = [c.get("text", "") for c in content if c.get("type") == "text"]
         return "\n".join(texts) if texts else json.dumps(result)
-    except (httpx.HTTPError, KeyError) as e:
-        return json.dumps({"error": str(e)})
+    except httpx.HTTPError as e:
+        logger.error("HTTP error calling tool '%s' on MCP '%s': %s", actual_tool, server_name, e)
+        return json.dumps({"error": f"MCP server error: {server_name}"})
+    except KeyError as e:
+        logger.error("Malformed response from MCP '%s' for tool '%s': missing key %s", server_name, actual_tool, e)
+        return json.dumps({"error": f"Malformed response from MCP server: {server_name}"})
