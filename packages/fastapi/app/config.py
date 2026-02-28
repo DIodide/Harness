@@ -1,13 +1,27 @@
+import logging
+
+from pydantic import Field
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
-    openrouter_api_key: str  # required, no default; if unset, app will not start
+    openrouter_api_key: str = Field(..., min_length=1)
     convex_url: str = ""
     frontend_url: str = "http://localhost:3000"
     junction_engine_url: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+
+    def validate_startup(self) -> None:
+        """Validate that critical configuration is present. Call during app startup."""
+        if not self.openrouter_api_key:
+            raise RuntimeError("OPENROUTER_API_KEY is required but not set")
+        if not self.junction_engine_url:
+            logger.warning("JUNCTION_ENGINE_URL is not set — MCP tools will be unavailable")
+        if not self.convex_url:
+            logger.warning("CONVEX_URL is not set")
 
 
 settings = Settings()
