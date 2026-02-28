@@ -1,6 +1,10 @@
+import logging
+
 import httpx
 import jwt
 from fastapi import HTTPException, Request
+
+logger = logging.getLogger(__name__)
 
 _jwks_cache: dict | None = None
 
@@ -11,6 +15,7 @@ async def _get_jwks(client: httpx.AsyncClient, issuer: str) -> dict:
     if _jwks_cache is not None:
         return _jwks_cache
 
+    logger.debug("Fetching JWKS from %s", issuer)
     resp = await client.get(f"{issuer}/.well-known/jwks.json", timeout=10.0)
     resp.raise_for_status()
     _jwks_cache = resp.json()
@@ -54,6 +59,7 @@ async def verify_token(request: Request) -> dict:
             # Key not found — maybe rotated. Clear cache and retry once.
             global _jwks_cache
             _jwks_cache = None
+            logger.info("JWKS key %s not found in cache, refetching", kid)
             jwks = await _get_jwks(http_client, issuer)
             for k in jwks.get("keys", []):
                 if k.get("kid") == kid:
@@ -74,4 +80,5 @@ async def verify_token(request: Request) -> dict:
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError as e:
+        logger.warning("Invalid token received: %s", e)
         raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
