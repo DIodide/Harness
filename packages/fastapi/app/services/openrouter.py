@@ -1,9 +1,12 @@
 import json
+import logging
 from collections.abc import AsyncGenerator
 
 import httpx
 
 from app.config import MODEL_MAP, settings
+
+logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -23,6 +26,7 @@ async def stream_chat(
         tools: Optional OpenAI-format tool definitions.
     """
     resolved_model = MODEL_MAP.get(model, model)
+    logger.debug("Streaming chat with model '%s' (resolved: '%s')", model, resolved_model)
 
     payload: dict = {
         "model": resolved_model,
@@ -54,4 +58,5 @@ async def stream_chat(
             try:
                 yield json.loads(data)
             except json.JSONDecodeError:
+                logger.warning("Failed to parse SSE chunk: %s", data[:200])
                 continue
