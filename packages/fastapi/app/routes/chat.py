@@ -1,43 +1,64 @@
 import json
+import logging
 
-from fastapi import APIRouter, Request
+import httpx
+from fastapi import APIRouter, Depends, Request
 from sse_starlette.sse import EventSourceResponse
 
+from app.dependencies import get_current_user, get_http_client
 from app.models import ChatRequest
 from app.services.mcp_client import call_tool, list_tools
 from app.services.openrouter import stream_chat
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 MAX_TOOL_ITERATIONS = 10
 
 
 @router.post("/stream")
-async def chat_stream(request: Request, body: ChatRequest):
-    http_client = request.app.state.http_client
+async def chat_stream(
+    request: Request,
+    body: ChatRequest,
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+    user: dict = Depends(get_current_user),
+):
+    logger.info(
+        "Chat stream started by user '%s' for conversation '%s'",
+        user.get("sub", "unknown"),
+        body.conversation_id,
+    )
 
     async def event_generator():
         # Fetch available MCP tools for this harness
         tools: list[dict] | None = None
         if body.harness.mcps:
-            tools = await list_tools(http_client, body.harness.mcps)
+            tools = await list_tools(
+                http_client, body.harness.mcps
+            )
             if not tools:
                 tools = None
 
         messages = [m.model_dump() for m in body.messages]
 
         # Agentic loop: stream response, handle tool calls, repeat
-        for _ in range(MAX_TOOL_ITERATIONS):
+        for iteration in range(MAX_TOOL_ITERATIONS):
             collected_content = ""
             collected_tool_calls: list[dict] = []
             finish_reason: str | None = None
 
             try:
                 async for chunk in stream_chat(
-                    http_client, messages, body.harness.model, tools
+                    http_client,
+                    messages,
+                    body.harness.model,
+                    tools,
                 ):
-                    # Check if client disconnected
                     if await request.is_disconnected():
+                        logger.info(
+                            "Client disconnected from conversation '%s'",
+                            body.conversation_id,
+                        )
                         return
 
                     if chunk.get("type") == "done":
@@ -48,25 +69,32 @@ async def chat_stream(request: Request, body: ChatRequest):
                         continue
 
                     delta = choices[0].get("delta", {})
-                    finish_reason = choices[0].get("finish_reason")
+                    finish_reason = choices[0].get(
+                        "finish_reason"
+                    )
 
                     # Stream content tokens to client
                     if delta.get("content"):
                         collected_content += delta["content"]
                         yield {
                             "event": "token",
-                            "data": json.dumps({"content": delta["content"]}),
+                            "data": json.dumps(
+                                {"content": delta["content"]}
+                            ),
                         }
 
                     # Accumulate tool call deltas
                     if delta.get("tool_calls"):
                         for tc_delta in delta["tool_calls"]:
-                            idx = tc_delta["index"]
+                            idx = tc_delta.get("index", 0)
                             while len(collected_tool_calls) <= idx:
                                 collected_tool_calls.append(
                                     {
                                         "id": "",
-                                        "function": {"name": "", "arguments": ""},
+                                        "function": {
+                                            "name": "",
+                                            "arguments": "",
+                                        },
                                     }
                                 )
                             tc = collected_tool_calls[idx]
@@ -75,22 +103,59 @@ async def chat_stream(request: Request, body: ChatRequest):
                             if "function" in tc_delta:
                                 fn = tc_delta["function"]
                                 if "name" in fn:
-                                    tc["function"]["name"] += fn["name"]
+                                    tc["function"]["name"] += fn[
+                                        "name"
+                                    ]
                                 if "arguments" in fn:
-                                    tc["function"]["arguments"] += fn["arguments"]
+                                    tc["function"][
+                                        "arguments"
+                                    ] += fn["arguments"]
 
-            except Exception as e:
+            except httpx.HTTPStatusError as e:
+                logger.error(
+                    "OpenRouter HTTP error: %s %s",
+                    e.response.status_code,
+                    e.response.text[:200],
+                )
                 yield {
                     "event": "error",
-                    "data": json.dumps({"message": str(e)}),
+                    "data": json.dumps(
+                        {"message": "Upstream service error"}
+                    ),
+                }
+                return
+            except httpx.HTTPError as e:
+                logger.error("HTTP error during chat stream: %s", e)
+                yield {
+                    "event": "error",
+                    "data": json.dumps(
+                        {"message": "Service unavailable"}
+                    ),
+                }
+                return
+            except Exception:
+                logger.exception(
+                    "Unexpected error in chat stream for conversation '%s'",
+                    body.conversation_id,
+                )
+                yield {
+                    "event": "error",
+                    "data": json.dumps(
+                        {"message": "Internal server error"}
+                    ),
                 }
                 return
 
             # If no tool calls, we're done
-            if finish_reason != "tool_calls" or not collected_tool_calls:
+            if (
+                finish_reason != "tool_calls"
+                or not collected_tool_calls
+            ):
                 yield {
                     "event": "done",
-                    "data": json.dumps({"content": collected_content}),
+                    "data": json.dumps(
+                        {"content": collected_content}
+                    ),
                 }
                 return
 
@@ -114,8 +179,15 @@ async def chat_stream(request: Request, body: ChatRequest):
             for tc in collected_tool_calls:
                 tool_name = tc["function"]["name"]
                 try:
-                    args = json.loads(tc["function"]["arguments"])
+                    args = json.loads(
+                        tc["function"]["arguments"]
+                    )
                 except json.JSONDecodeError:
+                    logger.warning(
+                        "Failed to parse arguments for tool '%s': %s",
+                        tool_name,
+                        tc["function"]["arguments"][:200],
+                    )
                     args = {}
 
                 # Notify frontend
@@ -131,19 +203,21 @@ async def chat_stream(request: Request, body: ChatRequest):
                 }
 
                 # Execute the tool via MCP
-                result = await call_tool(http_client, tool_name, args)
+                result = await call_tool(
+                    http_client, tool_name, args
+                )
 
                 yield {
                     "event": "tool_result",
                     "data": json.dumps(
                         {
                             "call_id": tc["id"],
-                            "result": result[:1000],
+                            "result": result,
                         }
                     ),
                 }
 
-                # Add tool result to message history for next LLM call
+                # Add tool result to message history
                 messages.append(
                     {
                         "role": "tool",
@@ -152,12 +226,23 @@ async def chat_stream(request: Request, body: ChatRequest):
                     }
                 )
 
-            # Loop continues — LLM will be called again with tool results
+            logger.debug(
+                "Tool iteration %d completed for conversation '%s'",
+                iteration + 1,
+                body.conversation_id,
+            )
 
         # Max iterations reached
+        logger.warning(
+            "Max tool iterations (%d) reached for conversation '%s'",
+            MAX_TOOL_ITERATIONS,
+            body.conversation_id,
+        )
         yield {
             "event": "error",
-            "data": json.dumps({"message": "Max tool call iterations reached"}),
+            "data": json.dumps(
+                {"message": "Max tool call iterations reached"}
+            ),
         }
 
     return EventSourceResponse(event_generator())
