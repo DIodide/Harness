@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 import httpx
@@ -7,18 +8,35 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routes import chat, health
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings.validate_startup()
+    logger.info("Starting Harness API")
+
     app.state.http_client = httpx.AsyncClient(
-        limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+        limits=httpx.Limits(
+            max_connections=100,
+            max_keepalive_connections=20,
+        ),
         timeout=httpx.Timeout(120.0, connect=10.0),
     )
     yield
     await app.state.http_client.aclose()
+    logger.info("Harness API shut down")
 
 
-app = FastAPI(title="Harness API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(
+    title="Harness API",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,4 +53,6 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
-app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+app.include_router(
+    chat.router, prefix="/api/chat", tags=["chat"]
+)
