@@ -88,8 +88,7 @@ function RootComponent() {
 			appearance={{
 				variables: {
 					borderRadius: "0rem",
-					fontFamily:
-						"'Geist', -apple-system, BlinkMacSystemFont, sans-serif",
+					fontFamily: "'Geist', -apple-system, BlinkMacSystemFont, sans-serif",
 					colorBackground: "var(--background)",
 					colorText: "var(--foreground)",
 					colorPrimary: "var(--primary)",
