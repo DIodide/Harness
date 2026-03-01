@@ -30,13 +30,15 @@ async def stream_chat(
         "Streaming chat with model '%s' (resolved: '%s')", model, resolved_model
     )
 
+    is_thinking = model in THINKING_MODELS
     payload: dict = {
         "model": resolved_model,
         "messages": messages,
         "stream": True,
         "stream_options": {"include_usage": True},
+        "max_tokens": 16000 if is_thinking else 4096,
     }
-    if model in THINKING_MODELS:
+    if is_thinking:
         payload["reasoning"] = {"effort": "high"}
     if tools:
         payload["tools"] = tools
@@ -49,10 +51,24 @@ async def stream_chat(
         "X-Title": "Harness",
     }
 
+    logger.info(
+        "OpenRouter request: model=%s, messages=%d, tools=%d",
+        resolved_model,
+        len(messages),
+        len(tools) if tools else 0,
+    )
+
     async with client.stream(
         "POST", OPENROUTER_URL, json=payload, headers=headers
     ) as response:
-        response.raise_for_status()
+        if response.status_code != 200:
+            error_body = await response.aread()
+            logger.error(
+                "OpenRouter error %d: %s",
+                response.status_code,
+                error_body.decode("utf-8", errors="replace")[:500],
+            )
+            response.raise_for_status()
         async for line in response.aiter_lines():
             if not line.startswith("data: "):
                 continue

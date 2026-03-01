@@ -141,14 +141,14 @@ async def chat_stream(
                                     tc["function"]["arguments"] += fn["arguments"]
 
             except httpx.HTTPStatusError as e:
+                # Response may be streaming (unread), so use str(e) instead of e.response.text
                 logger.error(
-                    "OpenRouter HTTP error: %s %s",
+                    "OpenRouter HTTP error: %s",
                     e.response.status_code,
-                    e.response.text[:200],
                 )
                 yield {
                     "event": "error",
-                    "data": json.dumps({"message": "Upstream service error"}),
+                    "data": json.dumps({"message": f"Upstream service error ({e.response.status_code})"}),
                 }
                 return
             except httpx.HTTPError as e:
