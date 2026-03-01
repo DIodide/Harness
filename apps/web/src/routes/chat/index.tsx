@@ -246,6 +246,7 @@ function ChatPage() {
 							onSelect={handleSelectConversation}
 							harnessId={activeHarnessId}
 							onClose={() => setSidebarOpen(false)}
+							streamingConvoIds={chatStream.streamingConvoIds}
 						/>
 					</motion.aside>
 				)}
@@ -291,6 +292,7 @@ function ChatSidebar({
 	onSelect,
 	harnessId,
 	onClose,
+	streamingConvoIds,
 }: {
 	conversations: Array<{
 		_id: Id<"conversations">;
@@ -302,6 +304,7 @@ function ChatSidebar({
 	onSelect: (id: Id<"conversations"> | null) => void;
 	harnessId: Id<"harnesses"> | null;
 	onClose: () => void;
+	streamingConvoIds: Set<string>;
 }) {
 	const removeConvo = useMutation({
 		mutationFn: useConvexMutation(api.conversations.remove),
@@ -374,7 +377,11 @@ function ChatSidebar({
 													: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
 											)}
 										>
-											<MessageSquare size={12} className="shrink-0" />
+											{streamingConvoIds.has(convo._id) ? (
+												<Loader2 size={12} className="shrink-0 animate-spin text-muted-foreground" />
+											) : (
+												<MessageSquare size={12} className="shrink-0" />
+											)}
 											<span className="truncate">{convo.title}</span>
 										</button>
 										<Button
