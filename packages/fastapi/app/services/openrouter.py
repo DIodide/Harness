@@ -57,10 +57,24 @@ async def stream_chat(
                 continue
             data = line[6:]
             if data == "[DONE]":
+                logger.debug("OpenRouter stream ended with [DONE]")
                 yield {"type": "done"}
                 return
             try:
-                yield json.loads(data)
+                parsed = json.loads(data)
+                # Log tool_calls and finish_reason for debugging
+                choices = parsed.get("choices", [])
+                if choices:
+                    fr = choices[0].get("finish_reason")
+                    delta = choices[0].get("delta", {})
+                    if fr:
+                        logger.debug("OpenRouter finish_reason: %s", fr)
+                    if delta.get("tool_calls"):
+                        logger.debug("OpenRouter tool_call delta: %s", delta["tool_calls"])
+                yield parsed
             except json.JSONDecodeError:
                 logger.warning("Failed to parse SSE chunk: %s", data[:200])
                 continue
+        # If we exit the loop without [DONE], the stream ended unexpectedly
+        logger.warning("OpenRouter stream ended without [DONE] marker")
+        yield {"type": "done"}

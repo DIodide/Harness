@@ -2,7 +2,12 @@ import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	redirect,
+	useNavigate,
+} from "@tanstack/react-router";
 import {
 	ArrowLeft,
 	Cpu,
@@ -49,6 +54,7 @@ export const Route = createFileRoute("/harnesses/")({
 });
 
 function HarnessesPage() {
+	const navigate = useNavigate();
 	const { data: harnesses, isLoading } = useQuery(
 		convexQuery(api.harnesses.list, {}),
 	);
@@ -124,6 +130,12 @@ function HarnessesPage() {
 								harnesses={active}
 								onToggle={handleToggleStatus}
 								onDelete={setDeleteTarget}
+								onEdit={(id) =>
+									navigate({
+										to: "/harnesses/$harnessId",
+										params: { harnessId: id },
+									})
+								}
 							/>
 						)}
 						{stopped.length > 0 && (
@@ -132,6 +144,12 @@ function HarnessesPage() {
 								harnesses={stopped}
 								onToggle={handleToggleStatus}
 								onDelete={setDeleteTarget}
+								onEdit={(id) =>
+									navigate({
+										to: "/harnesses/$harnessId",
+										params: { harnessId: id },
+									})
+								}
 							/>
 						)}
 						{drafts.length > 0 && (
@@ -140,6 +158,12 @@ function HarnessesPage() {
 								harnesses={drafts}
 								onToggle={handleToggleStatus}
 								onDelete={setDeleteTarget}
+								onEdit={(id) =>
+									navigate({
+										to: "/harnesses/$harnessId",
+										params: { harnessId: id },
+									})
+								}
 							/>
 						)}
 					</div>
@@ -177,6 +201,7 @@ function HarnessGroup({
 	harnesses,
 	onToggle,
 	onDelete,
+	onEdit,
 }: {
 	title: string;
 	harnesses: Array<{
@@ -184,7 +209,12 @@ function HarnessGroup({
 		name: string;
 		model: string;
 		status: "started" | "stopped" | "draft";
-		mcps: string[];
+		mcpServers: Array<{
+			name: string;
+			url: string;
+			authType: "none" | "bearer";
+			authToken?: string;
+		}>;
 		skills: string[];
 	}>;
 	onToggle: (
@@ -192,6 +222,7 @@ function HarnessGroup({
 		status: "started" | "stopped" | "draft",
 	) => void;
 	onDelete: (id: Id<"harnesses">) => void;
+	onEdit: (id: Id<"harnesses">) => void;
 }) {
 	return (
 		<div>
@@ -206,7 +237,12 @@ function HarnessGroup({
 						animate={{ opacity: 1, y: 0 }}
 						transition={{ delay: i * 0.05 }}
 					>
-						<HarnessCard harness={h} onToggle={onToggle} onDelete={onDelete} />
+						<HarnessCard
+							harness={h}
+							onToggle={onToggle}
+							onDelete={onDelete}
+							onEdit={onEdit}
+						/>
 					</motion.div>
 				))}
 			</div>
@@ -218,13 +254,19 @@ function HarnessCard({
 	harness,
 	onToggle,
 	onDelete,
+	onEdit,
 }: {
 	harness: {
 		_id: Id<"harnesses">;
 		name: string;
 		model: string;
 		status: "started" | "stopped" | "draft";
-		mcps: string[];
+		mcpServers: Array<{
+			name: string;
+			url: string;
+			authType: "none" | "bearer";
+			authToken?: string;
+		}>;
 		skills: string[];
 	};
 	onToggle: (
@@ -232,6 +274,7 @@ function HarnessCard({
 		status: "started" | "stopped" | "draft",
 	) => void;
 	onDelete: (id: Id<"harnesses">) => void;
+	onEdit: (id: Id<"harnesses">) => void;
 }) {
 	const isDraft = harness.status === "draft";
 
@@ -262,7 +305,7 @@ function HarnessCard({
 							</Button>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="end">
-							<DropdownMenuItem>
+							<DropdownMenuItem onClick={() => onEdit(harness._id)}>
 								<Edit size={12} />
 								Edit
 							</DropdownMenuItem>
@@ -305,7 +348,7 @@ function HarnessCard({
 				<div className="mt-3 flex items-center gap-3 text-[10px] text-muted-foreground">
 					<span className="flex items-center gap-1">
 						<Layers size={10} />
-						{harness.mcps.length} MCPs
+						{harness.mcpServers.length} MCPs
 					</span>
 					<span className="flex items-center gap-1">
 						<Zap size={10} />

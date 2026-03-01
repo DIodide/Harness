@@ -68,7 +68,9 @@ async def chat_stream(
                         continue
 
                     delta = choices[0].get("delta", {})
-                    finish_reason = choices[0].get("finish_reason")
+                    fr = choices[0].get("finish_reason")
+                    if fr is not None:
+                        finish_reason = fr
 
                     # Stream reasoning/thinking tokens to client
                     reasoning_details = delta.get("reasoning_details")
@@ -143,6 +145,13 @@ async def chat_stream(
                 }
                 return
 
+            logger.debug(
+                "Stream loop ended: finish_reason=%s, tool_calls=%d, content_len=%d",
+                finish_reason,
+                len(collected_tool_calls),
+                len(collected_content),
+            )
+
             # If no tool calls, we're done
             if finish_reason != "tool_calls" or not collected_tool_calls:
                 # Save to Convex first, then notify client
@@ -200,9 +209,11 @@ async def chat_stream(
                 }
 
                 # Execute the tool via MCP
+                logger.info("Executing MCP tool '%s' with args: %s", tool_name, json.dumps(args)[:200])
                 result = await call_tool(
                     http_client, tool_name, args, body.harness.mcp_servers
                 )
+                logger.info("MCP tool '%s' returned: %s", tool_name, result[:200])
 
                 yield {
                     "event": "tool_result",

@@ -1,0 +1,15 @@
+export const MODELS = [
+	{ value: "gpt-4o", label: "GPT-4o" },
+	{ value: "gpt-4.1", label: "GPT-4.1" },
+	{ value: "gpt-4.1-mini", label: "GPT-4.1 Mini" },
+	{ value: "claude-sonnet-4", label: "Claude Sonnet 4" },
+	{ value: "claude-sonnet-4-thinking", label: "Claude Sonnet 4 (Thinking)" },
+	{ value: "claude-opus-4", label: "Claude Opus 4" },
+	{ value: "claude-opus-4-thinking", label: "Claude Opus 4 (Thinking)" },
+	{ value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+	{ value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+	{ value: "deepseek-r1", label: "DeepSeek R1" },
+	{ value: "deepseek-v3", label: "DeepSeek V3" },
+	{ value: "grok-3", label: "Grok 3" },
+	{ value: "grok-3-mini", label: "Grok 3 Mini" },
+];

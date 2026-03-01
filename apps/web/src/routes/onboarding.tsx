@@ -6,15 +6,19 @@ import {
 	ArrowLeft,
 	ArrowRight,
 	Check,
-	ExternalLink,
+	Eye,
+	EyeOff,
 	Layers,
-	Link2,
+	Plus,
+	Server,
 	Shield,
+	Trash2,
 	Wrench,
+	X,
 	Zap,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { HarnessMark } from "../components/harness-mark";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -27,6 +31,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../components/ui/select";
+import { MODELS } from "../lib/models";
 
 export const Route = createFileRoute("/onboarding")({
 	beforeLoad: ({ context }) => {
@@ -37,71 +42,12 @@ export const Route = createFileRoute("/onboarding")({
 	component: OnboardingPage,
 });
 
-type AuthType = "oauth" | "cas";
-
-interface McpDefinition {
-	id: string;
+interface McpServerEntry {
 	name: string;
-	description: string;
-	auth?: { type: AuthType; provider: string; label: string };
+	url: string;
+	authType: "none" | "bearer";
+	authToken?: string;
 }
-
-const AVAILABLE_MCPS: McpDefinition[] = [
-	{
-		id: "browser",
-		name: "Browser",
-		description: "Web browsing and scraping capabilities",
-	},
-	{
-		id: "terminal",
-		name: "Terminal",
-		description: "Execute shell commands and scripts",
-	},
-	{
-		id: "editor",
-		name: "Code Editor",
-		description: "Read and write source code files",
-	},
-	{
-		id: "database",
-		name: "Database",
-		description: "Query and manage databases",
-	},
-	{
-		id: "search",
-		name: "Search",
-		description: "Search the web for information",
-	},
-	{
-		id: "filesystem",
-		name: "Filesystem",
-		description: "Navigate and manage local files",
-	},
-	{
-		id: "github",
-		name: "GitHub",
-		description: "Access repositories, issues, and pull requests",
-		auth: { type: "oauth", provider: "github", label: "GitHub" },
-	},
-	{
-		id: "google-drive",
-		name: "Google Drive",
-		description: "Read and write files in Google Drive",
-		auth: { type: "oauth", provider: "google", label: "Google" },
-	},
-	{
-		id: "slack",
-		name: "Slack",
-		description: "Send and read messages in Slack workspaces",
-		auth: { type: "oauth", provider: "slack", label: "Slack" },
-	},
-	{
-		id: "princeton-tigerhub",
-		name: "TigerHub",
-		description: "Access Princeton University TigerHub services",
-		auth: { type: "cas", provider: "princeton", label: "Princeton CAS" },
-	},
-];
 
 const AVAILABLE_SKILLS = [
 	{ id: "coding", name: "Coding", description: "Write and review code" },
@@ -132,15 +78,10 @@ const AVAILABLE_SKILLS = [
 	},
 ];
 
-const MODELS = [
-	{ value: "gpt-4o", label: "GPT-4o" },
-	{ value: "claude-sonnet-4", label: "Claude Sonnet 4" },
-	{ value: "claude-opus-4", label: "Claude Opus 4" },
-	{ value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
-	{ value: "gpt-4.1-mini", label: "GPT-4.1 Mini" },
-	{ value: "grok-3", label: "Grok 3" },
-	{ value: "grok-3-mini", label: "Grok 3 Mini" },
-	{ value: "deepseek-r1", label: "DeepSeek R1" },
+const STEPS = [
+	{ key: "name", label: "Name & Model", icon: Wrench },
+	{ key: "mcps", label: "MCP Servers", icon: Layers },
+	{ key: "skills", label: "Skills", icon: Zap },
 ];
 
 function OnboardingPage() {
@@ -148,30 +89,11 @@ function OnboardingPage() {
 
 	const [name, setName] = useState("");
 	const [model, setModel] = useState("");
-	const [selectedMcps, setSelectedMcps] = useState<string[]>([]);
-	const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
+	const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
 	const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
 
-	const mcpsRequiringAuth = useMemo(
-		() => AVAILABLE_MCPS.filter((m) => m.auth && selectedMcps.includes(m.id)),
-		[selectedMcps],
-	);
-	const needsAuthStep = mcpsRequiringAuth.length > 0;
-
-	const steps = useMemo(() => {
-		const base = [
-			{ key: "name", label: "Name & Model", icon: Wrench },
-			{ key: "mcps", label: "MCPs", icon: Layers },
-		];
-		if (needsAuthStep) {
-			base.push({ key: "connect", label: "Connect", icon: Link2 });
-		}
-		base.push({ key: "skills", label: "Skills", icon: Zap });
-		return base;
-	}, [needsAuthStep]);
-
 	const [stepIndex, setStepIndex] = useState(0);
-	const currentStep = steps[stepIndex]?.key ?? "name";
+	const currentStep = STEPS[stepIndex]?.key ?? "name";
 
 	const createHarness = useMutation({
 		mutationFn: useConvexMutation(api.harnesses.create),
@@ -187,7 +109,7 @@ function OnboardingPage() {
 	};
 
 	const handleNext = () => {
-		if (stepIndex < steps.length - 1) setStepIndex(stepIndex + 1);
+		if (stepIndex < STEPS.length - 1) setStepIndex(stepIndex + 1);
 	};
 
 	const handleBack = () => {
@@ -199,7 +121,7 @@ function OnboardingPage() {
 			name: name.trim(),
 			model,
 			status: "started",
-			mcps: selectedMcps,
+			mcpServers,
 			skills: selectedSkills,
 		});
 	};
@@ -209,26 +131,22 @@ function OnboardingPage() {
 			name: name.trim() || "Untitled Harness",
 			model: model || "gpt-4o",
 			status: "draft",
-			mcps: selectedMcps,
+			mcpServers,
 			skills: selectedSkills,
 		});
 	};
 
-	const toggleMcp = (id: string) => {
-		setSelectedMcps((prev) =>
-			prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id],
-		);
+	const handleAddServer = (server: McpServerEntry) => {
+		setMcpServers((prev) => [...prev, server]);
+	};
+
+	const handleRemoveServer = (index: number) => {
+		setMcpServers((prev) => prev.filter((_, i) => i !== index));
 	};
 
 	const toggleSkill = (id: string) => {
 		setSelectedSkills((prev) =>
 			prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id],
-		);
-	};
-
-	const handleConnect = (provider: string) => {
-		setConnectedProviders((prev) =>
-			prev.includes(provider) ? prev : [...prev, provider],
 		);
 	};
 
@@ -262,7 +180,7 @@ function OnboardingPage() {
 				</div>
 
 				<div className="mb-10 mt-8 flex items-center justify-center gap-1">
-					{steps.map((s, i) => (
+					{STEPS.map((s, i) => (
 						<div key={s.key} className="flex items-center gap-1">
 							<button
 								type="button"
@@ -281,7 +199,7 @@ function OnboardingPage() {
 								<span className="hidden sm:inline">{s.label}</span>
 								<span className="sm:hidden">{i + 1}</span>
 							</button>
-							{i < steps.length - 1 && (
+							{i < STEPS.length - 1 && (
 								<div
 									className={`h-px w-6 ${i < stepIndex ? "bg-foreground/20" : "bg-border"}`}
 								/>
@@ -308,13 +226,10 @@ function OnboardingPage() {
 								/>
 							)}
 							{currentStep === "mcps" && (
-								<StepMcps selected={selectedMcps} toggle={toggleMcp} />
-							)}
-							{currentStep === "connect" && (
-								<StepConnect
-									mcps={mcpsRequiringAuth}
-									connected={connectedProviders}
-									onConnect={handleConnect}
+								<StepMcpServers
+									servers={mcpServers}
+									onAdd={handleAddServer}
+									onRemove={handleRemoveServer}
 								/>
 							)}
 							{currentStep === "skills" && (
@@ -335,7 +250,7 @@ function OnboardingPage() {
 						Back
 					</Button>
 
-					{stepIndex < steps.length - 1 ? (
+					{stepIndex < STEPS.length - 1 ? (
 						<Button size="sm" onClick={handleNext} disabled={!canProceed()}>
 							Next
 							<ArrowRight size={14} />
@@ -423,163 +338,246 @@ function StepNameModel({
 	);
 }
 
-function StepMcps({
-	selected,
-	toggle,
+function StepMcpServers({
+	servers,
+	onAdd,
+	onRemove,
 }: {
-	selected: string[];
-	toggle: (id: string) => void;
+	servers: McpServerEntry[];
+	onAdd: (server: McpServerEntry) => void;
+	onRemove: (index: number) => void;
 }) {
 	return (
-		<div className="space-y-3">
-			<p className="text-xs text-muted-foreground">
-				Select the MCP servers your agent should have access to.
-			</p>
-			<div className="grid gap-2 sm:grid-cols-2">
-				{AVAILABLE_MCPS.map((mcp) => (
-					<button
-						key={mcp.id}
-						type="button"
-						onClick={() => toggle(mcp.id)}
-						className={`flex items-start gap-3 border p-3 text-left transition-colors ${
-							selected.includes(mcp.id)
-								? "border-foreground bg-foreground/3"
-								: "border-border hover:border-foreground/20"
-						}`}
-					>
-						<Checkbox
-							checked={selected.includes(mcp.id)}
-							className="mt-0.5"
-							tabIndex={-1}
-						/>
-						<div className="flex-1">
-							<div className="flex items-center gap-1.5">
-								<p className="text-xs font-medium text-foreground">
-									{mcp.name}
-								</p>
-								{mcp.auth && (
-									<Badge
-										variant="outline"
-										className="px-1 py-0 text-[9px] uppercase"
-									>
-										{mcp.auth.type}
-									</Badge>
-								)}
-							</div>
-							<p className="text-xs text-muted-foreground">{mcp.description}</p>
-						</div>
-					</button>
-				))}
+		<div className="space-y-4">
+			<div>
+				<p className="text-xs text-muted-foreground">
+					Add MCP servers to give your agent tools and capabilities. Provide the
+					streamable HTTP URL for each server.
+				</p>
 			</div>
+
+			{servers.length > 0 && (
+				<div className="space-y-2">
+					{servers.map((server, i) => (
+						<motion.div
+							key={`${server.name}-${server.url}`}
+							initial={{ opacity: 0, y: 4 }}
+							animate={{ opacity: 1, y: 0 }}
+							className="group flex items-center gap-3 border border-border px-3 py-2.5"
+						>
+							<Server size={14} className="shrink-0 text-muted-foreground" />
+							<div className="min-w-0 flex-1">
+								<p className="text-xs font-medium text-foreground">
+									{server.name}
+								</p>
+								<p className="truncate text-[11px] text-muted-foreground">
+									{server.url}
+								</p>
+							</div>
+							{server.authType === "bearer" && (
+								<Badge variant="secondary" className="shrink-0 text-[10px]">
+									<Shield size={8} />
+									Bearer
+								</Badge>
+							)}
+							<Button
+								variant="ghost"
+								size="icon-xs"
+								onClick={() => onRemove(i)}
+								className="shrink-0 opacity-0 group-hover:opacity-100"
+							>
+								<Trash2 size={12} />
+							</Button>
+						</motion.div>
+					))}
+				</div>
+			)}
+
+			<AddMcpServerForm onAdd={onAdd} />
+
+			{servers.length === 0 && (
+				<p className="text-center text-[11px] text-muted-foreground/60">
+					No MCP servers added yet. You can add them later from the harness
+					settings.
+				</p>
+			)}
 		</div>
 	);
 }
 
-function StepConnect({
-	mcps,
-	connected,
-	onConnect,
+function AddMcpServerForm({
+	onAdd,
 }: {
-	mcps: McpDefinition[];
-	connected: string[];
-	onConnect: (provider: string) => void;
+	onAdd: (server: McpServerEntry) => void;
 }) {
-	const oauthMcps = mcps.filter((m) => m.auth?.type === "oauth");
-	const casMcps = mcps.filter((m) => m.auth?.type === "cas");
+	const [open, setOpen] = useState(false);
+	const [name, setName] = useState("");
+	const [url, setUrl] = useState("");
+	const [authType, setAuthType] = useState<"none" | "bearer">("none");
+	const [authToken, setAuthToken] = useState("");
+	const [showToken, setShowToken] = useState(false);
+
+	const reset = () => {
+		setName("");
+		setUrl("");
+		setAuthType("none");
+		setAuthToken("");
+		setShowToken(false);
+	};
+
+	const handleSubmit = () => {
+		if (!name.trim() || !url.trim()) return;
+		onAdd({
+			name: name.trim(),
+			url: url.trim(),
+			authType,
+			authToken: authType === "bearer" ? authToken : undefined,
+		});
+		reset();
+		setOpen(false);
+	};
+
+	if (!open) {
+		return (
+			<Button
+				variant="outline"
+				size="sm"
+				onClick={() => setOpen(true)}
+				className="w-full border-dashed"
+			>
+				<Plus size={14} />
+				Add MCP Server
+			</Button>
+		);
+	}
 
 	return (
-		<div className="space-y-6">
-			<p className="text-xs text-muted-foreground">
-				Some of the MCPs you selected require authentication. Connect your
-				accounts below — no secrets are stored locally.
-			</p>
+		<motion.div
+			initial={{ opacity: 0, y: 4 }}
+			animate={{ opacity: 1, y: 0 }}
+			className="space-y-3 border border-border p-4"
+		>
+			<div className="flex items-center justify-between">
+				<p className="text-xs font-medium text-foreground">New MCP Server</p>
+				<Button
+					variant="ghost"
+					size="icon-xs"
+					onClick={() => {
+						reset();
+						setOpen(false);
+					}}
+				>
+					<X size={12} />
+				</Button>
+			</div>
 
-			{oauthMcps.length > 0 && (
-				<div className="space-y-2">
-					<h3 className="text-xs font-medium text-foreground">OAuth</h3>
-					{oauthMcps.map((mcp) => {
-						const provider = mcp.auth?.provider ?? "";
-						const isConnected = connected.includes(provider);
-						return (
-							<div
-								key={mcp.id}
-								className="flex items-center justify-between border border-border p-3"
-							>
-								<div>
-									<p className="text-xs font-medium text-foreground">
-										{mcp.name}
-									</p>
-									<p className="text-[11px] text-muted-foreground">
-										Sign in with {mcp.auth?.label} to grant access
-									</p>
-								</div>
-								{isConnected ? (
-									<Badge variant="secondary" className="gap-1 text-[10px]">
-										<Check size={10} />
-										Connected
-									</Badge>
-								) : (
-									<Button
-										variant="outline"
-										size="xs"
-										onClick={() => onConnect(provider)}
-									>
-										<ExternalLink size={10} />
-										Connect
-									</Button>
-								)}
-							</div>
-						);
-					})}
+			<div className="grid gap-3 sm:grid-cols-2">
+				<div>
+					<label
+						htmlFor="mcp-name"
+						className="mb-1 block text-[11px] text-muted-foreground"
+					>
+						Display Name
+					</label>
+					<Input
+						id="mcp-name"
+						value={name}
+						onChange={(e) => setName(e.target.value)}
+						placeholder="e.g. My Postgres"
+						className="text-xs"
+					/>
 				</div>
+				<div>
+					<label
+						htmlFor="mcp-url"
+						className="mb-1 block text-[11px] text-muted-foreground"
+					>
+						Server URL
+					</label>
+					<Input
+						id="mcp-url"
+						value={url}
+						onChange={(e) => setUrl(e.target.value)}
+						placeholder="https://mcp.example.com/sse"
+						className="text-xs"
+					/>
+				</div>
+			</div>
+
+			<div>
+				<label
+					htmlFor="mcp-auth"
+					className="mb-1 block text-[11px] text-muted-foreground"
+				>
+					Authentication
+				</label>
+				<Select
+					value={authType}
+					onValueChange={(v) => setAuthType(v as "none" | "bearer")}
+				>
+					<SelectTrigger className="max-w-xs text-xs">
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="none">None</SelectItem>
+						<SelectItem value="bearer">Bearer Token</SelectItem>
+					</SelectContent>
+				</Select>
+			</div>
+
+			{authType === "bearer" && (
+				<motion.div
+					initial={{ opacity: 0, height: 0 }}
+					animate={{ opacity: 1, height: "auto" }}
+					exit={{ opacity: 0, height: 0 }}
+				>
+					<label
+						htmlFor="mcp-token"
+						className="mb-1 block text-[11px] text-muted-foreground"
+					>
+						Bearer Token
+					</label>
+					<div className="flex gap-2">
+						<Input
+							id="mcp-token"
+							type={showToken ? "text" : "password"}
+							value={authToken}
+							onChange={(e) => setAuthToken(e.target.value)}
+							placeholder="Enter token..."
+							className="flex-1 text-xs"
+						/>
+						<Button
+							variant="ghost"
+							size="icon-xs"
+							onClick={() => setShowToken(!showToken)}
+						>
+							{showToken ? <EyeOff size={12} /> : <Eye size={12} />}
+						</Button>
+					</div>
+				</motion.div>
 			)}
 
-			{casMcps.length > 0 && (
-				<div className="space-y-2">
-					<h3 className="text-xs font-medium text-foreground">
-						CAS Authentication
-					</h3>
-					{casMcps.map((mcp) => {
-						const provider = mcp.auth?.provider ?? "";
-						const isConnected = connected.includes(provider);
-						return (
-							<div
-								key={mcp.id}
-								className="flex items-center justify-between border border-border p-3"
-							>
-								<div>
-									<p className="text-xs font-medium text-foreground">
-										{mcp.name}
-									</p>
-									<p className="text-[11px] text-muted-foreground">
-										Authenticate via {mcp.auth?.label}
-									</p>
-								</div>
-								{isConnected ? (
-									<Badge variant="secondary" className="gap-1 text-[10px]">
-										<Check size={10} />
-										Authenticated
-									</Badge>
-								) : (
-									<Button
-										variant="outline"
-										size="xs"
-										onClick={() => onConnect(provider)}
-									>
-										<ExternalLink size={10} />
-										Authenticate
-									</Button>
-								)}
-							</div>
-						);
-					})}
-				</div>
-			)}
-
-			<p className="text-[11px] text-muted-foreground/60">
-				You can skip this and connect later from the harness settings.
-			</p>
-		</div>
+			<div className="flex justify-end gap-2 pt-1">
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={() => {
+						reset();
+						setOpen(false);
+					}}
+				>
+					Cancel
+				</Button>
+				<Button
+					size="sm"
+					onClick={handleSubmit}
+					disabled={!name.trim() || !url.trim()}
+				>
+					<Plus size={12} />
+					Add Server
+				</Button>
+			</div>
+		</motion.div>
 	);
 }
 

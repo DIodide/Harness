@@ -3,72 +3,229 @@ import logging
 
 import httpx
 
-from app.config import settings
+from app.models import McpServer
 
 logger = logging.getLogger(__name__)
 
+JSONRPC_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+}
 
-def _get_server_url(mcp_name: str) -> str | None:
-    """Map a harness MCP name to its server URL via the junction engine."""
-    if not settings.junction_engine_url:
+# Cache of session IDs per MCP server URL to avoid re-initializing on every request.
+_session_cache: dict[str, str] = {}
+
+
+def _build_headers(server: McpServer, session_id: str | None = None) -> dict[str, str]:
+    """Build request headers, including auth and session ID if available."""
+    headers = dict(JSONRPC_HEADERS)
+    if server.auth_type == "bearer" and server.auth_token:
+        headers["Authorization"] = f"Bearer {server.auth_token}"
+    if session_id:
+        headers["mcp-session-id"] = session_id
+    return headers
+
+
+async def _post_streaming(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict,
+    headers: dict[str, str],
+    timeout: float,
+) -> tuple[dict, httpx.Headers, int]:
+    """Send a POST and handle both JSON and SSE responses using streaming.
+
+    SSE connections are long-lived, so we stream line-by-line and close
+    as soon as we get a JSON-RPC result, rather than waiting for the
+    server to close the connection (which may never happen).
+
+    Returns (result_body, response_headers, status_code).
+    """
+    req = client.build_request("POST", url, json=payload, headers=headers, timeout=timeout)
+    resp = await client.send(req, stream=True)
+
+    resp_headers = resp.headers
+    status_code = resp.status_code
+
+    content_type = resp_headers.get("content-type", "")
+
+    if "text/event-stream" in content_type and status_code < 400:
+        # Stream SSE line-by-line, extract the first JSON-RPC result, then close.
+        result: dict = {}
+        try:
+            async for raw_line in resp.aiter_lines():
+                line = raw_line.strip()
+                if not line or line.startswith("event:"):
+                    continue
+                if line.startswith("data:"):
+                    data = line[5:].strip()
+                    try:
+                        parsed = json.loads(data)
+                        if "result" in parsed:
+                            result = parsed["result"]
+                            break
+                        if "error" in parsed:
+                            result = parsed
+                            break
+                    except json.JSONDecodeError:
+                        continue
+        finally:
+            await resp.aclose()
+        return result, resp_headers, status_code
+    else:
+        # Regular JSON response — read full body then close.
+        try:
+            body_bytes = await resp.aread()
+        finally:
+            await resp.aclose()
+
+        if status_code >= 400:
+            return {"_raw_text": body_bytes.decode("utf-8", errors="replace")}, resp_headers, status_code
+
+        try:
+            body = json.loads(body_bytes)
+            return body.get("result", {}), resp_headers, status_code
+        except json.JSONDecodeError:
+            return {}, resp_headers, status_code
+
+
+async def _initialize_session(
+    client: httpx.AsyncClient,
+    server: McpServer,
+) -> str | None:
+    """Send the MCP initialize handshake and return the session ID."""
+    cached = _session_cache.get(server.url)
+    if cached:
+        return cached
+
+    headers = _build_headers(server)
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "harness", "version": "1.0.0"},
+        },
+    }
+
+    try:
+        result, resp_headers, status = await _post_streaming(client, server.url, payload, headers, timeout=10.0)
+        if status >= 400:
+            logger.error("MCP initialize returned %d for '%s'", status, server.name)
+            return None
+        session_id = resp_headers.get("mcp-session-id")
+        if session_id:
+            _session_cache[server.url] = session_id
+            logger.debug("Initialized MCP session '%s' for '%s'", session_id, server.name)
+        return session_id
+    except httpx.HTTPError as e:
+        logger.error("Failed to initialize MCP session for '%s' at %s: %s", server.name, server.url, e)
         return None
-    return f"{settings.junction_engine_url}/{mcp_name}"
 
 
-async def list_tools(client: httpx.AsyncClient, mcp_names: list[str]) -> list[dict]:
+async def _post_jsonrpc(
+    client: httpx.AsyncClient,
+    server: McpServer,
+    method: str,
+    params: dict | None = None,
+    timeout: float = 10.0,
+    session_id: str | None = None,
+) -> dict:
+    """Send a JSON-RPC 2.0 request to an MCP server and return the result.
+
+    Uses streaming to handle text/event-stream responses without hanging.
+    """
+    headers = _build_headers(server, session_id)
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method,
+        "params": params or {},
+    }
+
+    result, resp_headers, status = await _post_streaming(client, server.url, payload, headers, timeout)
+
+    # If we get a 400 "not initialized", try initializing and retry once
+    if status == 400:
+        raw = result.get("_raw_text", "")
+        if "not initialized" in raw.lower():
+            logger.info("MCP server '%s' requires initialization, retrying...", server.name)
+            _session_cache.pop(server.url, None)
+            new_session = await _initialize_session(client, server)
+            if new_session:
+                headers = _build_headers(server, new_session)
+                result, resp_headers, status = await _post_streaming(
+                    client, server.url, payload, headers, timeout
+                )
+
+    if status >= 400:
+        raise httpx.HTTPStatusError(
+            f"MCP server returned {status}",
+            request=httpx.Request("POST", server.url),
+            response=httpx.Response(status),
+        )
+
+    # Update cached session if server returns one
+    new_session = resp_headers.get("mcp-session-id")
+    if new_session:
+        _session_cache[server.url] = new_session
+
+    return result
+
+
+async def _ensure_session(client: httpx.AsyncClient, server: McpServer) -> str | None:
+    """Ensure we have a valid session for this server, initializing if needed."""
+    return await _initialize_session(client, server)
+
+
+async def list_tools(client: httpx.AsyncClient, mcp_servers: list[McpServer]) -> list[dict]:
     """Fetch available tools from MCP servers, returned in OpenAI function format.
 
     Tool names are namespaced as 'servername__toolname' to avoid collisions.
     """
     tools: list[dict] = []
 
-    for name in mcp_names:
-        url = _get_server_url(name)
-        if not url:
-            logger.warning("No server URL resolved for MCP '%s' — skipping", name)
-            continue
+    for server in mcp_servers:
         try:
-            resp = await client.post(
-                url,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "tools/list",
-                    "params": {},
-                },
-                timeout=10.0,
-            )
-            resp.raise_for_status()
-            result = resp.json().get("result", {})
+            session_id = await _ensure_session(client, server)
+            result = await _post_jsonrpc(client, server, "tools/list", session_id=session_id)
             server_tools = result.get("tools", [])
             for tool in server_tools:
                 tools.append(
                     {
                         "type": "function",
                         "function": {
-                            "name": f"{name}__{tool['name']}",
+                            "name": f"{server.name}__{tool['name']}",
                             "description": tool.get("description", ""),
                             "parameters": tool.get("inputSchema", {}),
                         },
                     }
                 )
-            logger.debug("Loaded %d tools from MCP '%s'", len(server_tools), name)
+            logger.info("Loaded %d tools from MCP '%s' at %s", len(server_tools), server.name, server.url)
         except httpx.HTTPError as e:
-            logger.error("HTTP error fetching tools from MCP '%s' at %s: %s", name, url, e)
+            logger.error("HTTP error fetching tools from MCP '%s' at %s: %s", server.name, server.url, e)
             continue
         except KeyError as e:
-            logger.error("Malformed response from MCP '%s': missing key %s", name, e)
+            logger.error("Malformed response from MCP '%s': missing key %s", server.name, e)
             continue
 
     return tools
 
 
-async def call_tool(client: httpx.AsyncClient, tool_name: str, arguments: dict) -> str:
+async def call_tool(
+    client: httpx.AsyncClient,
+    tool_name: str,
+    arguments: dict,
+    mcp_servers: list[McpServer],
+) -> str:
     """Execute a tool call on the appropriate MCP server.
 
     Args:
         tool_name: Namespaced name in format 'servername__toolname'.
         arguments: Tool arguments dict.
+        mcp_servers: List of configured MCP servers to resolve against.
 
     Returns:
         Tool result as a string.
@@ -79,27 +236,23 @@ async def call_tool(client: httpx.AsyncClient, tool_name: str, arguments: dict) 
         return json.dumps({"error": f"Invalid tool name format: {tool_name}"})
 
     server_name, actual_tool = parts
-    url = _get_server_url(server_name)
-    if not url:
-        logger.error("Unknown MCP server: %s", server_name)
+    server = next((s for s in mcp_servers if s.name == server_name), None)
+    if not server:
+        logger.error("No MCP server found with name: %s", server_name)
         return json.dumps({"error": f"Unknown MCP server: {server_name}"})
 
     try:
-        logger.debug("Calling tool '%s' on MCP '%s'", actual_tool, server_name)
-        resp = await client.post(
-            url,
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {"name": actual_tool, "arguments": arguments},
-            },
+        session_id = _session_cache.get(server.url)
+        logger.debug("Calling tool '%s' on MCP '%s' at %s", actual_tool, server_name, server.url)
+        result = await _post_jsonrpc(
+            client,
+            server,
+            "tools/call",
+            {"name": actual_tool, "arguments": arguments},
             timeout=30.0,
+            session_id=session_id,
         )
-        resp.raise_for_status()
-        result = resp.json().get("result", {})
         content = result.get("content", [])
-        # MCP tool results are an array of content blocks; extract text
         texts = [c.get("text", "") for c in content if c.get("type") == "text"]
         return "\n".join(texts) if texts else json.dumps(result)
     except httpx.HTTPError as e:
