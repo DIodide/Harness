@@ -11,6 +11,7 @@ import {
 } from "@tanstack/react-router";
 import {
 	ArrowUp,
+	Check,
 	ChevronDown,
 	Cpu,
 	Loader2,
@@ -118,6 +119,10 @@ function ChatPage() {
 		Record<string, ConvoStreamState>
 	>({});
 
+	// Track conversations that just finished streaming (show green checkmark briefly)
+	const [doneConvoIds, setDoneConvoIds] = useState<Set<string>>(new Set());
+	const prevStreamingRef = useRef<Set<string>>(new Set());
+
 	const chatStream = useChatStream({
 		onToken: (convoId, content) => {
 			setStreamStates((prev) => ({
@@ -187,6 +192,26 @@ function ChatPage() {
 		}
 	}, [harnesses, navigate]);
 
+	useEffect(() => {
+		const prev = prevStreamingRef.current;
+		const curr = chatStream.streamingConvoIds;
+
+		for (const id of prev) {
+			if (!curr.has(id)) {
+				setDoneConvoIds((s) => new Set(s).add(id));
+				setTimeout(() => {
+					setDoneConvoIds((s) => {
+						const next = new Set(s);
+						next.delete(id);
+						return next;
+					});
+				}, 800);
+			}
+		}
+
+		prevStreamingRef.current = new Set(curr);
+	}, [chatStream.streamingConvoIds]);
+
 	const handleStreamSynced = useCallback((convoId: string) => {
 		setStreamStates((prev) => {
 			const next = { ...prev };
@@ -247,6 +272,7 @@ function ChatPage() {
 							harnessId={activeHarnessId}
 							onClose={() => setSidebarOpen(false)}
 							streamingConvoIds={chatStream.streamingConvoIds}
+							doneConvoIds={doneConvoIds}
 						/>
 					</motion.aside>
 				)}
@@ -293,6 +319,7 @@ function ChatSidebar({
 	harnessId,
 	onClose,
 	streamingConvoIds,
+	doneConvoIds,
 }: {
 	conversations: Array<{
 		_id: Id<"conversations">;
@@ -305,6 +332,7 @@ function ChatSidebar({
 	harnessId: Id<"harnesses"> | null;
 	onClose: () => void;
 	streamingConvoIds: Set<string>;
+	doneConvoIds: Set<string>;
 }) {
 	const removeConvo = useMutation({
 		mutationFn: useConvexMutation(api.conversations.remove),
@@ -377,14 +405,48 @@ function ChatSidebar({
 													: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
 											)}
 										>
-											{streamingConvoIds.has(convo._id) ? (
-												<Loader2
-													size={12}
-													className="shrink-0 animate-spin text-muted-foreground"
-												/>
-											) : (
-												<MessageSquare size={12} className="shrink-0" />
-											)}
+											<AnimatePresence mode="wait">
+												{streamingConvoIds.has(convo._id) ? (
+													<motion.span
+														key="spinner"
+														initial={{ opacity: 0, scale: 0.5 }}
+														animate={{ opacity: 1, scale: 1 }}
+														exit={{ opacity: 0, scale: 0.5 }}
+														transition={{ duration: 0.15 }}
+														className="flex shrink-0"
+													>
+														<Loader2
+															size={12}
+															className="animate-spin text-muted-foreground"
+														/>
+													</motion.span>
+												) : doneConvoIds.has(convo._id) ? (
+													<motion.span
+														key="check"
+														initial={{ opacity: 0, scale: 0.5 }}
+														animate={{ opacity: 1, scale: 1 }}
+														exit={{ opacity: 0, scale: 0.5 }}
+														transition={{ duration: 0.15 }}
+														className="flex shrink-0"
+													>
+														<Check
+															size={12}
+															className="text-emerald-500"
+														/>
+													</motion.span>
+												) : (
+													<motion.span
+														key="icon"
+														initial={{ opacity: 0, scale: 0.5 }}
+														animate={{ opacity: 1, scale: 1 }}
+														exit={{ opacity: 0, scale: 0.5 }}
+														transition={{ duration: 0.15 }}
+														className="flex shrink-0"
+													>
+														<MessageSquare size={12} />
+													</motion.span>
+												)}
+											</AnimatePresence>
 											<span className="truncate">{convo.title}</span>
 										</button>
 										<Button
