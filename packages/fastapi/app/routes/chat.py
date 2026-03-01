@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 
@@ -232,7 +233,8 @@ async def chat_stream(
                 }
             )
 
-            # Execute each tool call
+            # Phase 1: Parse args + notify frontend of all tool calls upfront
+            parsed_tool_calls = []
             for tc in collected_tool_calls:
                 tool_name = tc["function"]["name"]
                 try:
@@ -245,7 +247,10 @@ async def chat_stream(
                     )
                     args = {}
 
-                # Notify frontend
+                parsed_tool_calls.append(
+                    {"id": tc["id"], "tool_name": tool_name, "args": args}
+                )
+
                 yield {
                     "event": "tool_call",
                     "data": json.dumps(
@@ -257,18 +262,47 @@ async def chat_stream(
                     ),
                 }
 
-                # Execute the tool via MCP
-                logger.info("Executing MCP tool '%s' with args: %s", tool_name, json.dumps(args)[:200])
-                result = await call_tool(
-                    http_client, tool_name, args, body.harness.mcp_servers
+            # Phase 2: Execute all tool calls in parallel, stream results as they complete
+            async def _execute_tool(tool_info: dict) -> tuple[dict, str]:
+                """Execute a tool and return (tool_info, result) for identification."""
+                logger.info(
+                    "Executing MCP tool '%s' with args: %s",
+                    tool_info["tool_name"],
+                    json.dumps(tool_info["args"])[:200],
                 )
-                logger.info("MCP tool '%s' returned: %s", tool_name, result[:200])
+                result = await call_tool(
+                    http_client,
+                    tool_info["tool_name"],
+                    tool_info["args"],
+                    body.harness.mcp_servers,
+                )
+                return tool_info, result
 
-                # Track for persistence
+            tasks = [
+                asyncio.create_task(_execute_tool(tc))
+                for tc in parsed_tool_calls
+            ]
+
+            # Stream each result to the frontend as soon as it finishes
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    tc_info, result = await coro
+                except Exception as exc:
+                    # If a task raises, we can't know which one from as_completed,
+                    # so log and continue — remaining tasks still complete.
+                    logger.error("MCP tool raised an exception: %s", exc)
+                    continue
+
+                logger.info(
+                    "MCP tool '%s' returned: %s",
+                    tc_info["tool_name"],
+                    result[:200],
+                )
+
                 all_tool_calls_history.append({
-                    "tool": tool_name,
-                    "arguments": args,
-                    "call_id": tc["id"],
+                    "tool": tc_info["tool_name"],
+                    "arguments": tc_info["args"],
+                    "call_id": tc_info["id"],
                     "result": result,
                 })
 
@@ -276,17 +310,16 @@ async def chat_stream(
                     "event": "tool_result",
                     "data": json.dumps(
                         {
-                            "call_id": tc["id"],
+                            "call_id": tc_info["id"],
                             "result": result,
                         }
                     ),
                 }
 
-                # Add tool result to message history
                 messages.append(
                     {
                         "role": "tool",
-                        "tool_call_id": tc["id"],
+                        "tool_call_id": tc_info["id"],
                         "content": result,
                     }
                 )

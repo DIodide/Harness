@@ -1,3 +1,5 @@
+import asyncio
+import itertools
 import json
 import logging
 
@@ -12,8 +14,26 @@ JSONRPC_HEADERS = {
     "Accept": "application/json, text/event-stream",
 }
 
+# Monotonically increasing JSON-RPC request ID so each request is unique.
+_request_id_counter = itertools.count(1)
+
 # Cache of session IDs per MCP server URL to avoid re-initializing on every request.
 _session_cache: dict[str, str] = {}
+
+# Per-server lock to prevent concurrent session initialization races.
+_session_init_locks: dict[str, asyncio.Lock] = {}
+
+
+def _next_request_id() -> int:
+    """Return a unique JSON-RPC request ID."""
+    return next(_request_id_counter)
+
+
+def _get_init_lock(server_url: str) -> asyncio.Lock:
+    """Get or create an initialization lock for a given server URL."""
+    if server_url not in _session_init_locks:
+        _session_init_locks[server_url] = asyncio.Lock()
+    return _session_init_locks[server_url]
 
 
 def _build_headers(server: McpServer, session_id: str | None = None) -> dict[str, str]:
@@ -93,36 +113,46 @@ async def _initialize_session(
     client: httpx.AsyncClient,
     server: McpServer,
 ) -> str | None:
-    """Send the MCP initialize handshake and return the session ID."""
+    """Send the MCP initialize handshake and return the session ID.
+
+    Uses a per-server lock to prevent concurrent initialization races.
+    """
     cached = _session_cache.get(server.url)
     if cached:
         return cached
 
-    headers = _build_headers(server)
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "harness", "version": "1.0.0"},
-        },
-    }
+    lock = _get_init_lock(server.url)
+    async with lock:
+        # Double-check after acquiring the lock (another task may have initialized).
+        cached = _session_cache.get(server.url)
+        if cached:
+            return cached
 
-    try:
-        result, resp_headers, status = await _post_streaming(client, server.url, payload, headers, timeout=10.0)
-        if status >= 400:
-            logger.error("MCP initialize returned %d for '%s'", status, server.name)
+        headers = _build_headers(server)
+        payload = {
+            "jsonrpc": "2.0",
+            "id": _next_request_id(),
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "harness", "version": "1.0.0"},
+            },
+        }
+
+        try:
+            result, resp_headers, status = await _post_streaming(client, server.url, payload, headers, timeout=10.0)
+            if status >= 400:
+                logger.error("MCP initialize returned %d for '%s'", status, server.name)
+                return None
+            session_id = resp_headers.get("mcp-session-id")
+            if session_id:
+                _session_cache[server.url] = session_id
+                logger.debug("Initialized MCP session '%s' for '%s'", session_id, server.name)
+            return session_id
+        except httpx.HTTPError as e:
+            logger.error("Failed to initialize MCP session for '%s' at %s: %s", server.name, server.url, e)
             return None
-        session_id = resp_headers.get("mcp-session-id")
-        if session_id:
-            _session_cache[server.url] = session_id
-            logger.debug("Initialized MCP session '%s' for '%s'", session_id, server.name)
-        return session_id
-    except httpx.HTTPError as e:
-        logger.error("Failed to initialize MCP session for '%s' at %s: %s", server.name, server.url, e)
-        return None
 
 
 async def _post_jsonrpc(
@@ -140,7 +170,7 @@ async def _post_jsonrpc(
     headers = _build_headers(server, session_id)
     payload = {
         "jsonrpc": "2.0",
-        "id": 1,
+        "id": _next_request_id(),
         "method": method,
         "params": params or {},
     }
@@ -180,36 +210,49 @@ async def _ensure_session(client: httpx.AsyncClient, server: McpServer) -> str |
     return await _initialize_session(client, server)
 
 
+async def _list_tools_for_server(
+    client: httpx.AsyncClient, server: McpServer
+) -> list[dict]:
+    """Fetch tools from a single MCP server, returned in OpenAI function format."""
+    session_id = await _ensure_session(client, server)
+    result = await _post_jsonrpc(client, server, "tools/list", session_id=session_id)
+    server_tools = result.get("tools", [])
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": f"{server.name}__{tool['name']}",
+                "description": tool.get("description", ""),
+                "parameters": tool.get("inputSchema", {}),
+            },
+        }
+        for tool in server_tools
+    ]
+    logger.info("Loaded %d tools from MCP '%s' at %s", len(server_tools), server.name, server.url)
+    return tools
+
+
 async def list_tools(client: httpx.AsyncClient, mcp_servers: list[McpServer]) -> list[dict]:
-    """Fetch available tools from MCP servers, returned in OpenAI function format.
+    """Fetch available tools from all MCP servers in parallel.
 
     Tool names are namespaced as 'servername__toolname' to avoid collisions.
     """
-    tools: list[dict] = []
+    results = await asyncio.gather(
+        *[_list_tools_for_server(client, server) for server in mcp_servers],
+        return_exceptions=True,
+    )
 
-    for server in mcp_servers:
-        try:
-            session_id = await _ensure_session(client, server)
-            result = await _post_jsonrpc(client, server, "tools/list", session_id=session_id)
-            server_tools = result.get("tools", [])
-            for tool in server_tools:
-                tools.append(
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": f"{server.name}__{tool['name']}",
-                            "description": tool.get("description", ""),
-                            "parameters": tool.get("inputSchema", {}),
-                        },
-                    }
-                )
-            logger.info("Loaded %d tools from MCP '%s' at %s", len(server_tools), server.name, server.url)
-        except httpx.HTTPError as e:
-            logger.error("HTTP error fetching tools from MCP '%s' at %s: %s", server.name, server.url, e)
+    tools: list[dict] = []
+    for server, result in zip(mcp_servers, results):
+        if isinstance(result, BaseException):
+            logger.error(
+                "Error fetching tools from MCP '%s' at %s: %s",
+                server.name,
+                server.url,
+                result,
+            )
             continue
-        except KeyError as e:
-            logger.error("Malformed response from MCP '%s': missing key %s", server.name, e)
-            continue
+        tools.extend(result)
 
     return tools
 
