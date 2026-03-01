@@ -1,4 +1,4 @@
-import { useClerk } from "@clerk/tanstack-react-start";
+import { useClerk, useUser } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
@@ -22,6 +22,7 @@ import {
 	Settings,
 	Sparkles,
 	Trash2,
+	User,
 	Wrench,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -35,7 +36,11 @@ import {
 import toast from "react-hot-toast";
 import { HarnessMark } from "../../components/harness-mark";
 import { MarkdownMessage } from "../../components/markdown-message";
-import { Avatar, AvatarFallback } from "../../components/ui/avatar";
+import {
+	Avatar,
+	AvatarFallback,
+	AvatarImage,
+} from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
@@ -60,7 +65,11 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "../../components/ui/tooltip";
-import { type ToolCallEvent, useChatStream } from "../../lib/use-chat-stream";
+import {
+	type ConvoStreamState,
+	type ToolCallEvent,
+	useChatStream,
+} from "../../lib/use-chat-stream";
 import { cn } from "../../lib/utils";
 
 export const Route = createFileRoute("/chat/")({
@@ -78,6 +87,12 @@ const SUGGESTED_PROMPTS = [
 	"Review my API design and suggest improvements",
 	"Create a deployment checklist for production",
 ];
+
+const EMPTY_STREAM_STATE: ConvoStreamState = {
+	content: null,
+	toolCalls: [],
+	pendingDoneContent: null,
+};
 
 function ChatPage() {
 	const navigate = useNavigate();
@@ -98,50 +113,64 @@ function ChatPage() {
 		useState<Id<"conversations"> | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
 
-	// Streaming state
-	const [streamingContent, setStreamingContent] = useState<string | null>(null);
-	const [activeToolCalls, setActiveToolCalls] = useState<ToolCallEvent[]>([]);
-	// Tracks that streaming finished but Convex hasn't synced the message yet
-	const [pendingDoneContent, setPendingDoneContent] = useState<string | null>(
-		null,
-	);
-
-	const sendMessage = useMutation({
-		mutationFn: useConvexMutation(api.messages.send),
-	});
+	// Per-conversation streaming state
+	const [streamStates, setStreamStates] = useState<
+		Record<string, ConvoStreamState>
+	>({});
 
 	const chatStream = useChatStream({
-		onToken: (content) => {
-			setStreamingContent((prev) => (prev ?? "") + content);
+		onToken: (convoId, content) => {
+			setStreamStates((prev) => ({
+				...prev,
+				[convoId]: {
+					...prev[convoId],
+					toolCalls: prev[convoId]?.toolCalls ?? [],
+					pendingDoneContent: prev[convoId]?.pendingDoneContent ?? null,
+					content: (prev[convoId]?.content ?? "") + content,
+				},
+			}));
 		},
-		onToolCall: (event) => {
-			setActiveToolCalls((prev) => [...prev, event]);
+		onToolCall: (convoId, event) => {
+			setStreamStates((prev) => ({
+				...prev,
+				[convoId]: {
+					...prev[convoId],
+					content: prev[convoId]?.content ?? null,
+					pendingDoneContent: prev[convoId]?.pendingDoneContent ?? null,
+					toolCalls: [...(prev[convoId]?.toolCalls ?? []), event],
+				},
+			}));
 		},
-		onToolResult: (event) => {
-			setActiveToolCalls((prev) =>
-				prev.map((tc) =>
-					tc.call_id === event.call_id ? { ...tc, result: event.result } : tc,
-				),
-			);
+		onToolResult: (convoId, event) => {
+			setStreamStates((prev) => ({
+				...prev,
+				[convoId]: {
+					...prev[convoId],
+					content: prev[convoId]?.content ?? null,
+					pendingDoneContent: prev[convoId]?.pendingDoneContent ?? null,
+					toolCalls: (prev[convoId]?.toolCalls ?? []).map((tc) =>
+						tc.call_id === event.call_id ? { ...tc, result: event.result } : tc,
+					),
+				},
+			}));
 		},
-		onDone: (fullContent) => {
-			// Save the complete assistant message to Convex
-			if (activeConvoId && activeHarnessId) {
-				sendMessage.mutate({
-					conversationId: activeConvoId,
-					role: "assistant",
-					content: fullContent,
-					harnessId: activeHarnessId,
-				});
-			}
-			// Don't clear streamingContent yet — keep it visible until Convex syncs
-			setPendingDoneContent(fullContent);
-			setActiveToolCalls([]);
+		onDone: (convoId, fullContent) => {
+			setStreamStates((prev) => ({
+				...prev,
+				[convoId]: {
+					content: prev[convoId]?.content ?? fullContent,
+					toolCalls: [],
+					pendingDoneContent: fullContent,
+				},
+			}));
 		},
-		onError: (error) => {
+		onError: (convoId, error) => {
 			toast.error(error);
-			setStreamingContent(null);
-			setActiveToolCalls([]);
+			setStreamStates((prev) => {
+				const next = { ...prev };
+				delete next[convoId];
+				return next;
+			});
 		},
 	});
 
@@ -158,9 +187,12 @@ function ChatPage() {
 		}
 	}, [harnesses, navigate]);
 
-	const handleStreamSynced = useCallback(() => {
-		setStreamingContent(null);
-		setPendingDoneContent(null);
+	const handleStreamSynced = useCallback((convoId: string) => {
+		setStreamStates((prev) => {
+			const next = { ...prev };
+			delete next[convoId];
+			return next;
+		});
 	}, []);
 
 	const handleSelectConversation = useCallback(
@@ -190,6 +222,12 @@ function ChatPage() {
 	}
 
 	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
+	const activeStreamState = activeConvoId
+		? (streamStates[activeConvoId] ?? EMPTY_STREAM_STATE)
+		: EMPTY_STREAM_STATE;
+	const isActiveConvoStreaming = activeConvoId
+		? chatStream.streamingConvoIds.has(activeConvoId)
+		: false;
 
 	return (
 		<div className="flex h-full overflow-hidden bg-background">
@@ -220,15 +258,15 @@ function ChatPage() {
 					onSwitchHarness={setActiveHarnessId}
 					sidebarOpen={sidebarOpen}
 					onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-					isStreaming={chatStream.isStreaming}
+					isStreaming={isActiveConvoStreaming}
 				/>
 
 				{activeConvoId ? (
 					<ChatMessages
 						conversationId={activeConvoId}
-						streamingContent={streamingContent}
-						activeToolCalls={activeToolCalls}
-						pendingDoneContent={pendingDoneContent}
+						streamingContent={activeStreamState.content}
+						activeToolCalls={activeStreamState.toolCalls}
+						pendingDoneContent={activeStreamState.pendingDoneContent}
 						onStreamSynced={handleStreamSynced}
 					/>
 				) : (
@@ -239,7 +277,7 @@ function ChatPage() {
 					conversationId={activeConvoId}
 					activeHarness={activeHarness}
 					onConvoCreated={handleSelectConversation}
-					isStreaming={chatStream.isStreaming}
+					isStreaming={isActiveConvoStreaming}
 					onStream={chatStream.stream}
 				/>
 			</div>
@@ -396,7 +434,8 @@ function SettingsDialog({
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 }) {
-	const { signOut } = useClerk();
+	const { signOut, openUserProfile } = useClerk();
+	const { user } = useUser();
 	const navigate = useNavigate();
 	const { data: userSettings } = useQuery(
 		convexQuery(api.userSettings.get, {}),
@@ -419,6 +458,40 @@ function SettingsDialog({
 				</DialogHeader>
 
 				<div className="space-y-4">
+					<div>
+						<p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+							Profile
+						</p>
+						<div className="flex items-center gap-3 py-1.5">
+							<Avatar className="h-8 w-8">
+								<AvatarImage src={user?.imageUrl} />
+								<AvatarFallback className="text-xs">
+									{user?.firstName?.[0]}
+									{user?.lastName?.[0]}
+								</AvatarFallback>
+							</Avatar>
+							<div className="min-w-0 flex-1">
+								<p className="truncate text-xs font-medium text-foreground">
+									{user?.fullName}
+								</p>
+								<p className="truncate text-[11px] text-muted-foreground">
+									{user?.primaryEmailAddress?.emailAddress}
+								</p>
+							</div>
+						</div>
+						<Button
+							variant="ghost"
+							size="sm"
+							className="w-full justify-start text-muted-foreground hover:text-foreground"
+							onClick={() => openUserProfile()}
+						>
+							<User size={12} />
+							Manage account
+						</Button>
+					</div>
+
+					<Separator />
+
 					<div>
 						<p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
 							Behavior
@@ -563,7 +636,7 @@ function ChatMessages({
 	streamingContent: string | null;
 	activeToolCalls: ToolCallEvent[];
 	pendingDoneContent: string | null;
-	onStreamSynced: () => void;
+	onStreamSynced: (convoId: string) => void;
 }) {
 	const { data: messages, isLoading } = useQuery(
 		convexQuery(api.messages.list, { conversationId }),
@@ -581,9 +654,9 @@ function ChatMessages({
 	// Clear streaming state once Convex has synced — fire in effect to avoid setState during render
 	useEffect(() => {
 		if (convexHasMessage) {
-			onStreamSynced();
+			onStreamSynced(conversationId);
 		}
-	}, [convexHasMessage, onStreamSynced]);
+	}, [convexHasMessage, onStreamSynced, conversationId]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new messages and streaming
 	useEffect(() => {
@@ -773,14 +846,12 @@ function ChatInput({
 	});
 
 	// Fetch messages for context when sending
-	const { data: existingMessages } = useQuery({
-		...convexQuery(
+	const { data: existingMessages } = useQuery(
+		convexQuery(
 			api.messages.list,
-			// Pass a valid argument always; disable query when no conversation
-			{ conversationId: conversationId ?? ("" as Id<"conversations">) },
+			conversationId ? { conversationId } : "skip",
 		),
-		enabled: !!conversationId,
-	});
+	);
 
 	const adjustHeight = useCallback(() => {
 		const ta = textareaRef.current;

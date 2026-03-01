@@ -11,12 +11,21 @@ export interface ToolCallEvent {
 	result?: string;
 }
 
+export interface ConvoStreamState {
+	content: string | null;
+	toolCalls: ToolCallEvent[];
+	pendingDoneContent: string | null;
+}
+
 interface UseChatStreamCallbacks {
-	onToken: (content: string) => void;
-	onToolCall: (event: ToolCallEvent) => void;
-	onToolResult: (event: { call_id: string; result: string }) => void;
-	onDone: (fullContent: string) => void;
-	onError: (error: string) => void;
+	onToken: (conversationId: string, content: string) => void;
+	onToolCall: (conversationId: string, event: ToolCallEvent) => void;
+	onToolResult: (
+		conversationId: string,
+		event: { call_id: string; result: string },
+	) => void;
+	onDone: (conversationId: string, fullContent: string) => void;
+	onError: (conversationId: string, error: string) => void;
 }
 
 export interface ChatStreamRequest {
@@ -26,17 +35,24 @@ export interface ChatStreamRequest {
 }
 
 export function useChatStream(callbacks: UseChatStreamCallbacks) {
-	const [isStreaming, setIsStreaming] = useState(false);
-	const abortRef = useRef<AbortController | null>(null);
+	const [streamingConvoIds, setStreamingConvoIds] = useState<Set<string>>(
+		() => new Set(),
+	);
+	const abortControllers = useRef<Map<string, AbortController>>(new Map());
 	const { getToken } = useAuth();
-	// Store callbacks in a ref to avoid re-creating the stream function
 	const cbRef = useRef(callbacks);
 	cbRef.current = callbacks;
 
 	const stream = useCallback(
 		async (body: ChatStreamRequest) => {
-			setIsStreaming(true);
-			abortRef.current = new AbortController();
+			const convoId = body.conversation_id;
+
+			// Abort any existing stream for this conversation
+			abortControllers.current.get(convoId)?.abort();
+
+			const controller = new AbortController();
+			abortControllers.current.set(convoId, controller);
+			setStreamingConvoIds((prev) => new Set(prev).add(convoId));
 
 			try {
 				const token = await getToken();
@@ -47,7 +63,7 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 						...(token ? { Authorization: `Bearer ${token}` } : {}),
 					},
 					body: JSON.stringify(body),
-					signal: abortRef.current.signal,
+					signal: controller.signal,
 				});
 
 				if (!response.ok) {
@@ -69,7 +85,6 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 
 					buffer += decoder.decode(value, { stream: true });
 					const lines = buffer.split("\n");
-					// Keep the last potentially incomplete line in the buffer
 					buffer = lines.pop() ?? "";
 
 					for (const line of lines) {
@@ -84,43 +99,47 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 								const data = JSON.parse(raw);
 								switch (currentEvent) {
 									case "token":
-										cbRef.current.onToken(data.content);
+										cbRef.current.onToken(convoId, data.content);
 										break;
 									case "tool_call":
-										cbRef.current.onToolCall(data);
+										cbRef.current.onToolCall(convoId, data);
 										break;
 									case "tool_result":
-										cbRef.current.onToolResult(data);
+										cbRef.current.onToolResult(convoId, data);
 										break;
 									case "done":
-										cbRef.current.onDone(data.content);
+										cbRef.current.onDone(convoId, data.content);
 										break;
 									case "error":
-										cbRef.current.onError(data.message);
+										cbRef.current.onError(convoId, data.message);
 										break;
 								}
 							} catch {
 								// Skip malformed JSON lines
 							}
-							// Reset event type after processing data
 							currentEvent = "message";
 						}
 					}
 				}
 			} catch (err: unknown) {
 				if (err instanceof Error && err.name !== "AbortError") {
-					cbRef.current.onError(err.message);
+					cbRef.current.onError(convoId, err.message);
 				}
 			} finally {
-				setIsStreaming(false);
+				abortControllers.current.delete(convoId);
+				setStreamingConvoIds((prev) => {
+					const next = new Set(prev);
+					next.delete(convoId);
+					return next;
+				});
 			}
 		},
 		[getToken],
 	);
 
-	const cancel = useCallback(() => {
-		abortRef.current?.abort();
+	const cancel = useCallback((conversationId: string) => {
+		abortControllers.current.get(conversationId)?.abort();
 	}, []);
 
-	return { stream, isStreaming, cancel };
+	return { stream, streamingConvoIds, cancel };
 }

@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 
 export const list = query({
 	args: { conversationId: v.id("conversations") },
@@ -46,5 +46,30 @@ export const send = mutation({
 		await ctx.db.patch(args.conversationId, patch);
 
 		return id;
+	},
+});
+
+/**
+ * Internal mutation called by the FastAPI backend (via deploy key) to persist
+ * assistant messages after streaming completes. Not callable from the frontend.
+ */
+export const saveAssistantMessage = internalMutation({
+	args: {
+		conversationId: v.id("conversations"),
+		content: v.string(),
+	},
+	handler: async (ctx, args) => {
+		const convo = await ctx.db.get(args.conversationId);
+		if (!convo) throw new Error("Conversation not found");
+
+		await ctx.db.insert("messages", {
+			conversationId: args.conversationId,
+			role: "assistant",
+			content: args.content,
+		});
+
+		await ctx.db.patch(args.conversationId, {
+			lastMessageAt: Date.now(),
+		});
 	},
 });

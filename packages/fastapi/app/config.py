@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 class Settings(BaseSettings):
     openrouter_api_key: str = Field(..., min_length=1)
     convex_url: str = ""
+    convex_deploy_key: str = ""
     frontend_url: str = "http://localhost:3000"
     junction_engine_url: str = ""
 
@@ -22,6 +23,8 @@ class Settings(BaseSettings):
             logger.warning("JUNCTION_ENGINE_URL is not set — MCP tools will be unavailable")
         if not self.convex_url:
             logger.warning("CONVEX_URL is not set")
+        if not self.convex_deploy_key:
+            logger.warning("CONVEX_DEPLOY_KEY is not set — backend cannot save messages to Convex")
 
 
 settings = Settings()

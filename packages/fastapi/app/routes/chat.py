@@ -4,9 +4,9 @@ import logging
 import httpx
 from fastapi import APIRouter, Depends, Request
 from sse_starlette.sse import EventSourceResponse
-
 from app.dependencies import get_current_user, get_http_client
 from app.models import ChatRequest
+from app.services.convex import save_assistant_message
 from app.services.mcp_client import call_tool, list_tools
 from app.services.openrouter import stream_chat
 
@@ -151,6 +151,12 @@ async def chat_stream(
                 finish_reason != "tool_calls"
                 or not collected_tool_calls
             ):
+                # Save to Convex first, then notify client
+                await save_assistant_message(
+                    http_client,
+                    body.conversation_id,
+                    collected_content,
+                )
                 yield {
                     "event": "done",
                     "data": json.dumps(
