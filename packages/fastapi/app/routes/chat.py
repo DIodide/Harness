@@ -262,6 +262,10 @@ async def chat_stream(
                     ),
                 }
 
+            # Yield control so the SSE framework flushes tool_call events to the
+            # client before we start executing (avoids transport-level coalescing).
+            await asyncio.sleep(0)
+
             # Phase 2: Execute all tool calls in parallel, stream results as they complete
             async def _execute_tool(tool_info: dict) -> tuple[dict, str]:
                 """Execute a tool and return (tool_info, result) for identification."""
@@ -278,6 +282,18 @@ async def chat_stream(
                 )
                 return tool_info, result
 
+            # Pre-build history in request order; results filled in as they complete.
+            history_by_call_id: dict[str, dict] = {}
+            for tc_info in parsed_tool_calls:
+                entry = {
+                    "tool": tc_info["tool_name"],
+                    "arguments": tc_info["args"],
+                    "call_id": tc_info["id"],
+                    "result": "",
+                }
+                history_by_call_id[tc_info["id"]] = entry
+                all_tool_calls_history.append(entry)
+
             tasks = [
                 asyncio.create_task(_execute_tool(tc))
                 for tc in parsed_tool_calls
@@ -288,8 +304,6 @@ async def chat_stream(
                 try:
                     tc_info, result = await coro
                 except Exception as exc:
-                    # If a task raises, we can't know which one from as_completed,
-                    # so log and continue — remaining tasks still complete.
                     logger.error("MCP tool raised an exception: %s", exc)
                     continue
 
@@ -299,12 +313,8 @@ async def chat_stream(
                     result[:200],
                 )
 
-                all_tool_calls_history.append({
-                    "tool": tc_info["tool_name"],
-                    "arguments": tc_info["args"],
-                    "call_id": tc_info["id"],
-                    "result": result,
-                })
+                # Fill in the result in the pre-ordered history entry
+                history_by_call_id[tc_info["id"]]["result"] = result
 
                 yield {
                     "event": "tool_result",

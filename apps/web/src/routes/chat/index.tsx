@@ -853,9 +853,11 @@ function ChatMessages({
 		lastMsg.content === pendingDoneContent;
 	const isActivelyStreaming =
 		streamingContent !== null || streamingReasoning !== null;
-	// Show the streaming bubble when we have content or reasoning flowing, but Convex hasn't synced yet
+	// Show the streaming bubble when we have content, reasoning, or tool calls, but Convex hasn't synced yet
 	const showStreamingBubble =
-		(streamingContent !== null || streamingReasoning !== null) &&
+		(streamingContent !== null ||
+			streamingReasoning !== null ||
+			activeToolCalls.length > 0) &&
 		!convexHasMessage;
 
 	// Clear streaming state once Convex has synced — fire in effect to avoid setState during render
@@ -1034,7 +1036,7 @@ function ChatMessages({
 								)}
 								{streamingContent ? (
 									<MarkdownMessage content={streamingContent} />
-								) : !streamingReasoning ? (
+								) : !streamingReasoning && activeToolCalls.length === 0 ? (
 									<Loader2
 										size={14}
 										className="animate-spin text-muted-foreground"
