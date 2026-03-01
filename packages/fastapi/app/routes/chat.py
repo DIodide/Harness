@@ -39,6 +39,10 @@ async def chat_stream(
 
         messages = [m.model_dump() for m in body.messages]
 
+        # Accumulate across all iterations so reasoning/tool history isn't lost
+        all_reasoning = ""
+        all_tool_calls_history: list[dict] = []  # [{tool, arguments, call_id, result}]
+
         # Agentic loop: stream response, handle tool calls, repeat
         for iteration in range(MAX_TOOL_ITERATIONS):
             collected_content = ""
@@ -152,6 +156,10 @@ async def chat_stream(
                 len(collected_content),
             )
 
+            # Accumulate reasoning across iterations
+            if collected_reasoning:
+                all_reasoning += collected_reasoning
+
             # If no tool calls, we're done
             if finish_reason != "tool_calls" or not collected_tool_calls:
                 # Save to Convex first, then notify client
@@ -159,7 +167,8 @@ async def chat_stream(
                     http_client,
                     body.conversation_id,
                     collected_content,
-                    reasoning=collected_reasoning or None,
+                    reasoning=all_reasoning or None,
+                    tool_calls=all_tool_calls_history or None,
                 )
                 yield {
                     "event": "done",
@@ -214,6 +223,14 @@ async def chat_stream(
                     http_client, tool_name, args, body.harness.mcp_servers
                 )
                 logger.info("MCP tool '%s' returned: %s", tool_name, result[:200])
+
+                # Track for persistence
+                all_tool_calls_history.append({
+                    "tool": tool_name,
+                    "arguments": args,
+                    "call_id": tc["id"],
+                    "result": result,
+                })
 
                 yield {
                     "event": "tool_result",

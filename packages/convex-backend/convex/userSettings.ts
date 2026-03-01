@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 
 const DEFAULTS = {
 	autoSwitchHarness: true,
+	displayMode: "standard" as const,
 } as const;
 
 export const get = query({
@@ -19,6 +20,7 @@ export const get = query({
 
 		return {
 			autoSwitchHarness: settings.autoSwitchHarness,
+			displayMode: settings.displayMode ?? "standard",
 		};
 	},
 });
@@ -26,6 +28,13 @@ export const get = query({
 export const update = mutation({
 	args: {
 		autoSwitchHarness: v.optional(v.boolean()),
+		displayMode: v.optional(
+			v.union(
+				v.literal("zen"),
+				v.literal("standard"),
+				v.literal("developer"),
+			),
+		),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();

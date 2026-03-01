@@ -12,6 +12,7 @@ async def save_assistant_message(
     conversation_id: str,
     content: str,
     reasoning: str | None = None,
+    tool_calls: list[dict] | None = None,
 ) -> None:
     """Save an assistant message to Convex via the HTTP API.
 
@@ -29,6 +30,8 @@ async def save_assistant_message(
     }
     if reasoning:
         args["reasoning"] = reasoning
+    if tool_calls:
+        args["toolCalls"] = tool_calls
 
     try:
         resp = await http_client.post(

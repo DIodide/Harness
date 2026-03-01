@@ -49,6 +49,24 @@ export const send = mutation({
 	},
 });
 
+export const remove = mutation({
+	args: { id: v.id("messages") },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+
+		const message = await ctx.db.get(args.id);
+		if (!message) throw new Error("Not found");
+
+		const convo = await ctx.db.get(message.conversationId);
+		if (!convo || convo.userId !== identity.subject) {
+			throw new Error("Not found");
+		}
+
+		await ctx.db.delete(args.id);
+	},
+});
+
 /**
  * Internal mutation called by the FastAPI backend (via deploy key) to persist
  * assistant messages after streaming completes. Not callable from the frontend.
@@ -58,6 +76,16 @@ export const saveAssistantMessage = internalMutation({
 		conversationId: v.id("conversations"),
 		content: v.string(),
 		reasoning: v.optional(v.string()),
+		toolCalls: v.optional(
+			v.array(
+				v.object({
+					tool: v.string(),
+					arguments: v.any(),
+					call_id: v.string(),
+					result: v.string(),
+				}),
+			),
+		),
 	},
 	handler: async (ctx, args) => {
 		const convo = await ctx.db.get(args.conversationId);
@@ -68,6 +96,9 @@ export const saveAssistantMessage = internalMutation({
 			role: "assistant",
 			content: args.content,
 			...(args.reasoning ? { reasoning: args.reasoning } : {}),
+			...(args.toolCalls && args.toolCalls.length > 0
+				? { toolCalls: args.toolCalls }
+				: {}),
 		});
 
 		await ctx.db.patch(args.conversationId, {

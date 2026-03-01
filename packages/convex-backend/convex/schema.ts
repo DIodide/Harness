@@ -37,10 +37,27 @@ export default defineSchema({
 		role: v.union(v.literal("user"), v.literal("assistant")),
 		content: v.string(),
 		reasoning: v.optional(v.string()),
+		toolCalls: v.optional(
+			v.array(
+				v.object({
+					tool: v.string(),
+					arguments: v.any(),
+					call_id: v.string(),
+					result: v.string(),
+				}),
+			),
+		),
 	}).index("by_conversation", ["conversationId"]),
 
 	userSettings: defineTable({
 		userId: v.string(),
 		autoSwitchHarness: v.boolean(),
+		displayMode: v.optional(
+			v.union(
+				v.literal("zen"),
+				v.literal("standard"),
+				v.literal("developer"),
+			),
+		),
 	}).index("by_user", ["userId"]),
 });
