@@ -11,11 +11,20 @@ export interface ToolCallEvent {
 	result?: string;
 }
 
+export interface UsageData {
+	promptTokens: number;
+	completionTokens: number;
+	totalTokens: number;
+	cost?: number;
+}
+
 export interface ConvoStreamState {
 	content: string | null;
 	reasoning: string | null;
 	toolCalls: ToolCallEvent[];
 	pendingDoneContent: string | null;
+	usage: UsageData | null;
+	model: string | null;
 }
 
 interface UseChatStreamCallbacks {
@@ -26,7 +35,13 @@ interface UseChatStreamCallbacks {
 		conversationId: string,
 		event: { call_id: string; result: string },
 	) => void;
-	onDone: (conversationId: string, fullContent: string) => void;
+	onUsage: (conversationId: string, usage: UsageData) => void;
+	onDone: (
+		conversationId: string,
+		fullContent: string,
+		usage?: UsageData,
+		model?: string,
+	) => void;
 	onError: (conversationId: string, error: string) => void;
 }
 
@@ -121,8 +136,16 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 									case "tool_result":
 										cbRef.current.onToolResult(convoId, data);
 										break;
+									case "usage":
+										cbRef.current.onUsage(convoId, data);
+										break;
 									case "done":
-										cbRef.current.onDone(convoId, data.content);
+										cbRef.current.onDone(
+											convoId,
+											data.content,
+											data.usage,
+											data.model,
+										);
 										break;
 									case "error":
 										cbRef.current.onError(convoId, data.message);

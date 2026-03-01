@@ -47,6 +47,15 @@ export default defineSchema({
 				}),
 			),
 		),
+		usage: v.optional(
+			v.object({
+				promptTokens: v.number(),
+				completionTokens: v.number(),
+				totalTokens: v.number(),
+				cost: v.optional(v.number()),
+			}),
+		),
+		model: v.optional(v.string()),
 	}).index("by_conversation", ["conversationId"]),
 
 	userSettings: defineTable({

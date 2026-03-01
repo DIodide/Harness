@@ -46,6 +46,9 @@ app.add_middleware(
         "http://localhost:3001",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
+        "http://127.0.0.1:57177",
+        "https://72c1-140-180-240-231.ngrok-free.app",
+        "http://127.0.0.1:57609",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -53,6 +56,4 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
-app.include_router(
-    chat.router, prefix="/api/chat", tags=["chat"]
-)
+app.include_router(chat.router, prefix="/api/chat", tags=["chat"])

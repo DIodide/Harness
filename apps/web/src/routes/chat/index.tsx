@@ -82,6 +82,7 @@ import {
 import {
 	type ConvoStreamState,
 	type ToolCallEvent,
+	type UsageData,
 	useChatStream,
 } from "../../lib/use-chat-stream";
 import { cn } from "../../lib/utils";
@@ -107,6 +108,8 @@ const EMPTY_STREAM_STATE: ConvoStreamState = {
 	reasoning: null,
 	toolCalls: [],
 	pendingDoneContent: null,
+	usage: null,
+	model: null,
 };
 
 function ChatPage() {
@@ -186,7 +189,16 @@ function ChatPage() {
 				},
 			}));
 		},
-		onDone: (convoId, fullContent) => {
+		onUsage: (convoId, usage) => {
+			setStreamStates((prev) => ({
+				...prev,
+				[convoId]: {
+					...(prev[convoId] ?? EMPTY_STREAM_STATE),
+					usage,
+				},
+			}));
+		},
+		onDone: (convoId, fullContent, usage, model) => {
 			setStreamStates((prev) => ({
 				...prev,
 				[convoId]: {
@@ -194,6 +206,8 @@ function ChatPage() {
 					reasoning: prev[convoId]?.reasoning ?? null,
 					toolCalls: prev[convoId]?.toolCalls ?? [],
 					pendingDoneContent: fullContent,
+					usage: usage ?? null,
+					model: model ?? null,
 				},
 			}));
 		},
@@ -356,6 +370,8 @@ function ChatPage() {
 						streamingReasoning={activeStreamState.reasoning}
 						activeToolCalls={activeStreamState.toolCalls}
 						pendingDoneContent={activeStreamState.pendingDoneContent}
+						streamUsage={activeStreamState.usage}
+						streamModel={activeStreamState.model}
 						onStreamSynced={handleStreamSynced}
 						displayMode={
 							(userSettings?.displayMode as DisplayMode) ?? "standard"
@@ -802,6 +818,8 @@ function ChatMessages({
 	streamingReasoning,
 	activeToolCalls,
 	pendingDoneContent,
+	streamUsage,
+	streamModel,
 	onStreamSynced,
 	displayMode,
 	onRegenerate,
@@ -812,6 +830,8 @@ function ChatMessages({
 	streamingReasoning: string | null;
 	activeToolCalls: ToolCallEvent[];
 	pendingDoneContent: string | null;
+	streamUsage: UsageData | null;
+	streamModel: string | null;
 	onStreamSynced: (convoId: string) => void;
 	displayMode: DisplayMode;
 	onRegenerate: (
@@ -942,6 +962,16 @@ function ChatMessages({
 									role={msg.role}
 									displayMode={displayMode}
 									isStreaming={isStreaming}
+									usage={
+										msg.role === "assistant" && msg.usage
+											? (msg.usage as UsageData)
+											: undefined
+									}
+									model={
+										msg.role === "assistant"
+											? (msg.model ?? undefined)
+											: undefined
+									}
 									onRegenerate={
 										msg.role === "assistant"
 											? () => {
@@ -981,34 +1011,41 @@ function ChatMessages({
 								<Sparkles size={12} />
 							</AvatarFallback>
 						</Avatar>
-						<div className="max-w-[80%] text-sm leading-relaxed text-foreground">
-							{streamingReasoning && (
-								<ThinkingBlock
-									content={streamingReasoning}
-									isStreaming={streamingContent === null}
-								/>
-							)}
-							{activeToolCalls.length > 0 && (
-								<div className="mb-2 space-y-1">
-									{activeToolCalls.map((tc) => (
-										<ToolCallBlock
-											key={tc.call_id}
-											tool={tc.tool}
-											arguments={tc.arguments}
-											result={tc.result}
-											isStreaming={!tc.result}
-										/>
-									))}
+						<div className="max-w-[80%]">
+							<div className="text-sm leading-relaxed text-foreground">
+								{streamingReasoning && (
+									<ThinkingBlock
+										content={streamingReasoning}
+										isStreaming={streamingContent === null}
+									/>
+								)}
+								{activeToolCalls.length > 0 && (
+									<div className="mb-2 space-y-1">
+										{activeToolCalls.map((tc) => (
+											<ToolCallBlock
+												key={tc.call_id}
+												tool={tc.tool}
+												arguments={tc.arguments}
+												result={tc.result}
+												isStreaming={!tc.result}
+											/>
+										))}
+									</div>
+								)}
+								{streamingContent ? (
+									<MarkdownMessage content={streamingContent} />
+								) : !streamingReasoning ? (
+									<Loader2
+										size={14}
+										className="animate-spin text-muted-foreground"
+									/>
+								) : null}
+							</div>
+							{displayMode === "developer" && streamUsage && (
+								<div className="flex items-center gap-3 pt-1">
+									<StreamingUsage usage={streamUsage} model={streamModel} />
 								</div>
 							)}
-							{streamingContent ? (
-								<MarkdownMessage content={streamingContent} />
-							) : !streamingReasoning ? (
-								<Loader2
-									size={14}
-									className="animate-spin text-muted-foreground"
-								/>
-							) : null}
 						</div>
 					</motion.div>
 				)}
@@ -1151,6 +1188,24 @@ function ToolCallBlock({
 				)}
 			</AnimatePresence>
 		</div>
+	);
+}
+
+function StreamingUsage({
+	usage,
+	model,
+}: {
+	usage: UsageData;
+	model: string | null;
+}) {
+	const parts: string[] = [];
+	if (model) parts.push(model);
+	parts.push(`${usage.promptTokens} in / ${usage.completionTokens} out`);
+	if (usage.cost != null) parts.push(`$${usage.cost.toFixed(4)}`);
+	return (
+		<span className="text-[10px] text-muted-foreground">
+			{parts.join(" · ")}
+		</span>
 	);
 }
 

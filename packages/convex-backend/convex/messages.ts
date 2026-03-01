@@ -86,6 +86,15 @@ export const saveAssistantMessage = internalMutation({
 				}),
 			),
 		),
+		usage: v.optional(
+			v.object({
+				promptTokens: v.number(),
+				completionTokens: v.number(),
+				totalTokens: v.number(),
+				cost: v.optional(v.number()),
+			}),
+		),
+		model: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const convo = await ctx.db.get(args.conversationId);
@@ -99,6 +108,8 @@ export const saveAssistantMessage = internalMutation({
 			...(args.toolCalls && args.toolCalls.length > 0
 				? { toolCalls: args.toolCalls }
 				: {}),
+			...(args.usage ? { usage: args.usage } : {}),
+			...(args.model ? { model: args.model } : {}),
 		});
 
 		await ctx.db.patch(args.conversationId, {

@@ -43,6 +43,10 @@ async def chat_stream(
         all_reasoning = ""
         all_tool_calls_history: list[dict] = []  # [{tool, arguments, call_id, result}]
 
+        # Track usage across all iterations (last iteration's usage wins)
+        collected_usage: dict | None = None
+        collected_model: str | None = None
+
         # Agentic loop: stream response, handle tool calls, repeat
         for iteration in range(MAX_TOOL_ITERATIONS):
             collected_content = ""
@@ -66,6 +70,21 @@ async def chat_stream(
 
                     if chunk.get("type") == "done":
                         break
+
+                    # Capture usage & model (present on each chunk)
+                    if chunk.get("usage"):
+                        collected_usage = chunk["usage"]
+                        yield {
+                            "event": "usage",
+                            "data": json.dumps({
+                                "promptTokens": collected_usage.get("prompt_tokens", 0),
+                                "completionTokens": collected_usage.get("completion_tokens", 0),
+                                "totalTokens": collected_usage.get("total_tokens", 0),
+                                **({"cost": collected_usage["cost"]} if "cost" in collected_usage else {}),
+                            }),
+                        }
+                    if chunk.get("model"):
+                        collected_model = chunk["model"]
 
                     choices = chunk.get("choices", [])
                     if not choices:
@@ -162,6 +181,18 @@ async def chat_stream(
 
             # If no tool calls, we're done
             if finish_reason != "tool_calls" or not collected_tool_calls:
+                # Remap usage keys from snake_case to camelCase for Convex
+                usage_for_convex: dict | None = None
+                if collected_usage:
+                    usage_for_convex = {
+                        "promptTokens": collected_usage.get("prompt_tokens", 0),
+                        "completionTokens": collected_usage.get("completion_tokens", 0),
+                        "totalTokens": collected_usage.get("total_tokens", 0),
+                    }
+                    cost = collected_usage.get("cost")
+                    if cost is not None:
+                        usage_for_convex["cost"] = cost
+
                 # Save to Convex first, then notify client
                 await save_assistant_message(
                     http_client,
@@ -169,10 +200,19 @@ async def chat_stream(
                     collected_content,
                     reasoning=all_reasoning or None,
                     tool_calls=all_tool_calls_history or None,
+                    usage=usage_for_convex,
+                    model=collected_model,
                 )
+
+                done_data: dict = {"content": collected_content}
+                if usage_for_convex:
+                    done_data["usage"] = usage_for_convex
+                if collected_model:
+                    done_data["model"] = collected_model
+
                 yield {
                     "event": "done",
-                    "data": json.dumps({"content": collected_content}),
+                    "data": json.dumps(done_data),
                 }
                 return
 

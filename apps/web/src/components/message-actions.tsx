@@ -1,5 +1,6 @@
 import { Check, Copy, RefreshCw } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
+import type { UsageData } from "../lib/use-chat-stream";
 
 export type DisplayMode = "zen" | "standard" | "developer";
 
@@ -9,6 +10,8 @@ interface MessageActionsProps {
 	displayMode: DisplayMode;
 	onRegenerate?: () => void;
 	isStreaming?: boolean;
+	usage?: UsageData;
+	model?: string;
 }
 
 export function MessageActions({
@@ -17,17 +20,22 @@ export function MessageActions({
 	displayMode,
 	onRegenerate,
 	isStreaming,
+	usage,
+	model,
 }: MessageActionsProps) {
 	if (displayMode === "zen" || isStreaming) return null;
 
 	const showCopy = displayMode === "standard" || displayMode === "developer";
 	const showRegenerate =
 		displayMode === "developer" && role === "assistant" && onRegenerate;
+	const showUsage =
+		displayMode === "developer" && role === "assistant" && usage;
 
 	return (
-		<div className="flex items-center gap-2 pt-1 opacity-0 transition-opacity group-hover:opacity-100">
+		<div className="flex items-center gap-3 pt-1 opacity-0 transition-opacity group-hover:opacity-100">
 			{showCopy && <CopyMessageButton text={content} />}
 			{showRegenerate && <RegenerateButton onClick={onRegenerate} />}
+			{showUsage && <UsageInfo usage={usage} model={model} />}
 		</div>
 	);
 }
@@ -74,5 +82,25 @@ function RegenerateButton({ onClick }: { onClick: () => void }) {
 			<RefreshCw size={12} />
 			Regenerate
 		</button>
+	);
+}
+
+function UsageInfo({ usage, model }: { usage: UsageData; model?: string }) {
+	const parts: string[] = [];
+
+	if (model) {
+		parts.push(model);
+	}
+
+	parts.push(`${usage.promptTokens} in / ${usage.completionTokens} out`);
+
+	if (usage.cost != null) {
+		parts.push(`$${usage.cost.toFixed(4)}`);
+	}
+
+	return (
+		<span className="text-[10px] text-muted-foreground">
+			{parts.join(" · ")}
+		</span>
 	);
 }
