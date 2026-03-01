@@ -40,6 +40,10 @@ import toast from "react-hot-toast";
 import { HarnessMark } from "../../components/harness-mark";
 import { MarkdownMessage } from "../../components/markdown-message";
 import {
+	type DisplayMode,
+	MessageActions,
+} from "../../components/message-actions";
+import {
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -61,6 +65,13 @@ import {
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { ScrollArea } from "../../components/ui/scroll-area";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "../../components/ui/select";
 import { Separator } from "../../components/ui/separator";
 import { Skeleton } from "../../components/ui/skeleton";
 import {
@@ -181,7 +192,7 @@ function ChatPage() {
 				[convoId]: {
 					content: prev[convoId]?.content ?? fullContent,
 					reasoning: prev[convoId]?.reasoning ?? null,
-					toolCalls: [],
+					toolCalls: prev[convoId]?.toolCalls ?? [],
 					pendingDoneContent: fullContent,
 				},
 			}));
@@ -259,11 +270,44 @@ function ChatPage() {
 		[userSettings, conversations, harnesses],
 	);
 
+	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
+
+	const removeMessage = useMutation({
+		mutationFn: useConvexMutation(api.messages.remove),
+	});
+
+	const handleRegenerate = useCallback(
+		async (
+			messageId: Id<"messages">,
+			history: Array<{ role: string; content: string }>,
+		) => {
+			if (!activeHarness || !activeConvoId) return;
+
+			await removeMessage.mutateAsync({ id: messageId });
+
+			const harnessConfig = {
+				model: activeHarness.model,
+				mcp_servers: activeHarness.mcpServers.map((s) => ({
+					name: s.name,
+					url: s.url,
+					auth_type: s.authType as "none" | "bearer",
+					auth_token: s.authToken,
+				})),
+				name: activeHarness.name,
+			};
+
+			chatStream.stream({
+				messages: history,
+				harness: harnessConfig,
+				conversation_id: activeConvoId,
+			});
+		},
+		[activeHarness, activeConvoId, chatStream, removeMessage],
+	);
+
 	if (harnessesLoading || !harnesses || harnesses.length === 0) {
 		return <ChatSkeleton />;
 	}
-
-	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
 	const activeStreamState = activeConvoId
 		? (streamStates[activeConvoId] ?? EMPTY_STREAM_STATE)
 		: EMPTY_STREAM_STATE;
@@ -313,6 +357,11 @@ function ChatPage() {
 						activeToolCalls={activeStreamState.toolCalls}
 						pendingDoneContent={activeStreamState.pendingDoneContent}
 						onStreamSynced={handleStreamSynced}
+						displayMode={
+							(userSettings?.displayMode as DisplayMode) ?? "standard"
+						}
+						onRegenerate={handleRegenerate}
+						isStreaming={isActiveConvoStreaming}
 					/>
 				) : (
 					<EmptyChat />
@@ -611,6 +660,41 @@ function SettingsDialog({
 
 					<div>
 						<p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+							Display
+						</p>
+						<div className="flex items-center justify-between gap-3 py-1.5">
+							<div>
+								<p className="text-xs font-medium text-foreground">
+									Message actions
+								</p>
+								<p className="text-[11px] text-muted-foreground">
+									Controls which buttons appear on messages.
+								</p>
+							</div>
+							<Select
+								value={(userSettings?.displayMode as string) ?? "standard"}
+								onValueChange={(value) => {
+									updateSettings.mutate({
+										displayMode: value as "zen" | "standard" | "developer",
+									});
+								}}
+							>
+								<SelectTrigger className="w-[120px]">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="zen">Zen</SelectItem>
+									<SelectItem value="standard">Standard</SelectItem>
+									<SelectItem value="developer">Developer</SelectItem>
+								</SelectContent>
+							</Select>
+						</div>
+					</div>
+
+					<Separator />
+
+					<div>
+						<p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
 							Account
 						</p>
 						<Button
@@ -719,6 +803,9 @@ function ChatMessages({
 	activeToolCalls,
 	pendingDoneContent,
 	onStreamSynced,
+	displayMode,
+	onRegenerate,
+	isStreaming,
 }: {
 	conversationId: Id<"conversations">;
 	streamingContent: string | null;
@@ -726,6 +813,12 @@ function ChatMessages({
 	activeToolCalls: ToolCallEvent[];
 	pendingDoneContent: string | null;
 	onStreamSynced: (convoId: string) => void;
+	displayMode: DisplayMode;
+	onRegenerate: (
+		messageId: Id<"messages">,
+		history: Array<{ role: string; content: string }>,
+	) => void;
+	isStreaming: boolean;
 }) {
 	const { data: messages, isLoading } = useQuery(
 		convexQuery(api.messages.list, { conversationId }),
@@ -790,7 +883,7 @@ function ChatMessages({
 							animate={{ opacity: 1, y: 0 }}
 							transition={isJustSynced ? { duration: 0 } : { delay: i * 0.03 }}
 							className={cn(
-								"mb-6 flex gap-3",
+								"group mb-6 flex gap-3",
 								msg.role === "user" && "justify-end",
 							)}
 						>
@@ -801,22 +894,70 @@ function ChatMessages({
 									</AvatarFallback>
 								</Avatar>
 							)}
-							<div
-								className={cn(
-									"max-w-[80%] text-sm leading-relaxed",
-									msg.role === "user"
-										? "bg-foreground px-3.5 py-2.5 text-background"
-										: "text-foreground",
-								)}
-							>
-								{msg.role === "assistant" && msg.reasoning && (
-									<ThinkingBlock content={msg.reasoning} isStreaming={false} />
-								)}
-								{msg.role === "assistant" ? (
-									<MarkdownMessage content={msg.content} />
-								) : (
-									<p className="whitespace-pre-wrap">{msg.content}</p>
-								)}
+							<div className="max-w-[80%]">
+								<div
+									className={cn(
+										"text-sm leading-relaxed",
+										msg.role === "user"
+											? "bg-foreground px-3.5 py-2.5 text-background"
+											: "text-foreground",
+									)}
+								>
+									{msg.role === "assistant" && msg.reasoning && (
+										<ThinkingBlock
+											content={msg.reasoning}
+											isStreaming={false}
+										/>
+									)}
+									{msg.role === "assistant" &&
+										msg.toolCalls &&
+										msg.toolCalls.length > 0 && (
+											<div className="mb-2 space-y-1">
+												{(
+													msg.toolCalls as Array<{
+														tool: string;
+														arguments: Record<string, unknown>;
+														call_id: string;
+														result: string;
+													}>
+												).map((tc) => (
+													<ToolCallBlock
+														key={tc.call_id}
+														tool={tc.tool}
+														arguments={tc.arguments}
+														result={tc.result}
+														isStreaming={false}
+													/>
+												))}
+											</div>
+										)}
+									{msg.role === "assistant" ? (
+										<MarkdownMessage content={msg.content} />
+									) : (
+										<p className="whitespace-pre-wrap">{msg.content}</p>
+									)}
+								</div>
+								<MessageActions
+									content={msg.content}
+									role={msg.role}
+									displayMode={displayMode}
+									isStreaming={isStreaming}
+									onRegenerate={
+										msg.role === "assistant"
+											? () => {
+													if (!messages) return;
+													const idx = messages.findIndex(
+														(m) => m._id === msg._id,
+													);
+													const history = messages.slice(0, idx).map((m) => ({
+														role: m.role,
+														content: m.content,
+													}));
+													onRegenerate(msg._id, history);
+												}
+											: undefined
+									}
+								/>
 							</div>
 							{msg.role === "user" && (
 								<Avatar className="h-7 w-7 shrink-0">
@@ -850,20 +991,13 @@ function ChatMessages({
 							{activeToolCalls.length > 0 && (
 								<div className="mb-2 space-y-1">
 									{activeToolCalls.map((tc) => (
-										<div
+										<ToolCallBlock
 											key={tc.call_id}
-											className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
-										>
-											{tc.result ? (
-												<Wrench size={10} className="text-emerald-500" />
-											) : (
-												<Loader2 size={10} className="animate-spin" />
-											)}
-											<span>
-												{tc.tool.replace("__", " / ")}
-												{tc.result ? "" : "..."}
-											</span>
-										</div>
+											tool={tc.tool}
+											arguments={tc.arguments}
+											result={tc.result}
+											isStreaming={!tc.result}
+										/>
 									))}
 								</div>
 							)}
@@ -938,6 +1072,80 @@ function ThinkingBlock({
 					>
 						<div className="mt-1.5 border-l-2 border-muted-foreground/20 pl-3 text-[11px] leading-relaxed text-muted-foreground">
 							<MarkdownMessage content={content} />
+						</div>
+					</motion.div>
+				)}
+			</AnimatePresence>
+		</div>
+	);
+}
+
+function ToolCallBlock({
+	tool,
+	arguments: args,
+	result,
+	isStreaming,
+}: {
+	tool: string;
+	arguments: Record<string, unknown>;
+	result?: string;
+	isStreaming: boolean;
+}) {
+	const [open, setOpen] = useState(false);
+	const displayName = tool.includes("__") ? tool.replace("__", " / ") : tool;
+
+	return (
+		<div className="mb-1.5">
+			<button
+				type="button"
+				onClick={() => setOpen((o) => !o)}
+				className="flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+			>
+				<motion.span
+					animate={{ rotate: open ? 90 : 0 }}
+					transition={{ duration: 0.15 }}
+					className="flex"
+				>
+					<ChevronRight size={10} />
+				</motion.span>
+				{isStreaming ? (
+					<Loader2 size={10} className="animate-spin" />
+				) : (
+					<Wrench size={10} className="text-emerald-500" />
+				)}
+				<span>
+					{displayName}
+					{isStreaming ? "..." : ""}
+				</span>
+			</button>
+			<AnimatePresence>
+				{open && (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: 0.2 }}
+						className="overflow-hidden"
+					>
+						<div className="mt-1.5 space-y-2 border-l-2 border-muted-foreground/20 pl-3 text-[11px] leading-relaxed text-muted-foreground">
+							<div>
+								<p className="mb-0.5 font-medium text-foreground/70">
+									Arguments
+								</p>
+								<pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[10px]">
+									{JSON.stringify(args, null, 2)}
+								</pre>
+							</div>
+							{result && (
+								<div>
+									<p className="mb-0.5 font-medium text-foreground/70">
+										Result
+									</p>
+									<pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[10px]">
+										{result}
+									</pre>
+								</div>
+							)}
 						</div>
 					</motion.div>
 				)}
