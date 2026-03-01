@@ -378,7 +378,10 @@ function ChatSidebar({
 											)}
 										>
 											{streamingConvoIds.has(convo._id) ? (
-												<Loader2 size={12} className="shrink-0 animate-spin text-muted-foreground" />
+												<Loader2
+													size={12}
+													className="shrink-0 animate-spin text-muted-foreground"
+												/>
 											) : (
 												<MessageSquare size={12} className="shrink-0" />
 											)}
