@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = Field(..., min_length=1)
     convex_url: str = ""
     convex_deploy_key: str = ""
-    frontend_url: str = "http://localhost:3000"
+    frontend_url: str = "http://localhost:3001"
     junction_engine_url: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
