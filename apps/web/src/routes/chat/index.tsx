@@ -429,10 +429,7 @@ function ChatSidebar({
 														transition={{ duration: 0.15 }}
 														className="flex shrink-0"
 													>
-														<Check
-															size={12}
-															className="text-emerald-500"
-														/>
+														<Check size={12} className="text-emerald-500" />
 													</motion.span>
 												) : (
 													<motion.span
