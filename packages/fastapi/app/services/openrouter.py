@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 
 import httpx
 
-from app.config import MODEL_MAP, settings
+from app.config import MODEL_MAP, THINKING_MODELS, settings
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +26,17 @@ async def stream_chat(
         tools: Optional OpenAI-format tool definitions.
     """
     resolved_model = MODEL_MAP.get(model, model)
-    logger.debug("Streaming chat with model '%s' (resolved: '%s')", model, resolved_model)
+    logger.debug(
+        "Streaming chat with model '%s' (resolved: '%s')", model, resolved_model
+    )
 
     payload: dict = {
         "model": resolved_model,
         "messages": messages,
         "stream": True,
     }
+    if model in THINKING_MODELS:
+        payload["reasoning"] = {"effort": "high"}
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"

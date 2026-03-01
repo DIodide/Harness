@@ -11,6 +11,7 @@ async def save_assistant_message(
     http_client: httpx.AsyncClient,
     conversation_id: str,
     content: str,
+    reasoning: str | None = None,
 ) -> None:
     """Save an assistant message to Convex via the HTTP API.
 
@@ -22,6 +23,13 @@ async def save_assistant_message(
 
     logger.info("Saving assistant message for conversation '%s'", conversation_id)
 
+    args: dict = {
+        "conversationId": conversation_id,
+        "content": content,
+    }
+    if reasoning:
+        args["reasoning"] = reasoning
+
     try:
         resp = await http_client.post(
             f"{settings.convex_url}/api/mutation",
@@ -30,10 +38,7 @@ async def save_assistant_message(
             },
             json={
                 "path": "messages:saveAssistantMessage",
-                "args": {
-                    "conversationId": conversation_id,
-                    "content": content,
-                },
+                "args": args,
                 "format": "json",
             },
             timeout=10.0,

@@ -57,6 +57,7 @@ export const saveAssistantMessage = internalMutation({
 	args: {
 		conversationId: v.id("conversations"),
 		content: v.string(),
+		reasoning: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const convo = await ctx.db.get(args.conversationId);
@@ -66,6 +67,7 @@ export const saveAssistantMessage = internalMutation({
 			conversationId: args.conversationId,
 			role: "assistant",
 			content: args.content,
+			...(args.reasoning ? { reasoning: args.reasoning } : {}),
 		});
 
 		await ctx.db.patch(args.conversationId, {

@@ -137,6 +137,10 @@ const MODELS = [
 	{ value: "claude-sonnet-4", label: "Claude Sonnet 4" },
 	{ value: "claude-opus-4", label: "Claude Opus 4" },
 	{ value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+	{ value: "gpt-4.1-mini", label: "GPT-4.1 Mini" },
+	{ value: "grok-3", label: "Grok 3" },
+	{ value: "grok-3-mini", label: "Grok 3 Mini" },
+	{ value: "deepseek-r1", label: "DeepSeek R1" },
 ];
 
 function OnboardingPage() {

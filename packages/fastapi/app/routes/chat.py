@@ -32,10 +32,8 @@ async def chat_stream(
     async def event_generator():
         # Fetch available MCP tools for this harness
         tools: list[dict] | None = None
-        if body.harness.mcps:
-            tools = await list_tools(
-                http_client, body.harness.mcps
-            )
+        if body.harness.mcp_servers:
+            tools = await list_tools(http_client, body.harness.mcp_servers)
             if not tools:
                 tools = None
 
@@ -44,6 +42,7 @@ async def chat_stream(
         # Agentic loop: stream response, handle tool calls, repeat
         for iteration in range(MAX_TOOL_ITERATIONS):
             collected_content = ""
+            collected_reasoning = ""
             collected_tool_calls: list[dict] = []
             finish_reason: str | None = None
 
@@ -69,18 +68,26 @@ async def chat_stream(
                         continue
 
                     delta = choices[0].get("delta", {})
-                    finish_reason = choices[0].get(
-                        "finish_reason"
-                    )
+                    finish_reason = choices[0].get("finish_reason")
+
+                    # Stream reasoning/thinking tokens to client
+                    reasoning_details = delta.get("reasoning_details")
+                    if reasoning_details:
+                        for rd in reasoning_details:
+                            text = rd.get("text", "")
+                            if text:
+                                collected_reasoning += text
+                                yield {
+                                    "event": "thinking",
+                                    "data": json.dumps({"content": text}),
+                                }
 
                     # Stream content tokens to client
                     if delta.get("content"):
                         collected_content += delta["content"]
                         yield {
                             "event": "token",
-                            "data": json.dumps(
-                                {"content": delta["content"]}
-                            ),
+                            "data": json.dumps({"content": delta["content"]}),
                         }
 
                     # Accumulate tool call deltas
@@ -103,13 +110,9 @@ async def chat_stream(
                             if "function" in tc_delta:
                                 fn = tc_delta["function"]
                                 if "name" in fn:
-                                    tc["function"]["name"] += fn[
-                                        "name"
-                                    ]
+                                    tc["function"]["name"] += fn["name"]
                                 if "arguments" in fn:
-                                    tc["function"][
-                                        "arguments"
-                                    ] += fn["arguments"]
+                                    tc["function"]["arguments"] += fn["arguments"]
 
             except httpx.HTTPStatusError as e:
                 logger.error(
@@ -119,18 +122,14 @@ async def chat_stream(
                 )
                 yield {
                     "event": "error",
-                    "data": json.dumps(
-                        {"message": "Upstream service error"}
-                    ),
+                    "data": json.dumps({"message": "Upstream service error"}),
                 }
                 return
             except httpx.HTTPError as e:
                 logger.error("HTTP error during chat stream: %s", e)
                 yield {
                     "event": "error",
-                    "data": json.dumps(
-                        {"message": "Service unavailable"}
-                    ),
+                    "data": json.dumps({"message": "Service unavailable"}),
                 }
                 return
             except Exception:
@@ -140,28 +139,22 @@ async def chat_stream(
                 )
                 yield {
                     "event": "error",
-                    "data": json.dumps(
-                        {"message": "Internal server error"}
-                    ),
+                    "data": json.dumps({"message": "Internal server error"}),
                 }
                 return
 
             # If no tool calls, we're done
-            if (
-                finish_reason != "tool_calls"
-                or not collected_tool_calls
-            ):
+            if finish_reason != "tool_calls" or not collected_tool_calls:
                 # Save to Convex first, then notify client
                 await save_assistant_message(
                     http_client,
                     body.conversation_id,
                     collected_content,
+                    reasoning=collected_reasoning or None,
                 )
                 yield {
                     "event": "done",
-                    "data": json.dumps(
-                        {"content": collected_content}
-                    ),
+                    "data": json.dumps({"content": collected_content}),
                 }
                 return
 
@@ -185,9 +178,7 @@ async def chat_stream(
             for tc in collected_tool_calls:
                 tool_name = tc["function"]["name"]
                 try:
-                    args = json.loads(
-                        tc["function"]["arguments"]
-                    )
+                    args = json.loads(tc["function"]["arguments"])
                 except json.JSONDecodeError:
                     logger.warning(
                         "Failed to parse arguments for tool '%s': %s",
@@ -210,7 +201,7 @@ async def chat_stream(
 
                 # Execute the tool via MCP
                 result = await call_tool(
-                    http_client, tool_name, args
+                    http_client, tool_name, args, body.harness.mcp_servers
                 )
 
                 yield {
@@ -246,9 +237,7 @@ async def chat_stream(
         )
         yield {
             "event": "error",
-            "data": json.dumps(
-                {"message": "Max tool call iterations reached"}
-            ),
+            "data": json.dumps({"message": "Max tool call iterations reached"}),
         }
 
     return EventSourceResponse(event_generator())

@@ -11,8 +11,10 @@ import {
 } from "@tanstack/react-router";
 import {
 	ArrowUp,
+	Brain,
 	Check,
 	ChevronDown,
+	ChevronRight,
 	Cpu,
 	Loader2,
 	LogOut,
@@ -91,6 +93,7 @@ const SUGGESTED_PROMPTS = [
 
 const EMPTY_STREAM_STATE: ConvoStreamState = {
 	content: null,
+	reasoning: null,
 	toolCalls: [],
 	pendingDoneContent: null,
 };
@@ -129,9 +132,22 @@ function ChatPage() {
 				...prev,
 				[convoId]: {
 					...prev[convoId],
+					reasoning: prev[convoId]?.reasoning ?? null,
 					toolCalls: prev[convoId]?.toolCalls ?? [],
 					pendingDoneContent: prev[convoId]?.pendingDoneContent ?? null,
 					content: (prev[convoId]?.content ?? "") + content,
+				},
+			}));
+		},
+		onThinking: (convoId, content) => {
+			setStreamStates((prev) => ({
+				...prev,
+				[convoId]: {
+					...prev[convoId],
+					content: prev[convoId]?.content ?? null,
+					toolCalls: prev[convoId]?.toolCalls ?? [],
+					pendingDoneContent: prev[convoId]?.pendingDoneContent ?? null,
+					reasoning: (prev[convoId]?.reasoning ?? "") + content,
 				},
 			}));
 		},
@@ -164,6 +180,7 @@ function ChatPage() {
 				...prev,
 				[convoId]: {
 					content: prev[convoId]?.content ?? fullContent,
+					reasoning: prev[convoId]?.reasoning ?? null,
 					toolCalls: [],
 					pendingDoneContent: fullContent,
 				},
@@ -292,6 +309,7 @@ function ChatPage() {
 					<ChatMessages
 						conversationId={activeConvoId}
 						streamingContent={activeStreamState.content}
+						streamingReasoning={activeStreamState.reasoning}
 						activeToolCalls={activeStreamState.toolCalls}
 						pendingDoneContent={activeStreamState.pendingDoneContent}
 						onStreamSynced={handleStreamSynced}
@@ -697,12 +715,14 @@ function ChatHeader({
 function ChatMessages({
 	conversationId,
 	streamingContent,
+	streamingReasoning,
 	activeToolCalls,
 	pendingDoneContent,
 	onStreamSynced,
 }: {
 	conversationId: Id<"conversations">;
 	streamingContent: string | null;
+	streamingReasoning: string | null;
 	activeToolCalls: ToolCallEvent[];
 	pendingDoneContent: string | null;
 	onStreamSynced: (convoId: string) => void;
@@ -718,7 +738,12 @@ function ChatMessages({
 		pendingDoneContent !== null &&
 		lastMsg?.role === "assistant" &&
 		lastMsg.content === pendingDoneContent;
-	const showStreamingBubble = streamingContent !== null && !convexHasMessage;
+	const isActivelyStreaming =
+		streamingContent !== null || streamingReasoning !== null;
+	// Show the streaming bubble when we have content or reasoning flowing, but Convex hasn't synced yet
+	const showStreamingBubble =
+		(streamingContent !== null || streamingReasoning !== null) &&
+		!convexHasMessage;
 
 	// Clear streaming state once Convex has synced — fire in effect to avoid setState during render
 	useEffect(() => {
@@ -732,7 +757,7 @@ function ChatMessages({
 		if (scrollRef.current) {
 			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
 		}
-	}, [messages, streamingContent]);
+	}, [messages, streamingContent, streamingReasoning]);
 
 	if (isLoading) {
 		return (
@@ -742,7 +767,7 @@ function ChatMessages({
 		);
 	}
 
-	if ((!messages || messages.length === 0) && streamingContent === null) {
+	if ((!messages || messages.length === 0) && !isActivelyStreaming) {
 		return (
 			<div className="flex flex-1 items-center justify-center">
 				<p className="text-sm text-muted-foreground">
@@ -784,6 +809,9 @@ function ChatMessages({
 										: "text-foreground",
 								)}
 							>
+								{msg.role === "assistant" && msg.reasoning && (
+									<ThinkingBlock content={msg.reasoning} isStreaming={false} />
+								)}
 								{msg.role === "assistant" ? (
 									<MarkdownMessage content={msg.content} />
 								) : (
@@ -813,6 +841,12 @@ function ChatMessages({
 							</AvatarFallback>
 						</Avatar>
 						<div className="max-w-[80%] text-sm leading-relaxed text-foreground">
+							{streamingReasoning && (
+								<ThinkingBlock
+									content={streamingReasoning}
+									isStreaming={streamingContent === null}
+								/>
+							)}
 							{activeToolCalls.length > 0 && (
 								<div className="mb-2 space-y-1">
 									{activeToolCalls.map((tc) => (
@@ -835,16 +869,79 @@ function ChatMessages({
 							)}
 							{streamingContent ? (
 								<MarkdownMessage content={streamingContent} />
-							) : (
+							) : !streamingReasoning ? (
 								<Loader2
 									size={14}
 									className="animate-spin text-muted-foreground"
 								/>
-							)}
+							) : null}
 						</div>
 					</motion.div>
 				)}
 			</div>
+		</div>
+	);
+}
+
+function ThinkingBlock({
+	content,
+	isStreaming,
+}: {
+	content: string;
+	isStreaming: boolean;
+}) {
+	const [open, setOpen] = useState(true);
+	const [userToggled, setUserToggled] = useState(false);
+
+	// Auto-collapse when thinking finishes, unless the user manually toggled
+	useEffect(() => {
+		if (!isStreaming && !userToggled) {
+			setOpen(false);
+		}
+	}, [isStreaming, userToggled]);
+
+	return (
+		<div className="mb-2">
+			<button
+				type="button"
+				onClick={() => {
+					setUserToggled(true);
+					setOpen((o) => !o);
+				}}
+				className="flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+			>
+				<motion.span
+					animate={{ rotate: open ? 90 : 0 }}
+					transition={{ duration: 0.15 }}
+					className="flex"
+				>
+					<ChevronRight size={10} />
+				</motion.span>
+				<Brain size={10} />
+				{isStreaming ? (
+					<span className="flex items-center gap-1">
+						Thinking
+						<Loader2 size={8} className="animate-spin" />
+					</span>
+				) : (
+					<span>Thought process</span>
+				)}
+			</button>
+			<AnimatePresence>
+				{open && (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: 0.2 }}
+						className="overflow-hidden"
+					>
+						<div className="mt-1.5 border-l-2 border-muted-foreground/20 pl-3 text-[11px] leading-relaxed text-muted-foreground">
+							<MarkdownMessage content={content} />
+						</div>
+					</motion.div>
+				)}
+			</AnimatePresence>
 		</div>
 	);
 }
@@ -894,13 +991,27 @@ function ChatInput({
 		_id: Id<"harnesses">;
 		name: string;
 		model: string;
-		mcps: string[];
+		mcpServers: Array<{
+			name: string;
+			url: string;
+			authType: "none" | "bearer";
+			authToken?: string;
+		}>;
 	};
 	onConvoCreated: (id: Id<"conversations">) => void;
 	isStreaming: boolean;
 	onStream: (body: {
 		messages: Array<{ role: string; content: string }>;
-		harness: { model: string; mcps: string[]; name: string };
+		harness: {
+			model: string;
+			mcp_servers: Array<{
+				name: string;
+				url: string;
+				auth_type: "none" | "bearer";
+				auth_token?: string;
+			}>;
+			name: string;
+		};
 		conversation_id: string;
 	}) => Promise<void>;
 }) {
@@ -941,10 +1052,15 @@ function ChatInput({
 
 		setText("");
 
-		// Snapshot harness config at send time
+		// Snapshot harness config at send time (convert to snake_case for FastAPI)
 		const harnessConfig = {
 			model: activeHarness.model,
-			mcps: activeHarness.mcps,
+			mcp_servers: activeHarness.mcpServers.map((s) => ({
+				name: s.name,
+				url: s.url,
+				auth_type: s.authType,
+				auth_token: s.authToken,
+			})),
 			name: activeHarness.name,
 		};
 

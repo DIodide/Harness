@@ -10,7 +10,14 @@ export default defineSchema({
 			v.literal("stopped"),
 			v.literal("draft"),
 		),
-		mcps: v.array(v.string()),
+		mcpServers: v.array(
+			v.object({
+				name: v.string(),
+				url: v.string(),
+				authType: v.union(v.literal("none"), v.literal("bearer")),
+				authToken: v.optional(v.string()),
+			}),
+		),
 		skills: v.array(v.string()),
 		userId: v.string(),
 		lastUsedAt: v.optional(v.number()),
@@ -29,6 +36,7 @@ export default defineSchema({
 		conversationId: v.id("conversations"),
 		role: v.union(v.literal("user"), v.literal("assistant")),
 		content: v.string(),
+		reasoning: v.optional(v.string()),
 	}).index("by_conversation", ["conversationId"]),
 
 	userSettings: defineTable({

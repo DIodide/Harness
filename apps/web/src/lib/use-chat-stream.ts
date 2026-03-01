@@ -13,12 +13,14 @@ export interface ToolCallEvent {
 
 export interface ConvoStreamState {
 	content: string | null;
+	reasoning: string | null;
 	toolCalls: ToolCallEvent[];
 	pendingDoneContent: string | null;
 }
 
 interface UseChatStreamCallbacks {
 	onToken: (conversationId: string, content: string) => void;
+	onThinking: (conversationId: string, content: string) => void;
 	onToolCall: (conversationId: string, event: ToolCallEvent) => void;
 	onToolResult: (
 		conversationId: string,
@@ -30,7 +32,16 @@ interface UseChatStreamCallbacks {
 
 export interface ChatStreamRequest {
 	messages: Array<{ role: string; content: string }>;
-	harness: { model: string; mcps: string[]; name: string };
+	harness: {
+		model: string;
+		mcp_servers: Array<{
+			name: string;
+			url: string;
+			auth_type: "none" | "bearer";
+			auth_token?: string;
+		}>;
+		name: string;
+	};
 	conversation_id: string;
 }
 
@@ -100,6 +111,9 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 								switch (currentEvent) {
 									case "token":
 										cbRef.current.onToken(convoId, data.content);
+										break;
+									case "thinking":
+										cbRef.current.onThinking(convoId, data.content);
 										break;
 									case "tool_call":
 										cbRef.current.onToolCall(convoId, data);
