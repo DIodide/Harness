@@ -34,6 +34,7 @@ async def stream_chat(
         "model": resolved_model,
         "messages": messages,
         "stream": True,
+        "stream_options": {"include_usage": True},
     }
     if model in THINKING_MODELS:
         payload["reasoning"] = {"effort": "high"}
