@@ -86,6 +86,22 @@ export const saveAssistantMessage = internalMutation({
 				}),
 			),
 		),
+		parts: v.optional(
+			v.array(
+				v.object({
+					type: v.union(
+						v.literal("text"),
+						v.literal("reasoning"),
+						v.literal("tool_call"),
+					),
+					content: v.optional(v.string()),
+					tool: v.optional(v.string()),
+					arguments: v.optional(v.any()),
+					call_id: v.optional(v.string()),
+					result: v.optional(v.string()),
+				}),
+			),
+		),
 		usage: v.optional(
 			v.object({
 				promptTokens: v.number(),
@@ -107,6 +123,9 @@ export const saveAssistantMessage = internalMutation({
 			...(args.reasoning ? { reasoning: args.reasoning } : {}),
 			...(args.toolCalls && args.toolCalls.length > 0
 				? { toolCalls: args.toolCalls }
+				: {}),
+			...(args.parts && args.parts.length > 0
+				? { parts: args.parts }
 				: {}),
 			...(args.usage ? { usage: args.usage } : {}),
 			...(args.model ? { model: args.model } : {}),

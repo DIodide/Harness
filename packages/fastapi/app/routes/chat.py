@@ -14,7 +14,7 @@ from app.services.openrouter import stream_chat
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ITERATIONS = 10
+MAX_TOOL_ITERATIONS = 30
 
 
 @router.post("/stream")
@@ -43,6 +43,7 @@ async def chat_stream(
         # Accumulate across all iterations so reasoning/tool history isn't lost
         all_reasoning = ""
         all_tool_calls_history: list[dict] = []  # [{tool, arguments, call_id, result}]
+        all_parts: list[dict] = []  # Chronological ordering of all content
 
         # Track usage across all iterations (last iteration's usage wins)
         collected_usage: dict | None = None
@@ -77,12 +78,24 @@ async def chat_stream(
                         collected_usage = chunk["usage"]
                         yield {
                             "event": "usage",
-                            "data": json.dumps({
-                                "promptTokens": collected_usage.get("prompt_tokens", 0),
-                                "completionTokens": collected_usage.get("completion_tokens", 0),
-                                "totalTokens": collected_usage.get("total_tokens", 0),
-                                **({"cost": collected_usage["cost"]} if "cost" in collected_usage else {}),
-                            }),
+                            "data": json.dumps(
+                                {
+                                    "promptTokens": collected_usage.get(
+                                        "prompt_tokens", 0
+                                    ),
+                                    "completionTokens": collected_usage.get(
+                                        "completion_tokens", 0
+                                    ),
+                                    "totalTokens": collected_usage.get(
+                                        "total_tokens", 0
+                                    ),
+                                    **(
+                                        {"cost": collected_usage["cost"]}
+                                        if "cost" in collected_usage
+                                        else {}
+                                    ),
+                                }
+                            ),
                         }
                     if chunk.get("model"):
                         collected_model = chunk["model"]
@@ -148,7 +161,11 @@ async def chat_stream(
                 )
                 yield {
                     "event": "error",
-                    "data": json.dumps({"message": f"Upstream service error ({e.response.status_code})"}),
+                    "data": json.dumps(
+                        {
+                            "message": f"Upstream service error ({e.response.status_code})"
+                        }
+                    ),
                 }
                 return
             except httpx.HTTPError as e:
@@ -179,6 +196,11 @@ async def chat_stream(
             # Accumulate reasoning across iterations
             if collected_reasoning:
                 all_reasoning += collected_reasoning
+                all_parts.append({"type": "reasoning", "content": collected_reasoning})
+
+            # Append text part for this iteration's content (before tool calls)
+            if collected_content:
+                all_parts.append({"type": "text", "content": collected_content})
 
             # If no tool calls, we're done
             if finish_reason != "tool_calls" or not collected_tool_calls:
@@ -201,6 +223,7 @@ async def chat_stream(
                     collected_content,
                     reasoning=all_reasoning or None,
                     tool_calls=all_tool_calls_history or None,
+                    parts=all_parts or None,
                     usage=usage_for_convex,
                     model=collected_model,
                 )
@@ -284,6 +307,7 @@ async def chat_stream(
 
             # Pre-build history in request order; results filled in as they complete.
             history_by_call_id: dict[str, dict] = {}
+            parts_by_call_id: dict[str, dict] = {}
             for tc_info in parsed_tool_calls:
                 entry = {
                     "tool": tc_info["tool_name"],
@@ -294,10 +318,18 @@ async def chat_stream(
                 history_by_call_id[tc_info["id"]] = entry
                 all_tool_calls_history.append(entry)
 
-            tasks = [
-                asyncio.create_task(_execute_tool(tc))
-                for tc in parsed_tool_calls
-            ]
+                # Add a tool_call part in request order (result filled in later)
+                part = {
+                    "type": "tool_call",
+                    "tool": tc_info["tool_name"],
+                    "arguments": tc_info["args"],
+                    "call_id": tc_info["id"],
+                    "result": "",
+                }
+                parts_by_call_id[tc_info["id"]] = part
+                all_parts.append(part)
+
+            tasks = [asyncio.create_task(_execute_tool(tc)) for tc in parsed_tool_calls]
 
             # Stream each result to the frontend as soon as it finishes
             for coro in asyncio.as_completed(tasks):
@@ -315,6 +347,7 @@ async def chat_stream(
 
                 # Fill in the result in the pre-ordered history entry
                 history_by_call_id[tc_info["id"]]["result"] = result
+                parts_by_call_id[tc_info["id"]]["result"] = result
 
                 yield {
                     "event": "tool_result",

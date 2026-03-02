@@ -13,6 +13,7 @@ async def save_assistant_message(
     content: str,
     reasoning: str | None = None,
     tool_calls: list[dict] | None = None,
+    parts: list[dict] | None = None,
     usage: dict | None = None,
     model: str | None = None,
 ) -> None:
@@ -34,6 +35,8 @@ async def save_assistant_message(
         args["reasoning"] = reasoning
     if tool_calls:
         args["toolCalls"] = tool_calls
+    if parts:
+        args["parts"] = parts
     if usage:
         args["usage"] = usage
     if model:

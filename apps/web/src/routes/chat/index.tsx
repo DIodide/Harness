@@ -81,6 +81,7 @@ import {
 } from "../../components/ui/tooltip";
 import {
 	type ConvoStreamState,
+	type StreamPart,
 	type ToolCallEvent,
 	type UsageData,
 	useChatStream,
@@ -107,6 +108,7 @@ const EMPTY_STREAM_STATE: ConvoStreamState = {
 	content: null,
 	reasoning: null,
 	toolCalls: [],
+	parts: [],
 	pendingDoneContent: null,
 	usage: null,
 	model: null,
@@ -142,52 +144,92 @@ function ChatPage() {
 
 	const chatStream = useChatStream({
 		onToken: (convoId, content) => {
-			setStreamStates((prev) => ({
-				...prev,
-				[convoId]: {
-					...prev[convoId],
-					reasoning: prev[convoId]?.reasoning ?? null,
-					toolCalls: prev[convoId]?.toolCalls ?? [],
-					pendingDoneContent: prev[convoId]?.pendingDoneContent ?? null,
-					content: (prev[convoId]?.content ?? "") + content,
-				},
-			}));
+			setStreamStates((prev) => {
+				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
+				const parts = [...state.parts];
+				const last = parts[parts.length - 1];
+				if (last?.type === "text") {
+					parts[parts.length - 1] = {
+						...last,
+						content: (last.content ?? "") + content,
+					};
+				} else {
+					parts.push({ type: "text", content });
+				}
+				return {
+					...prev,
+					[convoId]: {
+						...state,
+						content: (state.content ?? "") + content,
+						parts,
+					},
+				};
+			});
 		},
 		onThinking: (convoId, content) => {
-			setStreamStates((prev) => ({
-				...prev,
-				[convoId]: {
-					...prev[convoId],
-					content: prev[convoId]?.content ?? null,
-					toolCalls: prev[convoId]?.toolCalls ?? [],
-					pendingDoneContent: prev[convoId]?.pendingDoneContent ?? null,
-					reasoning: (prev[convoId]?.reasoning ?? "") + content,
-				},
-			}));
+			setStreamStates((prev) => {
+				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
+				const parts = [...state.parts];
+				const last = parts[parts.length - 1];
+				if (last?.type === "reasoning") {
+					parts[parts.length - 1] = {
+						...last,
+						content: (last.content ?? "") + content,
+					};
+				} else {
+					parts.push({ type: "reasoning", content });
+				}
+				return {
+					...prev,
+					[convoId]: {
+						...state,
+						reasoning: (state.reasoning ?? "") + content,
+						parts,
+					},
+				};
+			});
 		},
 		onToolCall: (convoId, event) => {
-			setStreamStates((prev) => ({
-				...prev,
-				[convoId]: {
-					...prev[convoId],
-					content: prev[convoId]?.content ?? null,
-					pendingDoneContent: prev[convoId]?.pendingDoneContent ?? null,
-					toolCalls: [...(prev[convoId]?.toolCalls ?? []), event],
-				},
-			}));
+			setStreamStates((prev) => {
+				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
+				return {
+					...prev,
+					[convoId]: {
+						...state,
+						toolCalls: [...state.toolCalls, event],
+						parts: [
+							...state.parts,
+							{
+								type: "tool_call" as const,
+								tool: event.tool,
+								arguments: event.arguments,
+								call_id: event.call_id,
+							},
+						],
+					},
+				};
+			});
 		},
 		onToolResult: (convoId, event) => {
-			setStreamStates((prev) => ({
-				...prev,
-				[convoId]: {
-					...prev[convoId],
-					content: prev[convoId]?.content ?? null,
-					pendingDoneContent: prev[convoId]?.pendingDoneContent ?? null,
-					toolCalls: (prev[convoId]?.toolCalls ?? []).map((tc) =>
-						tc.call_id === event.call_id ? { ...tc, result: event.result } : tc,
-					),
-				},
-			}));
+			setStreamStates((prev) => {
+				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
+				return {
+					...prev,
+					[convoId]: {
+						...state,
+						toolCalls: state.toolCalls.map((tc) =>
+							tc.call_id === event.call_id
+								? { ...tc, result: event.result }
+								: tc,
+						),
+						parts: state.parts.map((p) =>
+							p.type === "tool_call" && p.call_id === event.call_id
+								? { ...p, result: event.result }
+								: p,
+						),
+					},
+				};
+			});
 		},
 		onUsage: (convoId, usage) => {
 			setStreamStates((prev) => ({
@@ -205,6 +247,7 @@ function ChatPage() {
 					content: prev[convoId]?.content ?? fullContent,
 					reasoning: prev[convoId]?.reasoning ?? null,
 					toolCalls: prev[convoId]?.toolCalls ?? [],
+					parts: prev[convoId]?.parts ?? [],
 					pendingDoneContent: fullContent,
 					usage: usage ?? null,
 					model: model ?? null,
@@ -369,6 +412,7 @@ function ChatPage() {
 						streamingContent={activeStreamState.content}
 						streamingReasoning={activeStreamState.reasoning}
 						activeToolCalls={activeStreamState.toolCalls}
+						streamParts={activeStreamState.parts}
 						pendingDoneContent={activeStreamState.pendingDoneContent}
 						streamUsage={activeStreamState.usage}
 						streamModel={activeStreamState.model}
@@ -464,7 +508,7 @@ function ChatSidebar({
 
 			<Separator />
 
-			<ScrollArea className="flex-1 px-2 py-2">
+			<ScrollArea className="min-h-0 flex-1 px-2 py-2">
 				{conversations.length === 0 ? (
 					<p className="px-2 py-8 text-center text-xs text-muted-foreground">
 						No conversations yet
@@ -817,6 +861,7 @@ function ChatMessages({
 	streamingContent,
 	streamingReasoning,
 	activeToolCalls,
+	streamParts,
 	pendingDoneContent,
 	streamUsage,
 	streamModel,
@@ -829,6 +874,7 @@ function ChatMessages({
 	streamingContent: string | null;
 	streamingReasoning: string | null;
 	activeToolCalls: ToolCallEvent[];
+	streamParts: StreamPart[];
 	pendingDoneContent: string | null;
 	streamUsage: UsageData | null;
 	streamModel: string | null;
@@ -925,38 +971,85 @@ function ChatMessages({
 											: "text-foreground",
 									)}
 								>
-									{msg.role === "assistant" && msg.reasoning && (
-										<ThinkingBlock
-											content={msg.reasoning}
-											isStreaming={false}
-										/>
-									)}
 									{msg.role === "assistant" &&
-										msg.toolCalls &&
-										msg.toolCalls.length > 0 && (
-											<div className="mb-2 space-y-1">
-												{(
-													msg.toolCalls as Array<{
-														tool: string;
-														arguments: Record<string, unknown>;
-														call_id: string;
-														result: string;
-													}>
-												).map((tc) => (
-													<ToolCallBlock
-														key={tc.call_id}
-														tool={tc.tool}
-														arguments={tc.arguments}
-														result={tc.result}
+									(msg as Record<string, unknown>).parts ? (
+										(
+											(msg as Record<string, unknown>).parts as Array<{
+												type: "text" | "reasoning" | "tool_call";
+												content?: string;
+												tool?: string;
+												arguments?: Record<string, unknown>;
+												call_id?: string;
+												result?: string;
+											}>
+										).map((part) => {
+											const key =
+												part.type === "tool_call"
+													? (part.call_id ?? part.tool)
+													: `${part.type}-${part.content?.slice(0, 32)}`;
+											if (part.type === "reasoning" && part.content) {
+												return (
+													<ThinkingBlock
+														key={key}
+														content={part.content}
 														isStreaming={false}
 													/>
-												))}
-											</div>
-										)}
-									{msg.role === "assistant" ? (
-										<MarkdownMessage content={msg.content} />
+												);
+											}
+											if (part.type === "text" && part.content) {
+												return (
+													<MarkdownMessage key={key} content={part.content} />
+												);
+											}
+											if (part.type === "tool_call" && part.tool) {
+												return (
+													<ToolCallBlock
+														key={key}
+														tool={part.tool}
+														arguments={part.arguments ?? {}}
+														result={part.result}
+														isStreaming={false}
+													/>
+												);
+											}
+											return null;
+										})
 									) : (
-										<p className="whitespace-pre-wrap">{msg.content}</p>
+										<>
+											{msg.role === "assistant" && msg.reasoning && (
+												<ThinkingBlock
+													content={msg.reasoning}
+													isStreaming={false}
+												/>
+											)}
+											{msg.role === "assistant" ? (
+												<MarkdownMessage content={msg.content} />
+											) : (
+												<p className="whitespace-pre-wrap">{msg.content}</p>
+											)}
+											{msg.role === "assistant" &&
+												msg.toolCalls &&
+												msg.toolCalls.length > 0 && (
+													<div className="mt-2 space-y-1">
+														{(
+															msg.toolCalls as Array<{
+																tool: string;
+																arguments: Record<string, unknown>;
+																call_id: string;
+																result: string;
+															}>
+														).map((tc) => (
+															<ToolCallBlock
+																key={tc.call_id}
+																tool={tc.tool}
+																arguments={tc.arguments}
+																result={tc.result}
+																isStreaming={false}
+															/>
+														))}
+													</div>
+												)}
+										</>
 									)}
 								</div>
 								<MessageActions
@@ -1015,33 +1108,47 @@ function ChatMessages({
 						</Avatar>
 						<div className="max-w-[80%]">
 							<div className="text-sm leading-relaxed text-foreground">
-								{streamingReasoning && (
-									<ThinkingBlock
-										content={streamingReasoning}
-										isStreaming={streamingContent === null}
-									/>
-								)}
-								{activeToolCalls.length > 0 && (
-									<div className="mb-2 space-y-1">
-										{activeToolCalls.map((tc) => (
-											<ToolCallBlock
-												key={tc.call_id}
-												tool={tc.tool}
-												arguments={tc.arguments}
-												result={tc.result}
-												isStreaming={!tc.result}
+								{streamParts.length > 0
+									? streamParts.map((part, idx) => {
+											const isLast = idx === streamParts.length - 1;
+											if (part.type === "reasoning" && part.content) {
+												return (
+													<ThinkingBlock
+														key={`sp-${part.type}-${idx}`}
+														content={part.content}
+														isStreaming={isLast && isActivelyStreaming}
+													/>
+												);
+											}
+											if (part.type === "text" && part.content) {
+												return (
+													<MarkdownMessage
+														key={`sp-${part.type}-${idx}`}
+														content={part.content}
+													/>
+												);
+											}
+											if (part.type === "tool_call" && part.tool) {
+												return (
+													<ToolCallBlock
+														key={part.call_id ?? `sp-tc-${idx}`}
+														tool={part.tool}
+														arguments={part.arguments ?? {}}
+														result={part.result}
+														isStreaming={!part.result}
+													/>
+												);
+											}
+											return null;
+										})
+									: !streamingReasoning &&
+										activeToolCalls.length === 0 &&
+										!streamingContent && (
+											<Loader2
+												size={14}
+												className="animate-spin text-muted-foreground"
 											/>
-										))}
-									</div>
-								)}
-								{streamingContent ? (
-									<MarkdownMessage content={streamingContent} />
-								) : !streamingReasoning && activeToolCalls.length === 0 ? (
-									<Loader2
-										size={14}
-										className="animate-spin text-muted-foreground"
-									/>
-								) : null}
+										)}
 							</div>
 							{displayMode === "developer" && streamUsage && (
 								<div className="flex items-center gap-3 pt-1">

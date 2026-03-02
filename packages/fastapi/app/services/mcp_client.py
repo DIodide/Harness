@@ -2,6 +2,7 @@ import asyncio
 import itertools
 import json
 import logging
+import time
 
 import httpx
 
@@ -22,6 +23,10 @@ _session_cache: dict[str, str] = {}
 
 # Per-server lock to prevent concurrent session initialization races.
 _session_init_locks: dict[str, asyncio.Lock] = {}
+
+# TTL cache for tools/list results: url → (tools, timestamp).
+_tools_cache: dict[str, tuple[list[dict], float]] = {}
+_TOOLS_CACHE_TTL = 60.0  # seconds
 
 
 def _next_request_id() -> int:
@@ -213,7 +218,17 @@ async def _ensure_session(client: httpx.AsyncClient, server: McpServer) -> str |
 async def _list_tools_for_server(
     client: httpx.AsyncClient, server: McpServer
 ) -> list[dict]:
-    """Fetch tools from a single MCP server, returned in OpenAI function format."""
+    """Fetch tools from a single MCP server, returned in OpenAI function format.
+
+    Results are cached per server URL for up to _TOOLS_CACHE_TTL seconds.
+    """
+    cached = _tools_cache.get(server.url)
+    if cached:
+        tools, ts = cached
+        if time.monotonic() - ts < _TOOLS_CACHE_TTL:
+            logger.debug("Using cached tools for MCP '%s' (%d tools)", server.name, len(tools))
+            return tools
+
     session_id = await _ensure_session(client, server)
     result = await _post_jsonrpc(client, server, "tools/list", session_id=session_id)
     server_tools = result.get("tools", [])
@@ -228,6 +243,7 @@ async def _list_tools_for_server(
         }
         for tool in server_tools
     ]
+    _tools_cache[server.url] = (tools, time.monotonic())
     logger.info("Loaded %d tools from MCP '%s' at %s", len(server_tools), server.name, server.url)
     return tools
 

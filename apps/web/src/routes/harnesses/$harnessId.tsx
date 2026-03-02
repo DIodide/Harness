@@ -10,6 +10,7 @@ import {
 	Eye,
 	EyeOff,
 	Loader2,
+	Pencil,
 	Plus,
 	Server,
 	Shield,
@@ -17,7 +18,7 @@ import {
 	X,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { useState } from "react";
+import { type KeyboardEvent, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -91,6 +92,12 @@ function HarnessEditPage() {
 
 	const handleRemoveServer = (index: number) => {
 		setMcpServers(currentMcpServers.filter((_, i) => i !== index));
+	};
+
+	const handleUpdateServer = (index: number, updated: McpServerEntry) => {
+		const next = [...currentMcpServers];
+		next[index] = updated;
+		setMcpServers(next);
 	};
 
 	if (isLoading) {
@@ -211,9 +218,10 @@ function HarnessEditPage() {
 							<div className="mb-4 space-y-2">
 								{currentMcpServers.map((server, i) => (
 									<McpServerRow
-										key={`${server.name}-${server.url}`}
+										key={`${server.name}-${i}`}
 										server={server}
 										onRemove={() => handleRemoveServer(i)}
+										onUpdate={(updated) => handleUpdateServer(i, updated)}
 									/>
 								))}
 							</div>
@@ -257,10 +265,44 @@ function HarnessEditPage() {
 function McpServerRow({
 	server,
 	onRemove,
+	onUpdate,
 }: {
 	server: McpServerEntry;
 	onRemove: () => void;
+	onUpdate: (updated: McpServerEntry) => void;
 }) {
+	const [editingUrl, setEditingUrl] = useState(false);
+	const [urlDraft, setUrlDraft] = useState(server.url);
+	const inputRef = useRef<HTMLInputElement>(null);
+
+	const startEditing = () => {
+		setUrlDraft(server.url);
+		setEditingUrl(true);
+		// Focus after React renders the input
+		setTimeout(() => inputRef.current?.focus(), 0);
+	};
+
+	const commitUrl = () => {
+		const trimmed = urlDraft.trim();
+		if (trimmed && trimmed !== server.url) {
+			onUpdate({ ...server, url: trimmed });
+		}
+		setEditingUrl(false);
+	};
+
+	const cancelEdit = () => {
+		setUrlDraft(server.url);
+		setEditingUrl(false);
+	};
+
+	const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+		if (e.key === "Enter") {
+			commitUrl();
+		} else if (e.key === "Escape") {
+			cancelEdit();
+		}
+	};
+
 	return (
 		<motion.div
 			initial={{ opacity: 0, y: 4 }}
@@ -270,9 +312,30 @@ function McpServerRow({
 			<Server size={14} className="shrink-0 text-muted-foreground" />
 			<div className="min-w-0 flex-1">
 				<p className="text-xs font-medium text-foreground">{server.name}</p>
-				<p className="truncate text-[11px] text-muted-foreground">
-					{server.url}
-				</p>
+				{editingUrl ? (
+					<div className="mt-0.5 flex items-center gap-1.5">
+						<Input
+							ref={inputRef}
+							value={urlDraft}
+							onChange={(e) => setUrlDraft(e.target.value)}
+							onBlur={commitUrl}
+							onKeyDown={handleKeyDown}
+							className="h-6 text-[11px]"
+						/>
+					</div>
+				) : (
+					<button
+						type="button"
+						onClick={startEditing}
+						className="group/url flex items-center gap-1 truncate text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+					>
+						<span className="truncate">{server.url}</span>
+						<Pencil
+							size={9}
+							className="shrink-0 opacity-0 transition-opacity group-hover/url:opacity-100"
+						/>
+					</button>
+				)}
 			</div>
 			{server.authType === "bearer" && (
 				<Badge variant="secondary" className="shrink-0 text-[10px]">

@@ -18,10 +18,20 @@ export interface UsageData {
 	cost?: number;
 }
 
+export interface StreamPart {
+	type: "text" | "reasoning" | "tool_call";
+	content?: string;
+	tool?: string;
+	arguments?: Record<string, unknown>;
+	call_id?: string;
+	result?: string;
+}
+
 export interface ConvoStreamState {
 	content: string | null;
 	reasoning: string | null;
 	toolCalls: ToolCallEvent[];
+	parts: StreamPart[];
 	pendingDoneContent: string | null;
 	usage: UsageData | null;
 	model: string | null;
