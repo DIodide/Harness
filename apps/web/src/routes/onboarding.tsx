@@ -45,7 +45,7 @@ export const Route = createFileRoute("/onboarding")({
 interface McpServerEntry {
 	name: string;
 	url: string;
-	authType: "none" | "bearer";
+	authType: "none" | "bearer" | "oauth";
 	authToken?: string;
 }
 
@@ -380,6 +380,15 @@ function StepMcpServers({
 									Bearer
 								</Badge>
 							)}
+							{server.authType === "oauth" && (
+								<Badge
+									variant="secondary"
+									className="shrink-0 gap-1 text-[10px]"
+								>
+									<Shield size={8} />
+									OAuth
+								</Badge>
+							)}
 							<Button
 								variant="ghost"
 								size="icon-xs"
@@ -413,7 +422,7 @@ function AddMcpServerForm({
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");
 	const [url, setUrl] = useState("");
-	const [authType, setAuthType] = useState<"none" | "bearer">("none");
+	const [authType, setAuthType] = useState<"none" | "bearer" | "oauth">("none");
 	const [authToken, setAuthToken] = useState("");
 	const [showToken, setShowToken] = useState(false);
 
@@ -513,7 +522,7 @@ function AddMcpServerForm({
 				</label>
 				<Select
 					value={authType}
-					onValueChange={(v) => setAuthType(v as "none" | "bearer")}
+					onValueChange={(v) => setAuthType(v as "none" | "bearer" | "oauth")}
 				>
 					<SelectTrigger className="max-w-xs text-xs">
 						<SelectValue />
@@ -521,6 +530,7 @@ function AddMcpServerForm({
 					<SelectContent>
 						<SelectItem value="none">None</SelectItem>
 						<SelectItem value="bearer">Bearer Token</SelectItem>
+						<SelectItem value="oauth">OAuth</SelectItem>
 					</SelectContent>
 				</Select>
 			</div>
@@ -557,6 +567,19 @@ function AddMcpServerForm({
 				</motion.div>
 			)}
 
+			{authType === "oauth" && (
+				<motion.div
+					initial={{ opacity: 0, height: 0 }}
+					animate={{ opacity: 1, height: "auto" }}
+					exit={{ opacity: 0, height: 0 }}
+					className="rounded border border-border bg-muted/30 px-3 py-2"
+				>
+					<p className="text-[11px] text-muted-foreground">
+						OAuth authentication will be configured after creating the harness.
+						You can connect via the harness settings page.
+					</p>
+				</motion.div>
+			)}
 			<div className="flex justify-end gap-2 pt-1">
 				<Button
 					variant="outline"

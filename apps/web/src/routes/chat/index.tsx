@@ -347,7 +347,7 @@ function ChatPage() {
 				mcp_servers: activeHarness.mcpServers.map((s) => ({
 					name: s.name,
 					url: s.url,
-					auth_type: s.authType as "none" | "bearer",
+					auth_type: s.authType as "none" | "bearer" | "oauth",
 					auth_token: s.authToken,
 				})),
 				name: activeHarness.name,

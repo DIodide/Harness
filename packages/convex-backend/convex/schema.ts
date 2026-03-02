@@ -14,7 +14,7 @@ export default defineSchema({
 			v.object({
 				name: v.string(),
 				url: v.string(),
-				authType: v.union(v.literal("none"), v.literal("bearer")),
+				authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth")),
 				authToken: v.optional(v.string()),
 			}),
 		),
@@ -73,6 +73,18 @@ export default defineSchema({
 		),
 		model: v.optional(v.string()),
 	}).index("by_conversation", ["conversationId"]),
+
+	mcpOAuthTokens: defineTable({
+		userId: v.string(),
+		mcpServerUrl: v.string(),
+		accessToken: v.string(),
+		refreshToken: v.optional(v.string()),
+		expiresAt: v.number(),
+		scopes: v.string(),
+		authServerUrl: v.string(),
+	})
+		.index("by_user_and_server", ["userId", "mcpServerUrl"])
+		.index("by_user", ["userId"]),
 
 	userSettings: defineTable({
 		userId: v.string(),

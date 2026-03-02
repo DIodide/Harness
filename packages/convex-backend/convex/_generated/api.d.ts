@@ -10,6 +10,7 @@
 
 import type * as conversations from "../conversations.js";
 import type * as harnesses from "../harnesses.js";
+import type * as mcpOAuthTokens from "../mcpOAuthTokens.js";
 import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
 import type * as seed from "../seed.js";
@@ -24,6 +25,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   conversations: typeof conversations;
   harnesses: typeof harnesses;
+  mcpOAuthTokens: typeof mcpOAuthTokens;
   messages: typeof messages;
   migrations: typeof migrations;
   seed: typeof seed;

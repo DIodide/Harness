@@ -1,3 +1,4 @@
+import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
@@ -18,7 +19,13 @@ import {
 	X,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { type KeyboardEvent, useRef, useState } from "react";
+import {
+	type KeyboardEvent,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import toast from "react-hot-toast";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -46,7 +53,7 @@ export const Route = createFileRoute("/harnesses/$harnessId")({
 interface McpServerEntry {
 	name: string;
 	url: string;
-	authType: "none" | "bearer";
+	authType: "none" | "bearer" | "oauth";
 	authToken?: string;
 }
 
@@ -343,6 +350,9 @@ function McpServerRow({
 					Bearer
 				</Badge>
 			)}
+			{server.authType === "oauth" && (
+				<OAuthStatusBadge serverUrl={server.url} />
+			)}
 			<Button
 				variant="ghost"
 				size="icon-xs"
@@ -363,7 +373,7 @@ function AddMcpServerForm({
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");
 	const [url, setUrl] = useState("");
-	const [authType, setAuthType] = useState<"none" | "bearer">("none");
+	const [authType, setAuthType] = useState<"none" | "bearer" | "oauth">("none");
 	const [authToken, setAuthToken] = useState("");
 	const [showToken, setShowToken] = useState(false);
 
@@ -382,7 +392,7 @@ function AddMcpServerForm({
 			url: url.trim(),
 			authType,
 			authToken: authType === "bearer" ? authToken : undefined,
-		});
+		} as McpServerEntry);
 		reset();
 		setOpen(false);
 	};
@@ -463,7 +473,7 @@ function AddMcpServerForm({
 				</label>
 				<Select
 					value={authType}
-					onValueChange={(v) => setAuthType(v as "none" | "bearer")}
+					onValueChange={(v) => setAuthType(v as "none" | "bearer" | "oauth")}
 				>
 					<SelectTrigger className="max-w-xs text-xs">
 						<SelectValue />
@@ -471,9 +481,25 @@ function AddMcpServerForm({
 					<SelectContent>
 						<SelectItem value="none">None</SelectItem>
 						<SelectItem value="bearer">Bearer Token</SelectItem>
+						<SelectItem value="oauth">OAuth</SelectItem>
 					</SelectContent>
 				</Select>
 			</div>
+
+			{authType === "oauth" && (
+				<motion.div
+					initial={{ opacity: 0, height: 0 }}
+					animate={{ opacity: 1, height: "auto" }}
+					exit={{ opacity: 0, height: 0 }}
+					className="rounded border border-border bg-muted/30 px-3 py-2"
+				>
+					<p className="text-[11px] text-muted-foreground">
+						After adding this server, click &quot;Connect&quot; to authenticate
+						via OAuth. You&apos;ll be redirected to the server&apos;s
+						authorization provider.
+					</p>
+				</motion.div>
+			)}
 
 			{authType === "bearer" && (
 				<motion.div
@@ -528,6 +554,119 @@ function AddMcpServerForm({
 				</Button>
 			</div>
 		</motion.div>
+	);
+}
+
+function OAuthStatusBadge({ serverUrl }: { serverUrl: string }) {
+	const { getToken } = useAuth();
+	const [status, setStatus] = useState<
+		"unknown" | "connected" | "disconnected"
+	>("unknown");
+	const [connecting, setConnecting] = useState(false);
+	const apiUrl = import.meta.env.VITE_FASTAPI_URL || "http://localhost:8000";
+
+	const checkStatus = useCallback(async () => {
+		try {
+			const token = await getToken();
+			const res = await fetch(
+				`${apiUrl}/api/mcp/oauth/status?server_url=${encodeURIComponent(serverUrl)}`,
+				{
+					headers: {
+						Authorization: `Bearer ${token}`,
+					},
+				},
+			);
+			if (res.ok) {
+				const data = await res.json();
+				setStatus(data.connected ? "connected" : "disconnected");
+			}
+		} catch {
+			setStatus("disconnected");
+		}
+	}, [getToken, serverUrl]);
+
+	// Check status on mount
+	useEffect(() => {
+		checkStatus();
+	}, [checkStatus]);
+
+	const handleConnect = async () => {
+		setConnecting(true);
+		try {
+			const token = await getToken();
+			const res = await fetch(
+				`${apiUrl}/api/mcp/oauth/start?server_url=${encodeURIComponent(serverUrl)}`,
+				{
+					headers: {
+						Authorization: `Bearer ${token}`,
+					},
+				},
+			);
+			if (!res.ok) throw new Error("Failed to start OAuth");
+			const data = await res.json();
+
+			// Open popup for OAuth flow
+			const popup = window.open(
+				data.authorization_url,
+				"mcp-oauth",
+				"width=600,height=700",
+			);
+
+			// Listen for callback message from popup
+			const handler = (event: MessageEvent) => {
+				if (event.data?.type === "mcp-oauth-callback") {
+					window.removeEventListener("message", handler);
+					if (event.data.success) {
+						setStatus("connected");
+						toast.success("Connected to MCP server via OAuth");
+					} else {
+						toast.error(event.data.error || "OAuth connection failed");
+					}
+					setConnecting(false);
+					popup?.close();
+				}
+			};
+			window.addEventListener("message", handler);
+
+			// Fallback: if popup closes without message
+			const interval = setInterval(() => {
+				if (popup?.closed) {
+					clearInterval(interval);
+					window.removeEventListener("message", handler);
+					setConnecting(false);
+					checkStatus();
+				}
+			}, 500);
+		} catch {
+			toast.error("Failed to start OAuth flow");
+			setConnecting(false);
+		}
+	};
+
+	if (status === "connected") {
+		return (
+			<Badge variant="secondary" className="shrink-0 gap-1 text-[10px]">
+				<div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+				OAuth
+			</Badge>
+		);
+	}
+
+	return (
+		<Button
+			variant="outline"
+			size="sm"
+			className="h-5 shrink-0 px-2 text-[10px]"
+			onClick={handleConnect}
+			disabled={connecting}
+		>
+			{connecting ? (
+				<Loader2 size={8} className="animate-spin" />
+			) : (
+				<Shield size={8} />
+			)}
+			Connect
+		</Button>
 	);
 }
 

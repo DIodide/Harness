@@ -62,7 +62,7 @@ export interface ChatStreamRequest {
 		mcp_servers: Array<{
 			name: string;
 			url: string;
-			auth_type: "none" | "bearer";
+			auth_type: "none" | "bearer" | "oauth";
 			auth_token?: string;
 		}>;
 		name: string;

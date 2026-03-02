@@ -36,7 +36,7 @@ export const create = mutation({
 			v.object({
 				name: v.string(),
 				url: v.string(),
-				authType: v.union(v.literal("none"), v.literal("bearer")),
+				authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth")),
 				authToken: v.optional(v.string()),
 			}),
 		),
@@ -70,7 +70,7 @@ export const update = mutation({
 				v.object({
 					name: v.string(),
 					url: v.string(),
-					authType: v.union(v.literal("none"), v.literal("bearer")),
+					authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth")),
 					authToken: v.optional(v.string()),
 				}),
 			),
