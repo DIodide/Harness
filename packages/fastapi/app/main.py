@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routes import chat, health
+from app.routes import chat, health, mcp_oauth
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,3 +57,4 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+app.include_router(mcp_oauth.router, prefix="/api/mcp/oauth", tags=["mcp-oauth"])

@@ -30,11 +30,13 @@ async def chat_stream(
         body.conversation_id,
     )
 
+    user_id = user.get("sub")
+
     async def event_generator():
         # Fetch available MCP tools for this harness
         tools: list[dict] | None = None
         if body.harness.mcp_servers:
-            tools = await list_tools(http_client, body.harness.mcp_servers)
+            tools = await list_tools(http_client, body.harness.mcp_servers, user_id=user_id)
             if not tools:
                 tools = None
 
@@ -302,6 +304,7 @@ async def chat_stream(
                     tool_info["tool_name"],
                     tool_info["args"],
                     body.harness.mcp_servers,
+                    user_id=user_id,
                 )
                 return tool_info, result
 

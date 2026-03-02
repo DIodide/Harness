@@ -2,6 +2,7 @@ import asyncio
 import itertools
 import json
 import logging
+import re
 import time
 
 import httpx
@@ -28,6 +29,16 @@ _session_init_locks: dict[str, asyncio.Lock] = {}
 _tools_cache: dict[str, tuple[list[dict], float]] = {}
 _TOOLS_CACHE_TTL = 60.0  # seconds
 
+# Reverse map: sanitized tool name → original MCP tool name.
+_tool_name_map: dict[str, str] = {}
+
+_TOOL_NAME_RE = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def _sanitize_tool_name(name: str) -> str:
+    """Replace characters not matching [a-zA-Z0-9_-] with underscores."""
+    return _TOOL_NAME_RE.sub("_", name)
+
 
 def _next_request_id() -> int:
     """Return a unique JSON-RPC request ID."""
@@ -41,11 +52,33 @@ def _get_init_lock(server_url: str) -> asyncio.Lock:
     return _session_init_locks[server_url]
 
 
-def _build_headers(server: McpServer, session_id: str | None = None) -> dict[str, str]:
-    """Build request headers, including auth and session ID if available."""
+async def _build_headers(
+    client: httpx.AsyncClient,
+    server: McpServer,
+    session_id: str | None = None,
+    user_id: str | None = None,
+) -> dict[str, str]:
+    """Build request headers, including auth and session ID if available.
+
+    For OAuth servers, resolves the user's access token from Convex (with auto-refresh).
+    """
     headers = dict(JSONRPC_HEADERS)
+
     if server.auth_type == "bearer" and server.auth_token:
         headers["Authorization"] = f"Bearer {server.auth_token}"
+    elif server.auth_type == "oauth" and user_id:
+        from app.services.mcp_oauth import get_valid_token
+
+        token = await get_valid_token(client, user_id, server.url)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            logger.warning(
+                "No valid OAuth token for user '%s' on MCP '%s'",
+                user_id,
+                server.name,
+            )
+
     if session_id:
         headers["mcp-session-id"] = session_id
     return headers
@@ -117,6 +150,7 @@ async def _post_streaming(
 async def _initialize_session(
     client: httpx.AsyncClient,
     server: McpServer,
+    user_id: str | None = None,
 ) -> str | None:
     """Send the MCP initialize handshake and return the session ID.
 
@@ -133,7 +167,7 @@ async def _initialize_session(
         if cached:
             return cached
 
-        headers = _build_headers(server)
+        headers = await _build_headers(client, server, user_id=user_id)
         payload = {
             "jsonrpc": "2.0",
             "id": _next_request_id(),
@@ -167,12 +201,13 @@ async def _post_jsonrpc(
     params: dict | None = None,
     timeout: float = 10.0,
     session_id: str | None = None,
+    user_id: str | None = None,
 ) -> dict:
     """Send a JSON-RPC 2.0 request to an MCP server and return the result.
 
     Uses streaming to handle text/event-stream responses without hanging.
     """
-    headers = _build_headers(server, session_id)
+    headers = await _build_headers(client, server, session_id, user_id=user_id)
     payload = {
         "jsonrpc": "2.0",
         "id": _next_request_id(),
@@ -188,12 +223,16 @@ async def _post_jsonrpc(
         if "not initialized" in raw.lower():
             logger.info("MCP server '%s' requires initialization, retrying...", server.name)
             _session_cache.pop(server.url, None)
-            new_session = await _initialize_session(client, server)
+            new_session = await _initialize_session(client, server, user_id=user_id)
             if new_session:
-                headers = _build_headers(server, new_session)
+                headers = await _build_headers(client, server, new_session, user_id=user_id)
                 result, resp_headers, status = await _post_streaming(
                     client, server.url, payload, headers, timeout
                 )
+
+    # Handle OAuth 401 — signal that re-auth is needed
+    if status == 401 and server.auth_type == "oauth":
+        raise McpAuthRequiredError(server.name, server.url)
 
     if status >= 400:
         raise httpx.HTTPStatusError(
@@ -210,13 +249,19 @@ async def _post_jsonrpc(
     return result
 
 
-async def _ensure_session(client: httpx.AsyncClient, server: McpServer) -> str | None:
+async def _ensure_session(
+    client: httpx.AsyncClient,
+    server: McpServer,
+    user_id: str | None = None,
+) -> str | None:
     """Ensure we have a valid session for this server, initializing if needed."""
-    return await _initialize_session(client, server)
+    return await _initialize_session(client, server, user_id=user_id)
 
 
 async def _list_tools_for_server(
-    client: httpx.AsyncClient, server: McpServer
+    client: httpx.AsyncClient,
+    server: McpServer,
+    user_id: str | None = None,
 ) -> list[dict]:
     """Fetch tools from a single MCP server, returned in OpenAI function format.
 
@@ -229,37 +274,47 @@ async def _list_tools_for_server(
             logger.debug("Using cached tools for MCP '%s' (%d tools)", server.name, len(tools))
             return tools
 
-    session_id = await _ensure_session(client, server)
-    result = await _post_jsonrpc(client, server, "tools/list", session_id=session_id)
+    session_id = await _ensure_session(client, server, user_id=user_id)
+    result = await _post_jsonrpc(client, server, "tools/list", session_id=session_id, user_id=user_id)
     server_tools = result.get("tools", [])
-    tools = [
-        {
+    tools = []
+    for tool in server_tools:
+        raw_name = tool["name"]
+        sanitized = _sanitize_tool_name(f"{server.name}__{raw_name}")
+        # Store mapping so we can recover the original MCP tool name on call_tool
+        _tool_name_map[sanitized] = raw_name
+        tools.append({
             "type": "function",
             "function": {
-                "name": f"{server.name}__{tool['name']}",
+                "name": sanitized,
                 "description": tool.get("description", ""),
                 "parameters": tool.get("inputSchema", {}),
             },
-        }
-        for tool in server_tools
-    ]
+        })
     _tools_cache[server.url] = (tools, time.monotonic())
     logger.info("Loaded %d tools from MCP '%s' at %s", len(server_tools), server.name, server.url)
     return tools
 
 
-async def list_tools(client: httpx.AsyncClient, mcp_servers: list[McpServer]) -> list[dict]:
+async def list_tools(
+    client: httpx.AsyncClient,
+    mcp_servers: list[McpServer],
+    user_id: str | None = None,
+) -> list[dict]:
     """Fetch available tools from all MCP servers in parallel.
 
     Tool names are namespaced as 'servername__toolname' to avoid collisions.
     """
     results = await asyncio.gather(
-        *[_list_tools_for_server(client, server) for server in mcp_servers],
+        *[_list_tools_for_server(client, server, user_id=user_id) for server in mcp_servers],
         return_exceptions=True,
     )
 
     tools: list[dict] = []
     for server, result in zip(mcp_servers, results):
+        if isinstance(result, McpAuthRequiredError):
+            logger.warning("OAuth re-auth required for MCP '%s'", server.name)
+            continue
         if isinstance(result, BaseException):
             logger.error(
                 "Error fetching tools from MCP '%s' at %s: %s",
@@ -278,6 +333,7 @@ async def call_tool(
     tool_name: str,
     arguments: dict,
     mcp_servers: list[McpServer],
+    user_id: str | None = None,
 ) -> str:
     """Execute a tool call on the appropriate MCP server.
 
@@ -285,6 +341,7 @@ async def call_tool(
         tool_name: Namespaced name in format 'servername__toolname'.
         arguments: Tool arguments dict.
         mcp_servers: List of configured MCP servers to resolve against.
+        user_id: Current user ID for OAuth token resolution.
 
     Returns:
         Tool result as a string.
@@ -294,8 +351,11 @@ async def call_tool(
         logger.error("Invalid tool name format: %s", tool_name)
         return json.dumps({"error": f"Invalid tool name format: {tool_name}"})
 
-    server_name, actual_tool = parts
-    server = next((s for s in mcp_servers if s.name == server_name), None)
+    server_name, sanitized_tool = parts
+    # Resolve the original MCP tool name from the reverse map, or fall back to the
+    # sanitized name (works when the original had no special chars).
+    actual_tool = _tool_name_map.get(tool_name, sanitized_tool)
+    server = next((s for s in mcp_servers if _sanitize_tool_name(s.name) == server_name), None)
     if not server:
         logger.error("No MCP server found with name: %s", server_name)
         return json.dumps({"error": f"Unknown MCP server: {server_name}"})
@@ -310,13 +370,46 @@ async def call_tool(
             {"name": actual_tool, "arguments": arguments},
             timeout=30.0,
             session_id=session_id,
+            user_id=user_id,
         )
         content = result.get("content", [])
-        texts = [c.get("text", "") for c in content if c.get("type") == "text"]
-        return "\n".join(texts) if texts else json.dumps(result)
+        parts: list[str] = []
+        for c in content:
+            ctype = c.get("type")
+            if ctype == "text":
+                parts.append(c.get("text", ""))
+            elif ctype == "resource":
+                # MCP embedded resource — extract text or decode blob
+                resource = c.get("resource", {})
+                if "text" in resource:
+                    parts.append(resource["text"])
+                elif "blob" in resource:
+                    import base64
+                    try:
+                        parts.append(base64.b64decode(resource["blob"]).decode("utf-8", errors="replace"))
+                    except Exception:
+                        parts.append(f"[binary resource: {resource.get('uri', 'unknown')}]")
+            elif ctype == "image":
+                parts.append(f"[image: {c.get('mimeType', 'unknown type')}]")
+        return "\n".join(parts) if parts else json.dumps(result)
+    except McpAuthRequiredError:
+        return json.dumps({
+            "error": f"OAuth re-authorization required for MCP server: {server_name}",
+            "auth_required": True,
+            "server_url": server.url,
+        })
     except httpx.HTTPError as e:
         logger.error("HTTP error calling tool '%s' on MCP '%s': %s", actual_tool, server_name, e)
         return json.dumps({"error": f"MCP server error: {server_name}"})
     except KeyError as e:
         logger.error("Malformed response from MCP '%s' for tool '%s': missing key %s", server_name, actual_tool, e)
         return json.dumps({"error": f"Malformed response from MCP server: {server_name}"})
+
+
+class McpAuthRequiredError(Exception):
+    """Raised when an OAuth-protected MCP server returns 401."""
+
+    def __init__(self, server_name: str, server_url: str):
+        self.server_name = server_name
+        self.server_url = server_url
+        super().__init__(f"OAuth re-auth required for {server_name} at {server_url}")
