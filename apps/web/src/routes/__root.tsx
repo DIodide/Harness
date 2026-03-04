@@ -84,7 +84,41 @@ function RootComponent() {
 	const isChromeless = CHROMELESS_ROUTES.includes(pathname);
 
 	return (
-		<ClerkProvider>
+		<ClerkProvider
+			appearance={{
+				variables: {
+					borderRadius: "0rem",
+					fontFamily: "'Geist', -apple-system, BlinkMacSystemFont, sans-serif",
+					colorBackground: "var(--background)",
+					colorText: "var(--foreground)",
+					colorPrimary: "var(--primary)",
+					colorTextOnPrimaryBackground: "var(--primary-foreground)",
+					colorDanger: "var(--destructive)",
+					colorInputBackground: "var(--background)",
+					colorInputText: "var(--foreground)",
+				},
+				elements: {
+					modalContent: "rounded-none shadow-none border border-border",
+					modalCloseButton: "rounded-none",
+					card: "shadow-none rounded-none border-0",
+					navbar: "border-r border-border",
+					navbarButton: "rounded-none text-xs font-medium",
+					pageScrollBox: "p-6",
+					formButtonPrimary:
+						"rounded-none text-xs font-medium h-9 shadow-none bg-foreground text-background hover:bg-foreground/90",
+					formButtonReset:
+						"rounded-none text-xs font-medium h-9 shadow-none border border-border",
+					formFieldInput: "rounded-none border-border text-sm shadow-none",
+					formFieldLabel: "text-xs font-medium",
+					badge: "rounded-none text-[10px]",
+					dividerLine: "bg-border",
+					dividerText: "text-muted-foreground text-xs",
+					footerActionLink: "text-foreground hover:text-foreground/80",
+					socialButtonsBlockButton:
+						"rounded-none border-border text-xs font-medium",
+				},
+			}}
+		>
 			<ConvexProviderWithClerk client={context.convexClient} useAuth={useAuth}>
 				<TooltipProvider delayDuration={300}>
 					{isChromeless ? (
