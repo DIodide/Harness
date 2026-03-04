@@ -440,8 +440,41 @@ async def check_server_health(
 ) -> bool:
     """Check if an MCP server is reachable by attempting initialization.
 
-    Returns True if reachable, False otherwise.
+    Returns True if reachable (HTTP 2xx), False otherwise.
     Raises McpAuthRequiredError for OAuth 401.
+
+    Unlike _initialize_session, this treats a successful response without a
+    session ID as reachable (some servers like Context7 don't use sessions).
     """
-    session_id = await _initialize_session(client, server, user_id=user_id)
-    return session_id is not None
+    headers = await _build_headers(client, server, user_id=user_id)
+    payload = {
+        "jsonrpc": "2.0",
+        "id": _next_request_id(),
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "harness", "version": "1.0.0"},
+        },
+    }
+
+    try:
+        result, resp_headers, status = await _post_streaming(
+            client, server.url, payload, headers, timeout=10.0
+        )
+    except httpx.HTTPError as e:
+        logger.warning("Health check failed for '%s': %s", server.name, e)
+        return False
+
+    if status == 401 and server.auth_type == "oauth":
+        raise McpAuthRequiredError(server.name, server.url)
+
+    if status >= 400:
+        return False
+
+    # Cache session if returned (reuse for subsequent calls)
+    session_id = resp_headers.get("mcp-session-id")
+    if session_id:
+        _session_cache[server.url] = session_id
+
+    return True
