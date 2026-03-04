@@ -97,8 +97,8 @@ function OnboardingPage() {
 
 	const createHarness = useMutation({
 		mutationFn: useConvexMutation(api.harnesses.create),
-		onSuccess: () => {
-			navigate({ to: "/chat" });
+		onSuccess: (harnessId) => {
+			navigate({ to: "/chat", search: { harnessId } });
 		},
 	});
 

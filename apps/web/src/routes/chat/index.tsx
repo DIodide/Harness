@@ -92,6 +92,9 @@ import {
 import { cn } from "../../lib/utils";
 
 export const Route = createFileRoute("/chat/")({
+	validateSearch: (search: Record<string, unknown>) => ({
+		harnessId: (search.harnessId as string) ?? undefined,
+	}),
 	beforeLoad: ({ context }) => {
 		if (!context.userId) {
 			throw redirect({ to: "/sign-in" });
@@ -119,6 +122,7 @@ const EMPTY_STREAM_STATE: ConvoStreamState = {
 
 function ChatPage() {
 	const navigate = useNavigate();
+	const { harnessId: initialHarnessId } = Route.useSearch();
 
 	const { data: harnesses, isLoading: harnessesLoading } = useQuery(
 		convexQuery(api.harnesses.list, {}),
@@ -408,11 +412,23 @@ function ChatPage() {
 	});
 
 	useEffect(() => {
-		if (harnesses && harnesses.length > 0 && !activeHarnessId) {
-			const started = harnesses.find((h) => h.status === "started");
-			setActiveHarnessId(started?._id ?? harnesses[0]._id);
+		if (!harnesses || harnesses.length === 0) return;
+
+		// If current selection is valid, keep it
+		if (activeHarnessId && harnesses.some((h) => h._id === activeHarnessId)) {
+			return;
 		}
-	}, [harnesses, activeHarnessId]);
+
+		// Prefer the harness ID from the URL search param (e.g. after creating one)
+		if (initialHarnessId && harnesses.some((h) => h._id === initialHarnessId)) {
+			setActiveHarnessId(initialHarnessId as Id<"harnesses">);
+			return;
+		}
+
+		// Fall back to a started harness, then the first one
+		const started = harnesses.find((h) => h.status === "started");
+		setActiveHarnessId(started?._id ?? harnesses[0]._id);
+	}, [harnesses, activeHarnessId, initialHarnessId]);
 
 	useEffect(() => {
 		if (harnesses && harnesses.length === 0) {
