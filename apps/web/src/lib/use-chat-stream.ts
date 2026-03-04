@@ -51,6 +51,10 @@ interface UseChatStreamCallbacks {
 		usage?: UsageData,
 		model?: string,
 	) => void;
+	onMcpError: (
+		conversationId: string,
+		event: { server_name: string; server_url: string; reason: string },
+	) => void;
 	onError: (conversationId: string, error: string) => void;
 	onAbort?: (conversationId: string) => void;
 }
@@ -145,6 +149,9 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 										break;
 									case "tool_result":
 										cbRef.current.onToolResult(convoId, data);
+										break;
+									case "mcp_error":
+										cbRef.current.onMcpError(convoId, data);
 										break;
 									case "done":
 										cbRef.current.onDone(

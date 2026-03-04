@@ -2,7 +2,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Server, Shield } from "lucide-react";
+import { AlertTriangle, Loader2, Server, Shield } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
@@ -12,6 +12,74 @@ import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
+
+/**
+ * Start an OAuth popup flow for an MCP server.
+ * Returns a cleanup function. Calls onSuccess/onError when done.
+ */
+function startOAuthPopup(
+	getToken: () => Promise<string | null>,
+	serverUrl: string,
+	opts: {
+		onSuccess?: () => void;
+		onError?: (msg: string) => void;
+		onDone?: () => void;
+	},
+) {
+	let cancelled = false;
+	let intervalId: ReturnType<typeof setInterval> | undefined;
+
+	const run = async () => {
+		try {
+			const token = await getToken();
+			if (cancelled) return;
+			const res = await fetch(
+				`${API_URL}/api/mcp/oauth/start?server_url=${encodeURIComponent(serverUrl)}`,
+				{ headers: { Authorization: `Bearer ${token}` } },
+			);
+			if (!res.ok) throw new Error("Failed to start OAuth");
+			const data = await res.json();
+
+			const popup = window.open(
+				data.authorization_url,
+				"mcp-oauth",
+				"width=600,height=700",
+			);
+
+			const handler = (event: MessageEvent) => {
+				if (event.data?.type === "mcp-oauth-callback") {
+					window.removeEventListener("message", handler);
+					if (event.data.success) {
+						opts.onSuccess?.();
+					} else {
+						opts.onError?.(event.data.error || "OAuth connection failed");
+					}
+					opts.onDone?.();
+					popup?.close();
+				}
+			};
+			window.addEventListener("message", handler);
+
+			intervalId = setInterval(() => {
+				if (popup?.closed) {
+					clearInterval(intervalId);
+					window.removeEventListener("message", handler);
+					opts.onDone?.();
+				}
+			}, 500);
+		} catch {
+			opts.onError?.("Failed to start OAuth flow");
+			opts.onDone?.();
+		}
+	};
+
+	run();
+
+	return () => {
+		cancelled = true;
+		if (intervalId) clearInterval(intervalId);
+	};
+}
 
 type McpServer = {
 	name: string;
@@ -159,51 +227,16 @@ function McpServerRow({
 	const { getToken } = useAuth();
 	const [connecting, setConnecting] = useState(false);
 
-	const handleReconnect = useCallback(async () => {
+	const handleReconnect = useCallback(() => {
 		setConnecting(true);
-		try {
-			const token = await getToken();
-			const res = await fetch(
-				`${API_URL}/api/mcp/oauth/start?server_url=${encodeURIComponent(server.url)}`,
-				{
-					headers: { Authorization: `Bearer ${token}` },
-				},
-			);
-			if (!res.ok) throw new Error("Failed to start OAuth");
-			const data = await res.json();
-
-			const popup = window.open(
-				data.authorization_url,
-				"mcp-oauth",
-				"width=600,height=700",
-			);
-
-			const handler = (event: MessageEvent) => {
-				if (event.data?.type === "mcp-oauth-callback") {
-					window.removeEventListener("message", handler);
-					if (event.data.success) {
-						toast.success(`Reconnected to ${server.name}`);
-						onReconnected();
-					} else {
-						toast.error(event.data.error || "OAuth connection failed");
-					}
-					setConnecting(false);
-					popup?.close();
-				}
-			};
-			window.addEventListener("message", handler);
-
-			const interval = setInterval(() => {
-				if (popup?.closed) {
-					clearInterval(interval);
-					window.removeEventListener("message", handler);
-					setConnecting(false);
-				}
-			}, 500);
-		} catch {
-			toast.error("Failed to start OAuth flow");
-			setConnecting(false);
-		}
+		startOAuthPopup(getToken, server.url, {
+			onSuccess: () => {
+				toast.success(`Reconnected to ${server.name}`);
+				onReconnected();
+			},
+			onError: (msg) => toast.error(msg),
+			onDone: () => setConnecting(false),
+		});
 	}, [getToken, server.url, server.name, onReconnected]);
 
 	const needsReconnect =
@@ -248,6 +281,83 @@ function McpServerRow({
 					OAuth
 				</Badge>
 			)}
+		</div>
+	);
+}
+
+/**
+ * Parse a tool result string to check if it's an auth_required error.
+ * Returns { serverUrl, error } if so, null otherwise.
+ */
+export function parseAuthRequiredError(
+	result: string,
+): { serverUrl: string; error: string } | null {
+	try {
+		const parsed = JSON.parse(result);
+		if (parsed?.auth_required === true && parsed?.server_url) {
+			return { serverUrl: parsed.server_url, error: parsed.error ?? "" };
+		}
+	} catch {
+		// Not JSON or not the right shape
+	}
+	return null;
+}
+
+/**
+ * Inline prompt shown inside a tool call result when OAuth re-auth is needed.
+ */
+export function OAuthReconnectPrompt({
+	serverUrl,
+	errorMessage,
+}: {
+	serverUrl: string;
+	errorMessage: string;
+}) {
+	const { getToken } = useAuth();
+	const [connecting, setConnecting] = useState(false);
+	const [reconnected, setReconnected] = useState(false);
+
+	const handleReconnect = useCallback(() => {
+		setConnecting(true);
+		startOAuthPopup(getToken, serverUrl, {
+			onSuccess: () => {
+				toast.success("Reconnected — you can retry the message");
+				setReconnected(true);
+			},
+			onError: (msg) => toast.error(msg),
+			onDone: () => setConnecting(false),
+		});
+	}, [getToken, serverUrl]);
+
+	if (reconnected) {
+		return (
+			<div className="flex items-center gap-2 rounded bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-700 dark:text-emerald-400">
+				<Shield size={12} />
+				<span>Reconnected. Retry your message to use this tool.</span>
+			</div>
+		);
+	}
+
+	return (
+		<div className="flex items-center gap-2 rounded bg-destructive/10 px-3 py-2">
+			<AlertTriangle size={12} className="shrink-0 text-destructive" />
+			<span className="flex-1 text-[11px] text-destructive">
+				{errorMessage || "OAuth authorization required for this MCP server."}
+			</span>
+			<Button
+				variant="outline"
+				size="sm"
+				className="h-6 shrink-0 gap-1 px-2 text-[10px]"
+				onClick={handleReconnect}
+				disabled={connecting}
+			>
+				{connecting ? (
+					<Loader2 size={10} className="animate-spin" />
+				) : (
+					<Shield size={10} />
+				)}
+				Reconnect
+			</Button>
 		</div>
 	);
 }

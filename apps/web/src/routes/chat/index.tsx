@@ -10,6 +10,7 @@ import {
 	useNavigate,
 } from "@tanstack/react-router";
 import {
+	AlertTriangle,
 	ArrowUp,
 	Brain,
 	Check,
@@ -42,7 +43,11 @@ import {
 import toast from "react-hot-toast";
 import { HarnessMark } from "../../components/harness-mark";
 import { MarkdownMessage } from "../../components/markdown-message";
-import { McpServerStatus } from "../../components/mcp-server-status";
+import {
+	McpServerStatus,
+	OAuthReconnectPrompt,
+	parseAuthRequiredError,
+} from "../../components/mcp-server-status";
 import {
 	type DisplayMode,
 	MessageActions,
@@ -150,6 +155,16 @@ function ChatPage() {
 		streamStatesRef.current = streamStates;
 	}, [streamStates]);
 
+	// MCP server failures reported during stream start
+	type McpFailure = {
+		id: number;
+		serverName: string;
+		serverUrl: string;
+		reason: string;
+	};
+	const [mcpFailures, setMcpFailures] = useState<McpFailure[]>([]);
+	const mcpFailureIdRef = useRef(0);
+
 	// Track conversations that just finished streaming (show green checkmark briefly)
 	const [doneConvoIds, setDoneConvoIds] = useState<Set<string>>(new Set());
 	const prevStreamingRef = useRef<Set<string>>(new Set());
@@ -196,12 +211,13 @@ function ChatPage() {
 		return next?.content;
 	}, []);
 
-	// Clear queue on conversation switch
+	// Clear queue and MCP failures on conversation switch
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally resets queue when active conversation changes
 	useEffect(() => {
 		messageQueueRef.current = [];
 		setMessageQueue([]);
 		pendingQueueSendRef.current = null;
+		setMcpFailures([]);
 	}, [activeConvoId]);
 
 	// Save interrupted assistant message from frontend
@@ -302,6 +318,17 @@ function ChatPage() {
 					},
 				};
 			});
+		},
+		onMcpError: (_convoId, event) => {
+			setMcpFailures((prev) => [
+				...prev,
+				{
+					id: ++mcpFailureIdRef.current,
+					serverName: event.server_name,
+					serverUrl: event.server_url,
+					reason: event.reason,
+				},
+			]);
 		},
 		onDone: (convoId, fullContent, usage, model) => {
 			setStreamStates((prev) => ({
@@ -652,6 +679,14 @@ function ChatPage() {
 					sidebarOpen={sidebarOpen}
 					onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
 					isStreaming={isActiveConvoStreaming}
+				/>
+
+				<McpFailureBanner
+					failures={mcpFailures}
+					onDismiss={(id) =>
+						setMcpFailures((prev) => prev.filter((f) => f.id !== id))
+					}
+					onDismissAll={() => setMcpFailures([])}
 				/>
 
 				{activeConvoId ? (
@@ -1025,6 +1060,80 @@ function SettingsDialog({
 				</div>
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+function McpFailureBanner({
+	failures,
+	onDismiss,
+	onDismissAll,
+}: {
+	failures: Array<{
+		id: number;
+		serverName: string;
+		serverUrl: string;
+		reason: string;
+	}>;
+	onDismiss: (id: number) => void;
+	onDismissAll: () => void;
+}) {
+	if (failures.length === 0) return null;
+
+	return (
+		<AnimatePresence>
+			<motion.div
+				initial={{ height: 0, opacity: 0 }}
+				animate={{ height: "auto", opacity: 1 }}
+				exit={{ height: 0, opacity: 0 }}
+				transition={{ duration: 0.2 }}
+				className="border-b border-amber-500/20 bg-amber-500/5"
+			>
+				<div className="flex items-start gap-3 px-4 py-2.5">
+					<AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-500" />
+					<div className="min-w-0 flex-1">
+						<p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+							{failures.length === 1
+								? "An MCP server failed to connect"
+								: `${failures.length} MCP servers failed to connect`}
+						</p>
+						<div className="mt-1 flex flex-wrap gap-1.5">
+							{failures.map((f) => (
+								<span
+									key={f.id}
+									className="inline-flex items-center gap-1.5 rounded-sm bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-300"
+								>
+									<span
+										className={`h-1 w-1 rounded-full ${f.reason === "auth_required" ? "bg-red-400" : "bg-amber-400"}`}
+									/>
+									{f.serverName}
+									{f.reason === "auth_required" && (
+										<span className="text-amber-500/70">— OAuth required</span>
+									)}
+									<button
+										type="button"
+										className="ml-0.5 opacity-50 transition-opacity hover:opacity-100"
+										onClick={() => onDismiss(f.id)}
+									>
+										<X size={8} />
+									</button>
+								</span>
+							))}
+						</div>
+						<p className="mt-1 text-[10px] text-amber-600/60 dark:text-amber-400/50">
+							Tools from these servers won't be available. Reconnect from the
+							MCP status menu above.
+						</p>
+					</div>
+					<button
+						type="button"
+						className="shrink-0 rounded-sm p-0.5 text-amber-500/50 transition-colors hover:bg-amber-500/10 hover:text-amber-500"
+						onClick={onDismissAll}
+					>
+						<X size={12} />
+					</button>
+				</div>
+			</motion.div>
+		</AnimatePresence>
 	);
 }
 
@@ -1528,6 +1637,7 @@ function ToolCallBlock({
 }) {
 	const [open, setOpen] = useState(false);
 	const displayName = tool.includes("__") ? tool.replace("__", " / ") : tool;
+	const authError = result ? parseAuthRequiredError(result) : null;
 
 	return (
 		<div className="mb-1.5">
@@ -1545,6 +1655,8 @@ function ToolCallBlock({
 				</motion.span>
 				{isStreaming ? (
 					<Loader2 size={10} className="animate-spin" />
+				) : authError ? (
+					<Wrench size={10} className="text-destructive" />
 				) : (
 					<Wrench size={10} className="text-emerald-500" />
 				)}
@@ -1552,7 +1664,20 @@ function ToolCallBlock({
 					{displayName}
 					{isStreaming ? "..." : ""}
 				</span>
+				{authError && (
+					<span className="text-[10px] text-destructive">— auth required</span>
+				)}
 			</button>
+
+			{authError && (
+				<div className="mt-1.5 ml-4">
+					<OAuthReconnectPrompt
+						serverUrl={authError.serverUrl}
+						errorMessage={authError.error}
+					/>
+				</div>
+			)}
+
 			<AnimatePresence>
 				{open && (
 					<motion.div
@@ -1571,7 +1696,7 @@ function ToolCallBlock({
 									{JSON.stringify(args, null, 2)}
 								</pre>
 							</div>
-							{result && (
+							{result && !authError && (
 								<div>
 									<p className="mb-0.5 font-medium text-foreground/70">
 										Result

@@ -36,11 +36,22 @@ async def chat_stream(
         # Fetch available MCP tools for this harness
         tools: list[dict] | None = None
         if body.harness.mcp_servers:
-            tools = await list_tools(
+            tools, mcp_failures = await list_tools(
                 http_client, body.harness.mcp_servers, user_id=user_id
             )
             if not tools:
                 tools = None
+
+            # Notify frontend about MCP servers that failed to connect
+            for failure in mcp_failures:
+                yield {
+                    "event": "mcp_error",
+                    "data": json.dumps({
+                        "server_name": failure.server_name,
+                        "server_url": failure.server_url,
+                        "reason": failure.reason,
+                    }),
+                }
 
         messages = [m.model_dump() for m in body.messages]
 

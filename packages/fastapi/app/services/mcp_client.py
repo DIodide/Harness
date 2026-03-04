@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+from dataclasses import dataclass
 
 import httpx
 
@@ -296,14 +297,23 @@ async def _list_tools_for_server(
     return tools
 
 
+@dataclass
+class McpServerFailure:
+    """Describes an MCP server that failed to load tools."""
+    server_name: str
+    server_url: str
+    reason: str  # "auth_required" | "error"
+
+
 async def list_tools(
     client: httpx.AsyncClient,
     mcp_servers: list[McpServer],
     user_id: str | None = None,
-) -> list[dict]:
+) -> tuple[list[dict], list[McpServerFailure]]:
     """Fetch available tools from all MCP servers in parallel.
 
     Tool names are namespaced as 'servername__toolname' to avoid collisions.
+    Returns (tools, failures) where failures lists servers that could not be reached.
     """
     results = await asyncio.gather(
         *[_list_tools_for_server(client, server, user_id=user_id) for server in mcp_servers],
@@ -311,9 +321,11 @@ async def list_tools(
     )
 
     tools: list[dict] = []
+    failures: list[McpServerFailure] = []
     for server, result in zip(mcp_servers, results):
         if isinstance(result, McpAuthRequiredError):
             logger.warning("OAuth re-auth required for MCP '%s'", server.name)
+            failures.append(McpServerFailure(server.name, server.url, "auth_required"))
             continue
         if isinstance(result, BaseException):
             logger.error(
@@ -322,10 +334,11 @@ async def list_tools(
                 server.url,
                 result,
             )
+            failures.append(McpServerFailure(server.name, server.url, "error"))
             continue
         tools.extend(result)
 
-    return tools
+    return tools, failures
 
 
 async def call_tool(
