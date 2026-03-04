@@ -42,6 +42,7 @@ import {
 import toast from "react-hot-toast";
 import { HarnessMark } from "../../components/harness-mark";
 import { MarkdownMessage } from "../../components/markdown-message";
+import { McpServerStatus } from "../../components/mcp-server-status";
 import {
 	type DisplayMode,
 	MessageActions,
@@ -1040,6 +1041,12 @@ function ChatHeader({
 		name: string;
 		model: string;
 		status: string;
+		mcpServers: Array<{
+			name: string;
+			url: string;
+			authType: "none" | "bearer" | "oauth";
+			authToken?: string;
+		}>;
 	};
 	harnesses: Array<{
 		_id: Id<"harnesses">;
@@ -1105,6 +1112,10 @@ function ChatHeader({
 							))}
 					</DropdownMenuContent>
 				</DropdownMenu>
+
+				{harness && harness.mcpServers.length > 0 && (
+					<McpServerStatus servers={harness.mcpServers} />
+				)}
 			</div>
 		</header>
 	);
