@@ -212,7 +212,7 @@ function HarnessGroup({
 		mcpServers: Array<{
 			name: string;
 			url: string;
-			authType: "none" | "bearer";
+			authType: "none" | "bearer" | "oauth";
 			authToken?: string;
 		}>;
 		skills: string[];
