@@ -88,6 +88,12 @@ type McpServer = {
 	authToken?: string;
 };
 
+export type HealthStatus =
+	| "checking"
+	| "reachable"
+	| "unreachable"
+	| "auth_required";
+
 type ServerStatus = "connected" | "expired" | "disconnected" | "checking";
 
 function getServerStatus(
@@ -98,16 +104,30 @@ function getServerStatus(
 		expiresAt: number;
 		scopes: string;
 	}>,
+	healthStatus?: HealthStatus,
 ): ServerStatus {
-	if (server.authType !== "oauth") return "connected";
+	// If health check is running, show checking state
+	if (healthStatus === "checking") return "checking";
 
-	const tokenStatus = oauthStatuses.find((s) => s.mcpServerUrl === server.url);
-	if (!tokenStatus) return "disconnected";
-	if (!tokenStatus.connected) return "disconnected";
+	// For OAuth servers: combine token status with health check
+	if (server.authType === "oauth") {
+		const tokenStatus = oauthStatuses.find(
+			(s) => s.mcpServerUrl === server.url,
+		);
+		if (!tokenStatus || !tokenStatus.connected) return "disconnected";
+		if (tokenStatus.expiresAt < Date.now() / 1000 + 60) return "expired";
+		// Token valid — also check health if available
+		if (healthStatus === "unreachable") return "disconnected";
+		if (healthStatus === "auth_required") return "expired";
+		return "connected";
+	}
 
-	// Check if token is expired or expiring within 60s
-	if (tokenStatus.expiresAt < Date.now() / 1000 + 60) return "expired";
-	return "connected";
+	// For non-OAuth servers: use health check result
+	if (healthStatus === "unreachable") return "disconnected";
+	if (healthStatus === "auth_required") return "disconnected";
+	if (healthStatus === "reachable") return "connected";
+	// No health data yet → checking
+	return "checking";
 }
 
 const STATUS_DOT: Record<ServerStatus, string> = {
@@ -120,11 +140,17 @@ const STATUS_DOT: Record<ServerStatus, string> = {
 const STATUS_LABEL: Record<ServerStatus, string> = {
 	connected: "Connected",
 	expired: "Token expired",
-	disconnected: "Not connected",
+	disconnected: "Unreachable",
 	checking: "Checking…",
 };
 
-export function McpServerStatus({ servers }: { servers: McpServer[] }) {
+export function McpServerStatus({
+	servers,
+	healthStatuses = {},
+}: {
+	servers: McpServer[];
+	healthStatuses?: Record<string, HealthStatus>;
+}) {
 	const { data: oauthStatuses } = useQuery(
 		convexQuery(api.mcpOAuthTokens.listStatuses, {}),
 	);
@@ -148,7 +174,7 @@ export function McpServerStatus({ servers }: { servers: McpServer[] }) {
 	const statuses = servers.map((s) => ({
 		server: s,
 		status: oauthStatuses
-			? getServerStatus(s, oauthStatuses)
+			? getServerStatus(s, oauthStatuses, healthStatuses[s.url])
 			: ("checking" as ServerStatus),
 	}));
 
@@ -157,11 +183,15 @@ export function McpServerStatus({ servers }: { servers: McpServer[] }) {
 		(s) => s.status === "expired" || s.status === "disconnected",
 	);
 
-	const summaryColor = allConnected
-		? "bg-emerald-500"
-		: hasIssue
-			? "bg-amber-400"
-			: "bg-muted-foreground/40";
+	const anyChecking = statuses.some((s) => s.status === "checking");
+
+	const summaryColor = anyChecking
+		? "bg-muted-foreground/40"
+		: allConnected
+			? "bg-emerald-500"
+			: hasIssue
+				? "bg-amber-400"
+				: "bg-muted-foreground/40";
 
 	return (
 		<div ref={ref} className="relative">
@@ -173,15 +203,21 @@ export function McpServerStatus({ servers }: { servers: McpServer[] }) {
 						className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 					>
 						<div className="relative">
-							<Server size={10} />
+							{anyChecking ? (
+								<Loader2 size={10} className="animate-spin" />
+							) : (
+								<Server size={10} />
+							)}
 							<div
-								className={`absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full ${summaryColor}`}
+								className={`absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full ${summaryColor} ${anyChecking ? "animate-pulse" : ""}`}
 							/>
 						</div>
 						{servers.length} MCP{servers.length !== 1 && "s"}
 					</button>
 				</TooltipTrigger>
-				<TooltipContent>MCP server status</TooltipContent>
+				<TooltipContent>
+					{anyChecking ? "Checking MCP servers..." : "MCP server status"}
+				</TooltipContent>
 			</Tooltip>
 
 			<AnimatePresence>
@@ -245,9 +281,16 @@ function McpServerRow({
 
 	return (
 		<div className="flex items-center gap-2 px-3 py-1.5">
-			<div
-				className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[status]}`}
-			/>
+			{status === "checking" ? (
+				<Loader2
+					size={10}
+					className="shrink-0 animate-spin text-muted-foreground"
+				/>
+			) : (
+				<div
+					className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[status]}`}
+				/>
+			)}
 			<div className="min-w-0 flex-1">
 				<div className="truncate text-xs font-medium">{server.name}</div>
 				<div className="text-[10px] text-muted-foreground">

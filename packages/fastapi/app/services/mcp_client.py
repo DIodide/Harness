@@ -426,3 +426,22 @@ class McpAuthRequiredError(Exception):
         self.server_name = server_name
         self.server_url = server_url
         super().__init__(f"OAuth re-auth required for {server_name} at {server_url}")
+
+
+def evict_session_cache(server_url: str) -> None:
+    """Remove a cached session so the next health check does a real handshake."""
+    _session_cache.pop(server_url, None)
+
+
+async def check_server_health(
+    client: httpx.AsyncClient,
+    server: McpServer,
+    user_id: str | None = None,
+) -> bool:
+    """Check if an MCP server is reachable by attempting initialization.
+
+    Returns True if reachable, False otherwise.
+    Raises McpAuthRequiredError for OAuth 401.
+    """
+    session_id = await _initialize_session(client, server, user_id=user_id)
+    return session_id is not None

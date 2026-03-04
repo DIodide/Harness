@@ -1,4 +1,4 @@
-import { useClerk, useUser } from "@clerk/tanstack-react-start";
+import { useAuth, useClerk, useUser } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
@@ -44,6 +44,7 @@ import toast from "react-hot-toast";
 import { HarnessMark } from "../../components/harness-mark";
 import { MarkdownMessage } from "../../components/markdown-message";
 import {
+	type HealthStatus,
 	McpServerStatus,
 	OAuthReconnectPrompt,
 	parseAuthRequiredError,
@@ -88,6 +89,7 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "../../components/ui/tooltip";
+import { env } from "../../env";
 import {
 	type ConvoStreamState,
 	type StreamPart,
@@ -109,6 +111,8 @@ export const Route = createFileRoute("/chat/")({
 	component: ChatPage,
 });
 
+const FASTAPI_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
+
 const SUGGESTED_PROMPTS = [
 	"Help me write a Python script to process CSV files",
 	"Explain how WebSockets work in simple terms",
@@ -128,6 +132,7 @@ const EMPTY_STREAM_STATE: ConvoStreamState = {
 
 function ChatPage() {
 	const navigate = useNavigate();
+	const { getToken } = useAuth();
 	const { harnessId: initialHarnessId } = Route.useSearch();
 
 	const { data: harnesses, isLoading: harnessesLoading } = useQuery(
@@ -164,6 +169,11 @@ function ChatPage() {
 	};
 	const [mcpFailures, setMcpFailures] = useState<McpFailure[]>([]);
 	const mcpFailureIdRef = useRef(0);
+
+	// MCP server health check statuses (keyed by server URL)
+	const [mcpHealthStatuses, setMcpHealthStatuses] = useState<
+		Record<string, HealthStatus>
+	>({});
 
 	// Track conversations that just finished streaming (show green checkmark briefly)
 	const [doneConvoIds, setDoneConvoIds] = useState<Set<string>>(new Set());
@@ -505,6 +515,84 @@ function ChatPage() {
 
 	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
 
+	// Health-check MCP servers when harness changes
+	// biome-ignore lint/correctness/useExhaustiveDependencies: only re-run when harness ID changes
+	useEffect(() => {
+		if (!activeHarness || activeHarness.mcpServers.length === 0) {
+			setMcpHealthStatuses({});
+			return;
+		}
+
+		// Set all servers to "checking"
+		const checking: Record<string, HealthStatus> = {};
+		for (const s of activeHarness.mcpServers) {
+			checking[s.url] = "checking";
+		}
+		setMcpHealthStatuses(checking);
+
+		let cancelled = false;
+
+		const runCheck = async () => {
+			try {
+				const token = await getToken();
+				const res = await fetch(`${FASTAPI_URL}/api/mcp/health/check`, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						...(token ? { Authorization: `Bearer ${token}` } : {}),
+					},
+					body: JSON.stringify({
+						mcp_servers: activeHarness.mcpServers.map((s) => ({
+							name: s.name,
+							url: s.url,
+							auth_type: s.authType,
+							...(s.authToken ? { auth_token: s.authToken } : {}),
+						})),
+						force: true,
+					}),
+				});
+
+				if (cancelled) return;
+
+				if (!res.ok) {
+					const fallback: Record<string, HealthStatus> = {};
+					for (const s of activeHarness.mcpServers) {
+						fallback[s.url] = "unreachable";
+					}
+					setMcpHealthStatuses(fallback);
+					return;
+				}
+
+				const data = await res.json();
+				if (cancelled) return;
+
+				const statuses: Record<string, HealthStatus> = {};
+				for (const server of data.servers) {
+					if (server.status === "ok") {
+						statuses[server.url] = "reachable";
+					} else if (server.status === "auth_required") {
+						statuses[server.url] = "auth_required";
+					} else {
+						statuses[server.url] = "unreachable";
+					}
+				}
+				setMcpHealthStatuses(statuses);
+			} catch {
+				if (cancelled) return;
+				const fallback: Record<string, HealthStatus> = {};
+				for (const s of activeHarness.mcpServers) {
+					fallback[s.url] = "unreachable";
+				}
+				setMcpHealthStatuses(fallback);
+			}
+		};
+
+		runCheck();
+		return () => {
+			cancelled = true;
+		};
+	}, [activeHarness?._id, getToken]);
+
 	const handleInterrupt = useCallback(
 		(convoId: string) => {
 			chatStream.cancel(convoId);
@@ -679,6 +767,7 @@ function ChatPage() {
 					sidebarOpen={sidebarOpen}
 					onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
 					isStreaming={isActiveConvoStreaming}
+					mcpHealthStatuses={mcpHealthStatuses}
 				/>
 
 				<McpFailureBanner
@@ -1144,6 +1233,7 @@ function ChatHeader({
 	sidebarOpen,
 	onToggleSidebar,
 	isStreaming,
+	mcpHealthStatuses,
 }: {
 	harness?: {
 		_id: Id<"harnesses">;
@@ -1167,6 +1257,7 @@ function ChatHeader({
 	sidebarOpen: boolean;
 	onToggleSidebar: () => void;
 	isStreaming: boolean;
+	mcpHealthStatuses?: Record<string, HealthStatus>;
 }) {
 	return (
 		<header className="flex items-center justify-between border-b border-border px-4 py-2.5">
@@ -1223,7 +1314,10 @@ function ChatHeader({
 				</DropdownMenu>
 
 				{harness && harness.mcpServers.length > 0 && (
-					<McpServerStatus servers={harness.mcpServers} />
+					<McpServerStatus
+						servers={harness.mcpServers}
+						healthStatuses={mcpHealthStatuses}
+					/>
 				)}
 			</div>
 		</header>
