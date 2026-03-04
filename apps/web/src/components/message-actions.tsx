@@ -28,14 +28,14 @@ export function MessageActions({
 	const showCopy = displayMode === "standard" || displayMode === "developer";
 	const showRegenerate =
 		displayMode === "developer" && role === "assistant" && onRegenerate;
-	const showUsage =
-		displayMode === "developer" && role === "assistant" && usage;
+	const showInfo =
+		displayMode === "developer" && role === "assistant" && (usage || model);
 
 	return (
 		<div className="flex items-center gap-3 pt-1 opacity-0 transition-opacity group-hover:opacity-100">
 			{showCopy && <CopyMessageButton text={content} />}
 			{showRegenerate && <RegenerateButton onClick={onRegenerate} />}
-			{showUsage && <UsageInfo usage={usage} model={model} />}
+			{showInfo && <UsageInfo usage={usage} model={model} />}
 		</div>
 	);
 }
@@ -85,17 +85,19 @@ function RegenerateButton({ onClick }: { onClick: () => void }) {
 	);
 }
 
-function UsageInfo({ usage, model }: { usage: UsageData; model?: string }) {
+function UsageInfo({ usage, model }: { usage?: UsageData; model?: string }) {
 	const parts: string[] = [];
 
 	if (model) {
 		parts.push(model);
 	}
 
-	parts.push(`${usage.promptTokens} in / ${usage.completionTokens} out`);
+	if (usage) {
+		parts.push(`${usage.promptTokens} in / ${usage.completionTokens} out`);
 
-	if (usage.cost != null) {
-		parts.push(`$${usage.cost.toFixed(4)}`);
+		if (usage.cost != null) {
+			parts.push(`$${usage.cost.toFixed(4)}`);
+		}
 	}
 
 	return (

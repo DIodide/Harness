@@ -24,15 +24,18 @@ import {
 	Plus,
 	Settings,
 	Sparkles,
+	Square,
 	Trash2,
 	User,
 	Wrench,
+	X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import {
 	type KeyboardEvent,
 	useCallback,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -137,10 +140,74 @@ function ChatPage() {
 	const [streamStates, setStreamStates] = useState<
 		Record<string, ConvoStreamState>
 	>({});
+	const streamStatesRef = useRef(streamStates);
+	useEffect(() => {
+		streamStatesRef.current = streamStates;
+	}, [streamStates]);
 
 	// Track conversations that just finished streaming (show green checkmark briefly)
 	const [doneConvoIds, setDoneConvoIds] = useState<Set<string>>(new Set());
 	const prevStreamingRef = useRef<Set<string>>(new Set());
+
+	// Lift messages query to ChatPage for queue processing
+	const { data: activeMessages } = useQuery(
+		convexQuery(
+			api.messages.list,
+			activeConvoId ? { conversationId: activeConvoId } : "skip",
+		),
+	);
+	const activeMessagesRef = useRef(activeMessages);
+	useEffect(() => {
+		activeMessagesRef.current = activeMessages;
+	}, [activeMessages]);
+
+	// Message queue state
+	type QueueItem = { id: number; content: string };
+	const [messageQueue, setMessageQueue] = useState<QueueItem[]>([]);
+	const messageQueueRef = useRef<QueueItem[]>([]);
+	const queueIdCounter = useRef(0);
+	const pendingQueueSendRef = useRef<{
+		convoId: string;
+		content: string;
+	} | null>(null);
+
+	const enqueueMessage = useCallback((content: string) => {
+		const item: QueueItem = { id: ++queueIdCounter.current, content };
+		messageQueueRef.current = [...messageQueueRef.current, item];
+		setMessageQueue([...messageQueueRef.current]);
+	}, []);
+
+	const dequeueMessage = useCallback((index: number) => {
+		messageQueueRef.current = messageQueueRef.current.filter(
+			(_, i) => i !== index,
+		);
+		setMessageQueue([...messageQueueRef.current]);
+	}, []);
+
+	const shiftQueue = useCallback(() => {
+		const [next, ...rest] = messageQueueRef.current;
+		messageQueueRef.current = rest;
+		setMessageQueue(rest);
+		return next?.content;
+	}, []);
+
+	// Clear queue on conversation switch
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally resets queue when active conversation changes
+	useEffect(() => {
+		messageQueueRef.current = [];
+		setMessageQueue([]);
+		pendingQueueSendRef.current = null;
+	}, [activeConvoId]);
+
+	// Save interrupted assistant message from frontend
+	const saveInterruptedMsg = useMutation({
+		mutationFn: useConvexMutation(api.messages.saveInterruptedMessage),
+	});
+
+	// Save user message (used for queue processing)
+	const sendMessageFromQueue = useMutation({
+		mutationFn: useConvexMutation(api.messages.send),
+	});
 
 	const chatStream = useChatStream({
 		onToken: (convoId, content) => {
@@ -231,15 +298,6 @@ function ChatPage() {
 				};
 			});
 		},
-		onUsage: (convoId, usage) => {
-			setStreamStates((prev) => ({
-				...prev,
-				[convoId]: {
-					...(prev[convoId] ?? EMPTY_STREAM_STATE),
-					usage,
-				},
-			}));
-		},
 		onDone: (convoId, fullContent, usage, model) => {
 			setStreamStates((prev) => ({
 				...prev,
@@ -249,8 +307,8 @@ function ChatPage() {
 					toolCalls: prev[convoId]?.toolCalls ?? [],
 					parts: prev[convoId]?.parts ?? [],
 					pendingDoneContent: fullContent,
-					usage: usage ?? null,
-					model: model ?? null,
+					usage: usage ?? prev[convoId]?.usage ?? null,
+					model: model ?? prev[convoId]?.model ?? null,
 				},
 			}));
 		},
@@ -261,6 +319,91 @@ function ChatPage() {
 				delete next[convoId];
 				return next;
 			});
+		},
+		onAbort: (convoId) => {
+			const state = streamStatesRef.current[convoId];
+
+			// If onDone already fired (pendingDoneContent is set), the backend already
+			// saved the message — don't save a duplicate interrupted copy.
+			if (
+				state?.pendingDoneContent !== null &&
+				state?.pendingDoneContent !== undefined
+			) {
+				// Just process queued messages if any
+				if (
+					!pendingQueueSendRef.current &&
+					messageQueueRef.current.length > 0
+				) {
+					const next = shiftQueue();
+					if (next) {
+						pendingQueueSendRef.current = { convoId, content: next };
+					}
+				}
+				return;
+			}
+
+			if (
+				!state ||
+				(!state.content && !state.reasoning && state.toolCalls.length === 0)
+			) {
+				// Nothing accumulated — just clear state
+				setStreamStates((prev) => {
+					const next = { ...prev };
+					delete next[convoId];
+					return next;
+				});
+			} else {
+				// Filter: only keep completed tool calls (those with results)
+				const completedToolCalls = state.toolCalls.filter(
+					(tc) => tc.result,
+				) as Array<{
+					tool: string;
+					arguments: Record<string, unknown>;
+					call_id: string;
+					result: string;
+				}>;
+				const cleanedParts = state.parts.filter(
+					(p) => p.type !== "tool_call" || p.result,
+				);
+
+				const partialContent = state.content ?? "";
+				// model is only sent in the "done" event which doesn't fire on abort,
+				// so fall back to the active harness model
+				const model = state.model ?? activeHarness?.model ?? null;
+
+				saveInterruptedMsg.mutate({
+					conversationId: convoId as Id<"conversations">,
+					content: partialContent,
+					...(state.reasoning ? { reasoning: state.reasoning } : {}),
+					...(completedToolCalls.length > 0
+						? { toolCalls: completedToolCalls }
+						: {}),
+					...(cleanedParts.length > 0 ? { parts: cleanedParts } : {}),
+					...(state.usage ? { usage: state.usage } : {}),
+					...(model ? { model } : {}),
+				});
+
+				// Keep streaming bubble visible until Convex syncs the interrupted message
+				// (same pattern as onDone — set pendingDoneContent so convexHasMessage can match)
+				setStreamStates((prev) => ({
+					...prev,
+					[convoId]: {
+						...state,
+						toolCalls: completedToolCalls,
+						parts: cleanedParts,
+						pendingDoneContent: partialContent,
+						model,
+					},
+				}));
+			}
+
+			// Process next queued message if any (skip if handleSendNow already set one)
+			if (!pendingQueueSendRef.current && messageQueueRef.current.length > 0) {
+				const next = shiftQueue();
+				if (next) {
+					pendingQueueSendRef.current = { convoId, content: next };
+				}
+			}
 		},
 	});
 
@@ -297,13 +440,103 @@ function ChatPage() {
 		prevStreamingRef.current = new Set(curr);
 	}, [chatStream.streamingConvoIds]);
 
-	const handleStreamSynced = useCallback((convoId: string) => {
-		setStreamStates((prev) => {
-			const next = { ...prev };
-			delete next[convoId];
-			return next;
-		});
-	}, []);
+	const handleStreamSynced = useCallback(
+		(convoId: string) => {
+			setStreamStates((prev) => {
+				const next = { ...prev };
+				delete next[convoId];
+				return next;
+			});
+
+			// Process next queued message now that Convex has synced
+			if (messageQueueRef.current.length > 0) {
+				const next = shiftQueue();
+				if (next) {
+					pendingQueueSendRef.current = { convoId, content: next };
+				}
+			}
+		},
+		[shiftQueue],
+	);
+
+	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
+
+	const handleInterrupt = useCallback(
+		(convoId: string) => {
+			chatStream.cancel(convoId);
+		},
+		[chatStream],
+	);
+
+	const handleSendNow = useCallback(
+		(index: number) => {
+			if (!activeConvoId) return;
+			const item = messageQueueRef.current[index];
+			if (!item) return;
+			// Remove this message from queue
+			messageQueueRef.current = messageQueueRef.current.filter(
+				(_, i) => i !== index,
+			);
+			setMessageQueue([...messageQueueRef.current]);
+			// Set it as the pending send and interrupt
+			pendingQueueSendRef.current = {
+				convoId: activeConvoId,
+				content: item.content,
+			};
+			chatStream.cancel(activeConvoId);
+		},
+		[activeConvoId, chatStream],
+	);
+
+	// Process pending queued messages after stream ends
+	useEffect(() => {
+		const pending = pendingQueueSendRef.current;
+		if (!pending || !activeHarness) return;
+
+		const convoId = pending.convoId;
+		// Wait until the conversation is no longer streaming
+		if (chatStream.streamingConvoIds.has(convoId)) return;
+
+		pendingQueueSendRef.current = null;
+
+		const run = async () => {
+			await sendMessageFromQueue.mutateAsync({
+				conversationId: convoId as Id<"conversations">,
+				role: "user",
+				content: pending.content,
+				harnessId: activeHarness._id,
+			});
+
+			// Build history from current messages + the new user message
+			const msgs = activeMessagesRef.current ?? [];
+			const history = [
+				...msgs.map((m) => ({ role: m.role, content: m.content })),
+				{ role: "user", content: pending.content },
+			];
+
+			chatStream.stream({
+				messages: history,
+				harness: {
+					model: activeHarness.model,
+					mcp_servers: activeHarness.mcpServers.map((s) => ({
+						name: s.name,
+						url: s.url,
+						auth_type: s.authType as "none" | "bearer" | "oauth",
+						auth_token: s.authToken,
+					})),
+					name: activeHarness.name,
+				},
+				conversation_id: convoId,
+			});
+		};
+
+		run();
+	}, [
+		chatStream.streamingConvoIds,
+		activeHarness,
+		chatStream,
+		sendMessageFromQueue,
+	]);
 
 	const handleSelectConversation = useCallback(
 		(convoId: Id<"conversations"> | null) => {
@@ -326,8 +559,6 @@ function ChatPage() {
 		},
 		[userSettings, conversations, harnesses],
 	);
-
-	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
 
 	const removeMessage = useMutation({
 		mutationFn: useConvexMutation(api.messages.remove),
@@ -409,6 +640,7 @@ function ChatPage() {
 				{activeConvoId ? (
 					<ChatMessages
 						conversationId={activeConvoId}
+						messages={activeMessages ?? []}
 						streamingContent={activeStreamState.content}
 						streamingReasoning={activeStreamState.reasoning}
 						activeToolCalls={activeStreamState.toolCalls}
@@ -433,6 +665,12 @@ function ChatPage() {
 					onConvoCreated={handleSelectConversation}
 					isStreaming={isActiveConvoStreaming}
 					onStream={chatStream.stream}
+					onInterrupt={handleInterrupt}
+					onEnqueue={enqueueMessage}
+					messages={activeMessages}
+					messageQueue={messageQueue}
+					onDequeue={dequeueMessage}
+					onSendNow={handleSendNow}
 				/>
 			</div>
 		</div>
@@ -858,6 +1096,7 @@ function ChatHeader({
 
 function ChatMessages({
 	conversationId,
+	messages,
 	streamingContent,
 	streamingReasoning,
 	activeToolCalls,
@@ -871,6 +1110,34 @@ function ChatMessages({
 	isStreaming,
 }: {
 	conversationId: Id<"conversations">;
+	messages: Array<{
+		_id: Id<"messages">;
+		role: "user" | "assistant";
+		content: string;
+		reasoning?: string;
+		toolCalls?: Array<{
+			tool: string;
+			arguments: unknown;
+			call_id: string;
+			result: string;
+		}>;
+		parts?: Array<{
+			type: "text" | "reasoning" | "tool_call";
+			content?: string;
+			tool?: string;
+			arguments?: unknown;
+			call_id?: string;
+			result?: string;
+		}>;
+		usage?: {
+			promptTokens: number;
+			completionTokens: number;
+			totalTokens: number;
+			cost?: number;
+		};
+		model?: string;
+		interrupted?: boolean;
+	}>;
 	streamingContent: string | null;
 	streamingReasoning: string | null;
 	activeToolCalls: ToolCallEvent[];
@@ -886,9 +1153,6 @@ function ChatMessages({
 	) => void;
 	isStreaming: boolean;
 }) {
-	const { data: messages, isLoading } = useQuery(
-		convexQuery(api.messages.list, { conversationId }),
-	);
 	const scrollRef = useRef<HTMLDivElement>(null);
 
 	// Detect whether Convex has synced the assistant message (computed during render)
@@ -920,15 +1184,7 @@ function ChatMessages({
 		}
 	}, [messages, streamingContent, streamingReasoning]);
 
-	if (isLoading) {
-		return (
-			<div className="flex flex-1 items-center justify-center">
-				<div className="h-5 w-5 animate-spin border-2 border-foreground border-t-transparent" />
-			</div>
-		);
-	}
-
-	if ((!messages || messages.length === 0) && !isActivelyStreaming) {
+	if (messages.length === 0 && !isActivelyStreaming) {
 		return (
 			<div className="flex flex-1 items-center justify-center">
 				<p className="text-sm text-muted-foreground">
@@ -1052,6 +1308,12 @@ function ChatMessages({
 										</>
 									)}
 								</div>
+								{msg.role === "assistant" && msg.interrupted && (
+									<div className="mt-1 flex items-center gap-1.5 text-xs text-amber-500">
+										<span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
+										Response interrupted
+									</div>
+								)}
 								<MessageActions
 									content={msg.content}
 									role={msg.role}
@@ -1357,6 +1619,12 @@ function ChatInput({
 	onConvoCreated,
 	isStreaming,
 	onStream,
+	onInterrupt,
+	onEnqueue,
+	messages: existingMessages,
+	messageQueue,
+	onDequeue,
+	onSendNow,
 }: {
 	conversationId: Id<"conversations"> | null;
 	activeHarness?: {
@@ -1366,7 +1634,7 @@ function ChatInput({
 		mcpServers: Array<{
 			name: string;
 			url: string;
-			authType: "none" | "bearer";
+			authType: "none" | "bearer" | "oauth";
 			authToken?: string;
 		}>;
 	};
@@ -1379,16 +1647,35 @@ function ChatInput({
 			mcp_servers: Array<{
 				name: string;
 				url: string;
-				auth_type: "none" | "bearer";
+				auth_type: "none" | "bearer" | "oauth";
 				auth_token?: string;
 			}>;
 			name: string;
 		};
 		conversation_id: string;
 	}) => Promise<void>;
+	onInterrupt: (convoId: string) => void;
+	onEnqueue: (content: string) => void;
+	messages?: Array<{ role: string; content: string }>;
+	messageQueue: { id: number; content: string }[];
+	onDequeue: (index: number) => void;
+	onSendNow: (index: number) => void;
 }) {
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+	// Prompt history state
+	const [historyIndex, setHistoryIndex] = useState(-1);
+	const [draft, setDraft] = useState("");
+
+	const userPrompts = useMemo(
+		() =>
+			existingMessages
+				?.filter((m) => m.role === "user")
+				.map((m) => m.content)
+				.reverse() ?? [],
+		[existingMessages],
+	);
 
 	const createConvo = useMutation({
 		mutationFn: useConvexMutation(api.conversations.create),
@@ -1396,14 +1683,6 @@ function ChatInput({
 	const sendMessage = useMutation({
 		mutationFn: useConvexMutation(api.messages.send),
 	});
-
-	// Fetch messages for context when sending
-	const { data: existingMessages } = useQuery(
-		convexQuery(
-			api.messages.list,
-			conversationId ? { conversationId } : "skip",
-		),
-	);
 
 	const adjustHeight = useCallback(() => {
 		const ta = textareaRef.current;
@@ -1420,9 +1699,17 @@ function ChatInput({
 
 	const handleSend = async () => {
 		const content = text.trim();
-		if (!content || !activeHarness || isStreaming) return;
+		if (!content || !activeHarness) return;
 
 		setText("");
+		setHistoryIndex(-1);
+		setDraft("");
+
+		// If streaming, just enqueue — don't interrupt
+		if (isStreaming && conversationId) {
+			onEnqueue(content);
+			return;
+		}
 
 		// Snapshot harness config at send time (convert to snake_case for FastAPI)
 		const harnessConfig = {
@@ -1430,7 +1717,7 @@ function ChatInput({
 			mcp_servers: activeHarness.mcpServers.map((s) => ({
 				name: s.name,
 				url: s.url,
-				auth_type: s.authType,
+				auth_type: s.authType as "none" | "bearer" | "oauth",
 				auth_token: s.authToken,
 			})),
 			name: activeHarness.name,
@@ -1474,17 +1761,111 @@ function ChatInput({
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault();
 			handleSend();
+			return;
+		}
+
+		if (e.key === "ArrowUp") {
+			// Trigger history when empty or single-line (no newlines) so first press works
+			const isSingleLine = !text.includes("\n");
+			if (isSingleLine || !text) {
+				if (userPrompts.length === 0) return;
+				e.preventDefault();
+				if (historyIndex === -1) {
+					setDraft(text);
+					setHistoryIndex(0);
+					setText(userPrompts[0]);
+				} else if (historyIndex < userPrompts.length - 1) {
+					const nextIndex = historyIndex + 1;
+					setHistoryIndex(nextIndex);
+					setText(userPrompts[nextIndex]);
+				}
+			}
+		}
+
+		if (e.key === "ArrowDown") {
+			const ta = textareaRef.current;
+			if (ta && historyIndex >= 0) {
+				e.preventDefault();
+				if (historyIndex > 0) {
+					const nextIndex = historyIndex - 1;
+					setHistoryIndex(nextIndex);
+					setText(userPrompts[nextIndex]);
+				} else {
+					setHistoryIndex(-1);
+					setText(draft);
+				}
+			}
 		}
 	};
+
+	const showStopButton = isStreaming && !text.trim();
 
 	return (
 		<div className="border-t border-border px-4 py-3">
 			<div className="mx-auto max-w-3xl">
+				{/* Queued messages as chips above the input */}
+				<AnimatePresence>
+					{messageQueue.length > 0 && (
+						<motion.div
+							initial={{ opacity: 0, height: 0 }}
+							animate={{ opacity: 1, height: "auto" }}
+							exit={{ opacity: 0, height: 0 }}
+							className="mb-2 flex flex-col gap-1.5 overflow-hidden"
+						>
+							{messageQueue.map((item, idx) => (
+								<motion.div
+									key={item.id}
+									initial={{ opacity: 0, x: -8 }}
+									animate={{ opacity: 1, x: 0 }}
+									exit={{ opacity: 0, x: 8 }}
+									className="group/q flex items-start gap-2 rounded border border-border bg-muted/50 px-2.5 py-1.5"
+								>
+									<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+										{item.content}
+									</span>
+									<div className="flex shrink-0 items-center gap-1">
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<button
+													type="button"
+													onClick={() => onSendNow(idx)}
+													className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+												>
+													<ArrowUp size={12} />
+												</button>
+											</TooltipTrigger>
+											<TooltipContent>Send now</TooltipContent>
+										</Tooltip>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<button
+													type="button"
+													onClick={() => onDequeue(idx)}
+													className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+												>
+													<X size={12} />
+												</button>
+											</TooltipTrigger>
+											<TooltipContent>Remove</TooltipContent>
+										</Tooltip>
+									</div>
+								</motion.div>
+							))}
+						</motion.div>
+					)}
+				</AnimatePresence>
+
 				<div className="flex items-end gap-2 border border-border bg-background px-3 py-2 focus-within:border-foreground/30">
 					<textarea
 						ref={textareaRef}
 						value={text}
-						onChange={(e) => setText(e.target.value)}
+						onChange={(e) => {
+							setText(e.target.value);
+							if (historyIndex !== -1) {
+								setHistoryIndex(-1);
+								setDraft("");
+							}
+						}}
 						onKeyDown={handleKeyDown}
 						placeholder="Send a message..."
 						rows={1}
@@ -1494,18 +1875,31 @@ function ChatInput({
 						<TooltipTrigger asChild>
 							<Button
 								size="icon-xs"
-								onClick={handleSend}
+								onClick={() => {
+									if (showStopButton && conversationId) {
+										onInterrupt(conversationId);
+									} else {
+										handleSend();
+									}
+								}}
 								disabled={
-									!text.trim() ||
-									isStreaming ||
-									sendMessage.isPending ||
-									createConvo.isPending
+									!showStopButton &&
+									(!text.trim() ||
+										sendMessage.isPending ||
+										createConvo.isPending)
 								}
+								variant={showStopButton ? "destructive" : "default"}
 							>
-								<ArrowUp size={14} />
+								{showStopButton ? <Square size={10} /> : <ArrowUp size={14} />}
 							</Button>
 						</TooltipTrigger>
-						<TooltipContent>Send message</TooltipContent>
+						<TooltipContent>
+							{showStopButton
+								? "Stop generation"
+								: isStreaming
+									? "Queue message"
+									: "Send message"}
+						</TooltipContent>
 					</Tooltip>
 				</div>
 				<p className="mt-1.5 text-center text-[10px] text-muted-foreground">

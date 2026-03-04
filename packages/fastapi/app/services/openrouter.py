@@ -36,7 +36,9 @@ async def stream_chat(
         "messages": messages,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "max_tokens": 16000 if is_thinking else 4096,
+        "max_tokens": 16000
+        if is_thinking
+        else 4096,  # This used to be 64k and 16k, this lobotomizes the model and significantly changes how the response vibes are.
     }
     if is_thinking:
         payload["reasoning"] = {"effort": "high"}
@@ -87,7 +89,9 @@ async def stream_chat(
                     if fr:
                         logger.debug("OpenRouter finish_reason: %s", fr)
                     if delta.get("tool_calls"):
-                        logger.debug("OpenRouter tool_call delta: %s", delta["tool_calls"])
+                        logger.debug(
+                            "OpenRouter tool_call delta: %s", delta["tool_calls"]
+                        )
                 yield parsed
             except json.JSONDecodeError:
                 logger.warning("Failed to parse SSE chunk: %s", data[:200])

@@ -45,7 +45,6 @@ interface UseChatStreamCallbacks {
 		conversationId: string,
 		event: { call_id: string; result: string },
 	) => void;
-	onUsage: (conversationId: string, usage: UsageData) => void;
 	onDone: (
 		conversationId: string,
 		fullContent: string,
@@ -53,6 +52,7 @@ interface UseChatStreamCallbacks {
 		model?: string,
 	) => void;
 	onError: (conversationId: string, error: string) => void;
+	onAbort?: (conversationId: string) => void;
 }
 
 export interface ChatStreamRequest {
@@ -146,9 +146,6 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 									case "tool_result":
 										cbRef.current.onToolResult(convoId, data);
 										break;
-									case "usage":
-										cbRef.current.onUsage(convoId, data);
-										break;
 									case "done":
 										cbRef.current.onDone(
 											convoId,
@@ -169,7 +166,9 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 					}
 				}
 			} catch (err: unknown) {
-				if (err instanceof Error && err.name !== "AbortError") {
+				if (err instanceof Error && err.name === "AbortError") {
+					cbRef.current.onAbort?.(convoId);
+				} else if (err instanceof Error) {
 					cbRef.current.onError(convoId, err.message);
 				}
 			} finally {

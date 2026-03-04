@@ -73,3 +73,43 @@ async def save_assistant_message(
             "Unexpected error saving assistant message for conversation '%s'",
             conversation_id,
         )
+
+
+async def patch_message_usage(
+    http_client: httpx.AsyncClient,
+    conversation_id: str,
+    usage: dict,
+    model: str | None = None,
+) -> None:
+    """Backfill usage data on the last assistant message of a conversation."""
+    if not settings.convex_url or not settings.convex_deploy_key:
+        return
+
+    logger.info("Patching usage for conversation '%s'", conversation_id)
+
+    args: dict = {
+        "conversationId": conversation_id,
+        "usage": usage,
+    }
+    if model:
+        args["model"] = model
+
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/mutation",
+            headers={
+                "Authorization": f"Convex {settings.convex_deploy_key}",
+            },
+            json={
+                "path": "messages:patchMessageUsage",
+                "args": args,
+                "format": "json",
+            },
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        logger.info("Patched usage for conversation '%s'", conversation_id)
+    except Exception:
+        logger.exception(
+            "Failed to patch usage for conversation '%s'", conversation_id
+        )
