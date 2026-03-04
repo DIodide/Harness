@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Request
 from sse_starlette.sse import EventSourceResponse
 from app.dependencies import get_current_user, get_http_client
 from app.models import ChatRequest
-from app.services.convex import save_assistant_message
+from app.services.convex import save_assistant_message, patch_message_usage
 from app.services.mcp_client import call_tool, list_tools
 from app.services.openrouter import stream_chat
 
@@ -36,7 +36,9 @@ async def chat_stream(
         # Fetch available MCP tools for this harness
         tools: list[dict] | None = None
         if body.harness.mcp_servers:
-            tools = await list_tools(http_client, body.harness.mcp_servers, user_id=user_id)
+            tools = await list_tools(
+                http_client, body.harness.mcp_servers, user_id=user_id
+            )
             if not tools:
                 tools = None
 
@@ -58,6 +60,8 @@ async def chat_stream(
             collected_tool_calls: list[dict] = []
             finish_reason: str | None = None
 
+            client_disconnected = False
+
             try:
                 async for chunk in stream_chat(
                     http_client,
@@ -65,42 +69,25 @@ async def chat_stream(
                     body.harness.model,
                     tools,
                 ):
-                    if await request.is_disconnected():
+                    if not client_disconnected and await request.is_disconnected():
                         logger.info(
-                            "Client disconnected from conversation '%s'",
+                            "Client disconnected from conversation '%s', draining stream for usage",
                             body.conversation_id,
                         )
-                        return
+                        client_disconnected = True
 
                     if chunk.get("type") == "done":
                         break
 
-                    # Capture usage & model (present on each chunk)
-                    if chunk.get("usage"):
-                        collected_usage = chunk["usage"]
-                        yield {
-                            "event": "usage",
-                            "data": json.dumps(
-                                {
-                                    "promptTokens": collected_usage.get(
-                                        "prompt_tokens", 0
-                                    ),
-                                    "completionTokens": collected_usage.get(
-                                        "completion_tokens", 0
-                                    ),
-                                    "totalTokens": collected_usage.get(
-                                        "total_tokens", 0
-                                    ),
-                                    **(
-                                        {"cost": collected_usage["cost"]}
-                                        if "cost" in collected_usage
-                                        else {}
-                                    ),
-                                }
-                            ),
-                        }
+                    # Always capture usage & model, even after disconnect
                     if chunk.get("model"):
                         collected_model = chunk["model"]
+                    if chunk.get("usage"):
+                        collected_usage = chunk["usage"]
+
+                    # After disconnect, just drain chunks without yielding
+                    if client_disconnected:
+                        continue
 
                     choices = chunk.get("choices", [])
                     if not choices:
@@ -154,6 +141,33 @@ async def chat_stream(
                                     tc["function"]["name"] += fn["name"]
                                 if "arguments" in fn:
                                     tc["function"]["arguments"] += fn["arguments"]
+
+                if client_disconnected:
+                    # Client disconnected but we drained the stream.
+                    # The frontend saved the interrupted message — update it
+                    # with usage data if we captured any.
+                    if collected_usage:
+                        usage_for_update = {
+                            "promptTokens": collected_usage.get("prompt_tokens", 0),
+                            "completionTokens": collected_usage.get(
+                                "completion_tokens", 0
+                            ),
+                            "totalTokens": collected_usage.get("total_tokens", 0),
+                        }
+                        if "cost" in collected_usage:
+                            usage_for_update["cost"] = collected_usage["cost"]
+                        logger.info(
+                            "Captured usage after disconnect for conversation '%s': %s",
+                            body.conversation_id,
+                            usage_for_update,
+                        )
+                        await patch_message_usage(
+                            http_client,
+                            body.conversation_id,
+                            usage_for_update,
+                            collected_model,
+                        )
+                    return
 
             except httpx.HTTPStatusError as e:
                 # Response may be streaming (unread), so use str(e) instead of e.response.text

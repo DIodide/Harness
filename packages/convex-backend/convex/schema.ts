@@ -72,6 +72,7 @@ export default defineSchema({
 			}),
 		),
 		model: v.optional(v.string()),
+		interrupted: v.optional(v.boolean()),
 	}).index("by_conversation", ["conversationId"]),
 
 	mcpOAuthTokens: defineTable({

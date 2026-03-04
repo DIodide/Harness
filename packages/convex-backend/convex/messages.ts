@@ -68,6 +68,79 @@ export const remove = mutation({
 });
 
 /**
+ * Frontend-callable mutation to save a partial assistant message when the user
+ * interrupts a streaming response. Auth-gated to the conversation owner.
+ */
+export const saveInterruptedMessage = mutation({
+	args: {
+		conversationId: v.id("conversations"),
+		content: v.string(),
+		reasoning: v.optional(v.string()),
+		toolCalls: v.optional(
+			v.array(
+				v.object({
+					tool: v.string(),
+					arguments: v.any(),
+					call_id: v.string(),
+					result: v.string(),
+				}),
+			),
+		),
+		parts: v.optional(
+			v.array(
+				v.object({
+					type: v.union(
+						v.literal("text"),
+						v.literal("reasoning"),
+						v.literal("tool_call"),
+					),
+					content: v.optional(v.string()),
+					tool: v.optional(v.string()),
+					arguments: v.optional(v.any()),
+					call_id: v.optional(v.string()),
+					result: v.optional(v.string()),
+				}),
+			),
+		),
+		usage: v.optional(
+			v.object({
+				promptTokens: v.number(),
+				completionTokens: v.number(),
+				totalTokens: v.number(),
+				cost: v.optional(v.number()),
+			}),
+		),
+		model: v.optional(v.string()),
+	},
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+		const convo = await ctx.db.get(args.conversationId);
+		if (!convo || convo.userId !== identity.subject) throw new Error("Not found");
+
+		await ctx.db.insert("messages", {
+			conversationId: args.conversationId,
+			role: "assistant",
+			content: args.content,
+			interrupted: true,
+			...(args.reasoning ? { reasoning: args.reasoning } : {}),
+			...(args.toolCalls && args.toolCalls.length > 0
+				? { toolCalls: args.toolCalls }
+				: {}),
+			...(args.parts && args.parts.length > 0
+				? { parts: args.parts }
+				: {}),
+			...(args.usage ? { usage: args.usage } : {}),
+			...(args.model ? { model: args.model } : {}),
+		});
+
+		await ctx.db.patch(args.conversationId, {
+			lastMessageAt: Date.now(),
+		});
+	},
+});
+
+/**
  * Internal mutation called by the FastAPI backend (via deploy key) to persist
  * assistant messages after streaming completes. Not callable from the frontend.
  */
@@ -134,5 +207,38 @@ export const saveAssistantMessage = internalMutation({
 		await ctx.db.patch(args.conversationId, {
 			lastMessageAt: Date.now(),
 		});
+	},
+});
+
+/**
+ * Internal mutation called by the FastAPI backend to backfill usage data
+ * on an interrupted message after draining the OpenRouter stream.
+ */
+export const patchMessageUsage = internalMutation({
+	args: {
+		conversationId: v.id("conversations"),
+		usage: v.object({
+			promptTokens: v.number(),
+			completionTokens: v.number(),
+			totalTokens: v.number(),
+			cost: v.optional(v.number()),
+		}),
+		model: v.optional(v.string()),
+	},
+	handler: async (ctx, args) => {
+		const messages = await ctx.db
+			.query("messages")
+			.withIndex("by_conversation", (q) =>
+				q.eq("conversationId", args.conversationId),
+			)
+			.collect();
+		const last = messages[messages.length - 1];
+		if (!last || last.role !== "assistant") return;
+
+		const patch: Record<string, unknown> = { usage: args.usage };
+		if (args.model) {
+			patch.model = args.model;
+		}
+		await ctx.db.patch(last._id, patch);
 	},
 });
