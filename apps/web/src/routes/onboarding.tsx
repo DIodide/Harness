@@ -1,3 +1,4 @@
+import { useAuth } from "@clerk/tanstack-react-start";
 import { useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useMutation } from "@tanstack/react-query";
@@ -9,6 +10,8 @@ import {
 	Eye,
 	EyeOff,
 	Layers,
+	Link2,
+	Loader2,
 	Plus,
 	Server,
 	Shield,
@@ -18,7 +21,8 @@ import {
 	Zap,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import { HarnessMark } from "../components/harness-mark";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -78,11 +82,13 @@ const AVAILABLE_SKILLS = [
 	},
 ];
 
-const STEPS = [
+const BASE_STEPS = [
 	{ key: "name", label: "Name & Model", icon: Wrench },
 	{ key: "mcps", label: "MCP Servers", icon: Layers },
 	{ key: "skills", label: "Skills", icon: Zap },
 ];
+
+const CONNECT_STEP = { key: "connect", label: "Connect", icon: Link2 };
 
 function OnboardingPage() {
 	const navigate = useNavigate();
@@ -91,9 +97,23 @@ function OnboardingPage() {
 	const [model, setModel] = useState("");
 	const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
 	const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+	const [oauthConnected, setOauthConnected] = useState<Record<string, boolean>>(
+		{},
+	);
 
 	const [stepIndex, setStepIndex] = useState(0);
-	const currentStep = STEPS[stepIndex]?.key ?? "name";
+
+	const hasOAuthServers = mcpServers.some((s) => s.authType === "oauth");
+
+	const steps = useMemo(() => {
+		if (!hasOAuthServers) return BASE_STEPS;
+		// Insert connect step after MCP Servers
+		return [BASE_STEPS[0], BASE_STEPS[1], CONNECT_STEP, BASE_STEPS[2]];
+	}, [hasOAuthServers]);
+
+	// Clamp stepIndex if steps shrink (e.g. OAuth servers removed while on connect step)
+	const safeIndex = Math.min(stepIndex, steps.length - 1);
+	const currentStep = steps[safeIndex]?.key ?? "name";
 
 	const createHarness = useMutation({
 		mutationFn: useConvexMutation(api.harnesses.create),
@@ -109,11 +129,11 @@ function OnboardingPage() {
 	};
 
 	const handleNext = () => {
-		if (stepIndex < STEPS.length - 1) setStepIndex(stepIndex + 1);
+		if (safeIndex < steps.length - 1) setStepIndex(safeIndex + 1);
 	};
 
 	const handleBack = () => {
-		if (stepIndex > 0) setStepIndex(stepIndex - 1);
+		if (safeIndex > 0) setStepIndex(safeIndex - 1);
 	};
 
 	const handleCreate = () => {
@@ -180,28 +200,28 @@ function OnboardingPage() {
 				</div>
 
 				<div className="mb-10 mt-8 flex items-center justify-center gap-1">
-					{STEPS.map((s, i) => (
+					{steps.map((s, i) => (
 						<div key={s.key} className="flex items-center gap-1">
 							<button
 								type="button"
 								onClick={() => {
-									if (i < stepIndex || canProceed()) setStepIndex(i);
+									if (i < safeIndex || canProceed()) setStepIndex(i);
 								}}
 								className={`flex h-9 items-center gap-2 border px-3 text-xs font-medium transition-colors ${
-									i === stepIndex
+									i === safeIndex
 										? "border-foreground bg-foreground text-background"
-										: i < stepIndex
+										: i < safeIndex
 											? "border-foreground/20 bg-foreground/5 text-foreground"
 											: "border-border text-muted-foreground"
 								}`}
 							>
-								{i < stepIndex ? <Check size={12} /> : <s.icon size={12} />}
+								{i < safeIndex ? <Check size={12} /> : <s.icon size={12} />}
 								<span className="hidden sm:inline">{s.label}</span>
 								<span className="sm:hidden">{i + 1}</span>
 							</button>
-							{i < STEPS.length - 1 && (
+							{i < steps.length - 1 && (
 								<div
-									className={`h-px w-6 ${i < stepIndex ? "bg-foreground/20" : "bg-border"}`}
+									className={`h-px w-6 ${i < safeIndex ? "bg-foreground/20" : "bg-border"}`}
 								/>
 							)}
 						</div>
@@ -232,6 +252,18 @@ function OnboardingPage() {
 									onRemove={handleRemoveServer}
 								/>
 							)}
+							{currentStep === "connect" && (
+								<StepConnect
+									servers={mcpServers.filter((s) => s.authType === "oauth")}
+									connected={oauthConnected}
+									onConnected={(url) =>
+										setOauthConnected((prev) => ({
+											...prev,
+											[url]: true,
+										}))
+									}
+								/>
+							)}
 							{currentStep === "skills" && (
 								<StepSkills selected={selectedSkills} toggle={toggleSkill} />
 							)}
@@ -244,13 +276,13 @@ function OnboardingPage() {
 						variant="outline"
 						size="sm"
 						onClick={handleBack}
-						disabled={stepIndex === 0}
+						disabled={safeIndex === 0}
 					>
 						<ArrowLeft size={14} />
 						Back
 					</Button>
 
-					{stepIndex < STEPS.length - 1 ? (
+					{safeIndex < steps.length - 1 ? (
 						<Button size="sm" onClick={handleNext} disabled={!canProceed()}>
 							Next
 							<ArrowRight size={14} />
@@ -575,8 +607,7 @@ function AddMcpServerForm({
 					className="rounded border border-border bg-muted/30 px-3 py-2"
 				>
 					<p className="text-[11px] text-muted-foreground">
-						OAuth authentication will be configured after creating the harness.
-						You can connect via the harness settings page.
+						You'll be able to connect via OAuth in the next step.
 					</p>
 				</motion.div>
 			)}
@@ -600,6 +631,157 @@ function AddMcpServerForm({
 					Add Server
 				</Button>
 			</div>
+		</motion.div>
+	);
+}
+
+function StepConnect({
+	servers,
+	connected,
+	onConnected,
+}: {
+	servers: McpServerEntry[];
+	connected: Record<string, boolean>;
+	onConnected: (url: string) => void;
+}) {
+	const allConnected = servers.every((s) => connected[s.url]);
+
+	return (
+		<div className="space-y-4">
+			<div>
+				<p className="text-xs text-muted-foreground">
+					Connect your OAuth-authenticated MCP servers. You'll be redirected to
+					each provider to authorize access.
+				</p>
+			</div>
+
+			<div className="space-y-2">
+				{servers.map((server) => (
+					<OAuthConnectRow
+						key={server.url}
+						server={server}
+						isConnected={!!connected[server.url]}
+						onConnected={() => onConnected(server.url)}
+					/>
+				))}
+			</div>
+
+			{allConnected && (
+				<motion.div
+					initial={{ opacity: 0, y: 4 }}
+					animate={{ opacity: 1, y: 0 }}
+					className="flex items-center gap-2 border border-emerald-500/20 bg-emerald-500/5 px-3 py-2"
+				>
+					<Check size={12} className="text-emerald-500" />
+					<p className="text-xs text-emerald-700 dark:text-emerald-400">
+						All servers connected. You're ready to continue.
+					</p>
+				</motion.div>
+			)}
+
+			{!allConnected && (
+				<p className="text-center text-[11px] text-muted-foreground/60">
+					You can skip this step and connect later from harness settings.
+				</p>
+			)}
+		</div>
+	);
+}
+
+function OAuthConnectRow({
+	server,
+	isConnected,
+	onConnected,
+}: {
+	server: McpServerEntry;
+	isConnected: boolean;
+	onConnected: () => void;
+}) {
+	const { getToken } = useAuth();
+	const [connecting, setConnecting] = useState(false);
+	const apiUrl = import.meta.env.VITE_FASTAPI_URL || "http://localhost:8000";
+
+	const handleConnect = useCallback(async () => {
+		setConnecting(true);
+		try {
+			const token = await getToken();
+			const res = await fetch(
+				`${apiUrl}/api/mcp/oauth/start?server_url=${encodeURIComponent(server.url)}`,
+				{
+					headers: { Authorization: `Bearer ${token}` },
+				},
+			);
+			if (!res.ok) throw new Error("Failed to start OAuth");
+			const data = await res.json();
+
+			const popup = window.open(
+				data.authorization_url,
+				"mcp-oauth",
+				"width=600,height=700",
+			);
+
+			const handler = (event: MessageEvent) => {
+				if (event.data?.type === "mcp-oauth-callback") {
+					window.removeEventListener("message", handler);
+					if (event.data.success) {
+						onConnected();
+						toast.success(`Connected to ${server.name}`);
+					} else {
+						toast.error(event.data.error || "OAuth connection failed");
+					}
+					setConnecting(false);
+					popup?.close();
+				}
+			};
+			window.addEventListener("message", handler);
+
+			const interval = setInterval(() => {
+				if (popup?.closed) {
+					clearInterval(interval);
+					window.removeEventListener("message", handler);
+					setConnecting(false);
+				}
+			}, 500);
+		} catch {
+			toast.error("Failed to start OAuth flow");
+			setConnecting(false);
+		}
+	}, [getToken, server.url, server.name, onConnected]);
+
+	return (
+		<motion.div
+			initial={{ opacity: 0, y: 4 }}
+			animate={{ opacity: 1, y: 0 }}
+			className="flex items-center gap-3 border border-border px-3 py-2.5"
+		>
+			<Server size={14} className="shrink-0 text-muted-foreground" />
+			<div className="min-w-0 flex-1">
+				<p className="text-xs font-medium text-foreground">{server.name}</p>
+				<p className="truncate text-[11px] text-muted-foreground">
+					{server.url}
+				</p>
+			</div>
+			{isConnected ? (
+				<Badge variant="secondary" className="shrink-0 gap-1 text-[10px]">
+					<div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+					Connected
+				</Badge>
+			) : (
+				<Button
+					variant="outline"
+					size="sm"
+					className="shrink-0 text-xs"
+					onClick={handleConnect}
+					disabled={connecting}
+				>
+					{connecting ? (
+						<Loader2 size={10} className="animate-spin" />
+					) : (
+						<Shield size={10} />
+					)}
+					Connect
+				</Button>
+			)}
 		</motion.div>
 	);
 }
