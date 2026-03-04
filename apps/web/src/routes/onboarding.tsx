@@ -35,7 +35,10 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../components/ui/select";
+import { env } from "../env";
 import { MODELS } from "../lib/models";
+
+const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
 export const Route = createFileRoute("/onboarding")({
 	beforeLoad: ({ context }) => {
@@ -699,14 +702,13 @@ function OAuthConnectRow({
 }) {
 	const { getToken } = useAuth();
 	const [connecting, setConnecting] = useState(false);
-	const apiUrl = import.meta.env.VITE_FASTAPI_URL || "http://localhost:8000";
 
 	const handleConnect = useCallback(async () => {
 		setConnecting(true);
 		try {
 			const token = await getToken();
 			const res = await fetch(
-				`${apiUrl}/api/mcp/oauth/start?server_url=${encodeURIComponent(server.url)}`,
+				`${API_URL}/api/mcp/oauth/start?server_url=${encodeURIComponent(server.url)}`,
 				{
 					headers: { Authorization: `Bearer ${token}` },
 				},

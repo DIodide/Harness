@@ -39,7 +39,10 @@ import {
 } from "../../components/ui/select";
 import { Separator } from "../../components/ui/separator";
 import { Skeleton } from "../../components/ui/skeleton";
+import { env } from "../../env";
 import { MODELS } from "../../lib/models";
+
+const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
 export const Route = createFileRoute("/harnesses/$harnessId")({
 	beforeLoad: ({ context }) => {
@@ -563,13 +566,12 @@ function OAuthStatusBadge({ serverUrl }: { serverUrl: string }) {
 		"unknown" | "connected" | "disconnected"
 	>("unknown");
 	const [connecting, setConnecting] = useState(false);
-	const apiUrl = import.meta.env.VITE_FASTAPI_URL || "http://localhost:8000";
 
 	const checkStatus = useCallback(async () => {
 		try {
 			const token = await getToken();
 			const res = await fetch(
-				`${apiUrl}/api/mcp/oauth/status?server_url=${encodeURIComponent(serverUrl)}`,
+				`${API_URL}/api/mcp/oauth/status?server_url=${encodeURIComponent(serverUrl)}`,
 				{
 					headers: {
 						Authorization: `Bearer ${token}`,
@@ -595,7 +597,7 @@ function OAuthStatusBadge({ serverUrl }: { serverUrl: string }) {
 		try {
 			const token = await getToken();
 			const res = await fetch(
-				`${apiUrl}/api/mcp/oauth/start?server_url=${encodeURIComponent(serverUrl)}`,
+				`${API_URL}/api/mcp/oauth/start?server_url=${encodeURIComponent(serverUrl)}`,
 				{
 					headers: {
 						Authorization: `Bearer ${token}`,
