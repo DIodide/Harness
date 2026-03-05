@@ -99,3 +99,37 @@ async def stream_chat(
         # If we exit the loop without [DONE], the stream ended unexpectedly
         logger.warning("OpenRouter stream ended without [DONE] marker")
         yield {"type": "done"}
+
+
+async def complete_chat(
+    client: httpx.AsyncClient,
+    messages: list[dict],
+    model: str = "gpt-4.1-mini",
+    max_tokens: int = 512,
+) -> str:
+    """Non-streaming chat completion for lightweight tasks like prompt generation.
+
+    Returns the assistant's response content as a string.
+    """
+    resolved_model = MODEL_MAP.get(model, model)
+    payload = {
+        "model": resolved_model,
+        "messages": messages,
+        "stream": False,
+        "max_tokens": max_tokens,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {settings.openrouter_api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": settings.frontend_url,
+        "X-Title": "Harness",
+    }
+
+    resp = await client.post(OPENROUTER_URL, json=payload, headers=headers, timeout=30.0)
+    resp.raise_for_status()
+    data = resp.json()
+    choices = data.get("choices", [])
+    if not choices:
+        return ""
+    return choices[0].get("message", {}).get("content", "")

@@ -68,10 +68,50 @@ function HarnessEditPage() {
 		}),
 	);
 
+	const { getToken } = useAuth();
+	const updateHarnessFn = useConvexMutation(api.harnesses.update);
 	const updateHarness = useMutation({
-		mutationFn: useConvexMutation(api.harnesses.update),
+		mutationFn: updateHarnessFn,
 		onSuccess: () => {
 			toast.success("Harness saved");
+
+			// Regenerate suggested prompts when MCP servers changed
+			if (mcpServers !== null && mcpServers.length > 0) {
+				(async () => {
+					try {
+						const token = await getToken();
+						const res = await fetch(
+							`${API_URL}/api/mcp/health/generate-prompts`,
+							{
+								method: "POST",
+								headers: {
+									"Content-Type": "application/json",
+									...(token ? { Authorization: `Bearer ${token}` } : {}),
+								},
+								body: JSON.stringify({
+									mcp_servers: mcpServers.map((s) => ({
+										name: s.name,
+										url: s.url,
+										auth_type: s.authType,
+										...(s.authToken ? { auth_token: s.authToken } : {}),
+									})),
+								}),
+							},
+						);
+						if (res.ok) {
+							const data = await res.json();
+							if (data.prompts?.length > 0) {
+								updateHarnessFn({
+									id: harnessId as Id<"harnesses">,
+									suggestedPrompts: data.prompts,
+								});
+							}
+						}
+					} catch {
+						// Non-blocking
+					}
+				})();
+			}
 		},
 	});
 

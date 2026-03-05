@@ -150,6 +150,7 @@ function ChatPage() {
 	const [activeConvoId, setActiveConvoId] =
 		useState<Id<"conversations"> | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
+	const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
 
 	// Per-conversation streaming state
 	const [streamStates, setStreamStates] = useState<
@@ -797,7 +798,10 @@ function ChatPage() {
 						isStreaming={isActiveConvoStreaming}
 					/>
 				) : (
-					<EmptyChat />
+					<EmptyChat
+						suggestedPrompts={activeHarness?.suggestedPrompts}
+						onPromptClick={(text) => setPendingPrompt(text)}
+					/>
 				)}
 
 				<ChatInput
@@ -812,6 +816,8 @@ function ChatPage() {
 					messageQueue={messageQueue}
 					onDequeue={dequeueMessage}
 					onSendNow={handleSendNow}
+					pendingPrompt={pendingPrompt}
+					onPendingPromptConsumed={() => setPendingPrompt(null)}
 				/>
 			</div>
 		</div>
@@ -1826,7 +1832,18 @@ function StreamingUsage({
 	);
 }
 
-function EmptyChat() {
+function EmptyChat({
+	suggestedPrompts,
+	onPromptClick,
+}: {
+	suggestedPrompts?: string[];
+	onPromptClick: (text: string) => void;
+}) {
+	const prompts =
+		suggestedPrompts && suggestedPrompts.length > 0
+			? suggestedPrompts
+			: SUGGESTED_PROMPTS;
+
 	return (
 		<div className="flex flex-1 flex-col items-center justify-center px-4">
 			<motion.div
@@ -1845,13 +1862,15 @@ function EmptyChat() {
 					Ask anything — your agent is equipped and ready.
 				</p>
 				<div className="grid max-w-lg gap-2 sm:grid-cols-2">
-					{SUGGESTED_PROMPTS.map((prompt) => (
-						<div
+					{prompts.slice(0, 4).map((prompt) => (
+						<button
 							key={prompt}
-							className="border border-border p-3 text-left text-xs text-muted-foreground"
+							type="button"
+							onClick={() => onPromptClick(prompt)}
+							className="border border-border p-3 text-left text-xs text-muted-foreground transition-colors hover:border-foreground/20 hover:bg-muted hover:text-foreground"
 						>
 							{prompt}
-						</div>
+						</button>
 					))}
 				</div>
 			</motion.div>
@@ -1871,6 +1890,8 @@ function ChatInput({
 	messageQueue,
 	onDequeue,
 	onSendNow,
+	pendingPrompt,
+	onPendingPromptConsumed,
 }: {
 	conversationId: Id<"conversations"> | null;
 	activeHarness?: {
@@ -1906,9 +1927,23 @@ function ChatInput({
 	messageQueue: { id: number; content: string }[];
 	onDequeue: (index: number) => void;
 	onSendNow: (index: number) => void;
+	pendingPrompt?: string | null;
+	onPendingPromptConsumed?: () => void;
 }) {
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+	// Fill input from suggested prompt click
+	useEffect(() => {
+		if (pendingPrompt) {
+			setText(pendingPrompt);
+			onPendingPromptConsumed?.();
+			// Focus and resize after state update
+			requestAnimationFrame(() => {
+				textareaRef.current?.focus();
+			});
+		}
+	}, [pendingPrompt, onPendingPromptConsumed]);
 
 	// Prompt history state
 	const [historyIndex, setHistoryIndex] = useState(-1);

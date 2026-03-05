@@ -1,6 +1,7 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
+import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import {
@@ -118,10 +119,54 @@ function OnboardingPage() {
 	const safeIndex = Math.min(stepIndex, steps.length - 1);
 	const currentStep = steps[safeIndex]?.key ?? "name";
 
+	const updateHarnessMut = useMutation({
+		mutationFn: useConvexMutation(api.harnesses.update),
+	});
+	const { getToken } = useAuth();
+
 	const createHarness = useMutation({
 		mutationFn: useConvexMutation(api.harnesses.create),
 		onSuccess: (harnessId) => {
-			navigate({ to: "/chat", search: { harnessId } });
+			const id = harnessId as Id<"harnesses">;
+			navigate({ to: "/chat", search: { harnessId: id as string } });
+
+			// Fire-and-forget: generate suggested prompts from MCP tools
+			if (mcpServers.length > 0) {
+				(async () => {
+					try {
+						const token = await getToken();
+						const res = await fetch(
+							`${API_URL}/api/mcp/health/generate-prompts`,
+							{
+								method: "POST",
+								headers: {
+									"Content-Type": "application/json",
+									...(token ? { Authorization: `Bearer ${token}` } : {}),
+								},
+								body: JSON.stringify({
+									mcp_servers: mcpServers.map((s) => ({
+										name: s.name,
+										url: s.url,
+										auth_type: s.authType,
+										...(s.authToken ? { auth_token: s.authToken } : {}),
+									})),
+								}),
+							},
+						);
+						if (res.ok) {
+							const data = await res.json();
+							if (data.prompts?.length > 0) {
+								updateHarnessMut.mutate({
+									id: id,
+									suggestedPrompts: data.prompts,
+								});
+							}
+						}
+					} catch {
+						// Non-blocking — prompts are optional
+					}
+				})();
+			}
 		},
 	});
 

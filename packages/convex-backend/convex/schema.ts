@@ -19,6 +19,7 @@ export default defineSchema({
 			}),
 		),
 		skills: v.array(v.string()),
+		suggestedPrompts: v.optional(v.array(v.string())),
 		userId: v.string(),
 		lastUsedAt: v.optional(v.number()),
 	}).index("by_user", ["userId"]),

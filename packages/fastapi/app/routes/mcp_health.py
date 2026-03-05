@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from typing import Literal
 
@@ -12,7 +13,9 @@ from app.services.mcp_client import (
     McpAuthRequiredError,
     check_server_health,
     evict_session_cache,
+    list_tools,
 )
+from app.services.openrouter import complete_chat
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -76,3 +79,76 @@ async def check_health(
             servers.append(result)
 
     return HealthCheckResponse(servers=servers)
+
+
+class GeneratePromptsRequest(BaseModel):
+    mcp_servers: list[McpServer]
+
+
+class GeneratePromptsResponse(BaseModel):
+    prompts: list[str]
+
+
+@router.post("/generate-prompts", response_model=GeneratePromptsResponse)
+async def generate_prompts(
+    body: GeneratePromptsRequest,
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+    user: dict = Depends(get_current_user),
+):
+    user_id = user.get("sub")
+
+    if not body.mcp_servers:
+        return GeneratePromptsResponse(prompts=[])
+
+    # Fetch available tools from all MCP servers
+    try:
+        tools, _ = await list_tools(http_client, body.mcp_servers, user_id=user_id)
+    except Exception:
+        logger.exception("Failed to fetch tools for prompt generation")
+        return GeneratePromptsResponse(prompts=[])
+
+    if not tools:
+        return GeneratePromptsResponse(prompts=[])
+
+    # Build a summary of available tools
+    tool_descriptions = []
+    for t in tools:
+        fn = t.get("function", {})
+        name = fn.get("name", "unknown")
+        desc = fn.get("description", "")
+        tool_descriptions.append(f"- {name}: {desc}" if desc else f"- {name}")
+
+    tools_text = "\n".join(tool_descriptions[:50])  # Cap at 50 tools
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You generate suggested prompts for an AI chat assistant. "
+                "The assistant has access to tools via MCP servers. "
+                "Given the available tools below, suggest exactly 4 short, "
+                "practical prompts (1 sentence each, under 60 characters) that "
+                "a user might want to try. Return ONLY a JSON array of 4 strings, "
+                "no markdown, no explanation.\n\n"
+                f"Available tools:\n{tools_text}"
+            ),
+        },
+        {
+            "role": "user",
+            "content": "Generate 4 suggested prompts as a JSON array.",
+        },
+    ]
+
+    try:
+        content = await complete_chat(http_client, messages)
+        # Strip markdown fences if present
+        content = content.strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        prompts = json.loads(content)
+        if isinstance(prompts, list) and all(isinstance(p, str) for p in prompts):
+            return GeneratePromptsResponse(prompts=prompts[:4])
+    except Exception:
+        logger.exception("Failed to generate suggested prompts")
+
+    return GeneratePromptsResponse(prompts=[])

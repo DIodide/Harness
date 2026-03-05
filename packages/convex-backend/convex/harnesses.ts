@@ -76,6 +76,7 @@ export const update = mutation({
 			),
 		),
 		skills: v.optional(v.array(v.string())),
+		suggestedPrompts: v.optional(v.array(v.string())),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
