@@ -36,9 +36,9 @@ async def stream_chat(
         "messages": messages,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "max_tokens": 16000
+        "max_tokens": 66000
         if is_thinking
-        else 4096,  # This used to be 64k and 16k, this lobotomizes the model and significantly changes how the response vibes are.
+        else 16096,  # This used to be 64k and 16k, this lobotomizes the model and significantly changes how the response vibes are.
     }
     if is_thinking:
         payload["reasoning"] = {"effort": "high"}
@@ -126,7 +126,9 @@ async def complete_chat(
         "X-Title": "Harness",
     }
 
-    resp = await client.post(OPENROUTER_URL, json=payload, headers=headers, timeout=30.0)
+    resp = await client.post(
+        OPENROUTER_URL, json=payload, headers=headers, timeout=30.0
+    )
     resp.raise_for_status()
     data = resp.json()
     choices = data.get("choices", [])

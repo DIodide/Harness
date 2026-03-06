@@ -139,31 +139,46 @@ async def discover_auth_server(
             client, mcp_server_url
         )
 
-    if not resource_metadata_url:
-        raise OAuthDiscoveryError(
-            f"Could not discover resource metadata for {mcp_server_url}"
-        )
+    scopes_supported: list[str] = []
+    as_meta: dict | None = None
 
-    resource_meta = await _fetch_json(client, resource_metadata_url)
-    auth_servers = resource_meta.get("authorization_servers", [])
-    if not auth_servers:
-        raise OAuthDiscoveryError(
-            f"No authorization_servers in resource metadata "
-            f"for {mcp_server_url}"
-        )
+    if resource_metadata_url:
+        # Standard path: fetch Protected Resource Metadata, then AS metadata
+        resource_meta = await _fetch_json(client, resource_metadata_url)
+        auth_servers = resource_meta.get("authorization_servers", [])
+        if not auth_servers:
+            raise OAuthDiscoveryError(
+                f"No authorization_servers in resource metadata "
+                f"for {mcp_server_url}"
+            )
 
-    scopes_supported = resource_meta.get("scopes_supported", [])
-    auth_server_issuer = auth_servers[0]
-
-    # Step 3: Fetch Authorization Server Metadata
-    as_meta = await _discover_as_metadata(client, auth_server_issuer)
+        scopes_supported = resource_meta.get("scopes_supported", [])
+        auth_server_issuer = auth_servers[0]
+        as_meta = await _discover_as_metadata(client, auth_server_issuer)
+    else:
+        # Fallback: some servers (e.g. Linear) skip Protected Resource Metadata
+        # and serve AS metadata directly on the MCP server's origin.
+        parsed = urlparse(mcp_server_url)
+        mcp_origin = f"{parsed.scheme}://{parsed.netloc}"
+        try:
+            as_meta = await _discover_as_metadata(client, mcp_origin)
+            scopes_supported = as_meta.get("scopes_supported", [])
+            logger.info(
+                "Discovered AS metadata directly on MCP origin %s",
+                mcp_origin,
+            )
+        except OAuthDiscoveryError:
+            raise OAuthDiscoveryError(
+                f"Could not discover resource metadata or AS metadata "
+                f"for {mcp_server_url}"
+            )
 
     authorization_endpoint = as_meta.get("authorization_endpoint")
     token_endpoint = as_meta.get("token_endpoint")
     if not authorization_endpoint or not token_endpoint:
         raise OAuthDiscoveryError(
             f"AS metadata missing required endpoints for "
-            f"{auth_server_issuer}"
+            f"{mcp_server_url}"
         )
 
     code_challenge_methods = as_meta.get(
@@ -171,7 +186,7 @@ async def discover_auth_server(
     )
     if not code_challenge_methods:
         raise OAuthDiscoveryError(
-            f"AS {auth_server_issuer} does not support PKCE"
+            f"AS for {mcp_server_url} does not support PKCE"
         )
 
     meta = AuthServerMeta(
@@ -180,7 +195,7 @@ async def discover_auth_server(
         registration_endpoint=as_meta.get("registration_endpoint"),
         scopes_supported=scopes_supported,
         code_challenge_methods_supported=code_challenge_methods,
-        resource_metadata_url=resource_metadata_url,
+        resource_metadata_url=resource_metadata_url or mcp_server_url,
         supports_cimd=as_meta.get(
             "client_id_metadata_document_supported", False
         ),

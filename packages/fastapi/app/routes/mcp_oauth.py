@@ -44,7 +44,13 @@ async def oauth_start(
         raise HTTPException(status_code=401, detail="Missing user ID in token")
 
     http_client = request.app.state.http_client
-    redirect_uri = f"{settings.fastapi_base_url}/api/mcp/oauth/callback"
+
+    # Derive redirect URI from the incoming request so it works behind proxies/ngrok.
+    # X-Forwarded-* headers are set by Vite's proxy and ngrok.
+    forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host", "localhost:8000")
+    base_url = f"{forwarded_proto}://{forwarded_host}"
+    redirect_uri = f"{base_url}/api/mcp/oauth/callback"
 
     try:
         authorization_url, state = await start_oauth_flow(

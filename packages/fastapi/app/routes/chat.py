@@ -14,7 +14,7 @@ from app.services.openrouter import stream_chat
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ITERATIONS = 30
+MAX_TOOL_ITERATIONS = 50
 
 
 @router.post("/stream")
@@ -46,11 +46,13 @@ async def chat_stream(
             for failure in mcp_failures:
                 yield {
                     "event": "mcp_error",
-                    "data": json.dumps({
-                        "server_name": failure.server_name,
-                        "server_url": failure.server_url,
-                        "reason": failure.reason,
-                    }),
+                    "data": json.dumps(
+                        {
+                            "server_name": failure.server_name,
+                            "server_url": failure.server_url,
+                            "reason": failure.reason,
+                        }
+                    ),
                 }
 
         messages = [m.model_dump() for m in body.messages]
