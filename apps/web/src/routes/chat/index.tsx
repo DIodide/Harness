@@ -1390,6 +1390,23 @@ function ChatMessages({
 	isStreaming: boolean;
 }) {
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const userHasScrolledUp = useRef(false);
+	const isAutoScrolling = useRef(false);
+
+	// Track user scroll position to avoid hijacking scroll during streaming
+	useEffect(() => {
+		const el = scrollRef.current;
+		if (!el) return;
+		const handleScroll = () => {
+			// Ignore scroll events triggered by our own programmatic scrolling
+			if (isAutoScrolling.current) return;
+			const distanceFromBottom =
+				el.scrollHeight - el.scrollTop - el.clientHeight;
+			userHasScrolledUp.current = distanceFromBottom > 100;
+		};
+		el.addEventListener("scroll", handleScroll, { passive: true });
+		return () => el.removeEventListener("scroll", handleScroll);
+	}, []);
 
 	// Detect whether Convex has synced the assistant message (computed during render)
 	const lastMsg = messages?.[messages.length - 1];
@@ -1413,10 +1430,25 @@ function ChatMessages({
 		}
 	}, [convexHasMessage, onStreamSynced, conversationId]);
 
+	// Reset scroll lock when user sends a new message
+	const messageCount = messages?.length ?? 0;
+	const lastMsgRole = messages?.[messages.length - 1]?.role;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: only reset on new user message
+	useEffect(() => {
+		if (lastMsgRole === "user") {
+			userHasScrolledUp.current = false;
+		}
+	}, [messageCount]);
+
 	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new messages and streaming
 	useEffect(() => {
-		if (scrollRef.current) {
+		if (scrollRef.current && !userHasScrolledUp.current) {
+			isAutoScrolling.current = true;
 			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+			// Reset after the browser fires the scroll event
+			requestAnimationFrame(() => {
+				isAutoScrolling.current = false;
+			});
 		}
 	}, [messages, streamingContent, streamingReasoning]);
 
