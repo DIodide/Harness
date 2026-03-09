@@ -36,10 +36,11 @@ async def stream_chat(
         "messages": messages,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "max_tokens": 66000
-        if is_thinking
-        else 16096,  # This used to be 64k and 16k, this lobotomizes the model and significantly changes how the response vibes are.
     }
+    if is_thinking:
+        payload["max_tokens"] = 4096
+    else:
+        payload["max_tokens"] = 16384
     if is_thinking:
         payload["reasoning"] = {"effort": "high"}
     if tools:
