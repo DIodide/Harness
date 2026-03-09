@@ -1,3 +1,4 @@
+import { useAuth } from "@clerk/tanstack-react-start";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
 	ArrowLeftRight,
@@ -477,6 +478,7 @@ function FloatingDots() {
 /* ─────────────────────── Nav ─────────────────────── */
 
 function LandingNav() {
+	const { isSignedIn } = useAuth();
 	const [scrolled, setScrolled] = useState(false);
 	const [open, setOpen] = useState(false);
 
@@ -520,15 +522,26 @@ function LandingNav() {
 				</nav>
 
 				<div className="hidden items-center gap-3 lg:flex">
-					<Button variant="ghost" size="sm" asChild>
-						<Link to="/chat">Log in</Link>
-					</Button>
-					<Button size="sm" asChild>
-						<Link to="/chat">
-							Get Started
-							<ArrowRight size={14} />
-						</Link>
-					</Button>
+					{isSignedIn ? (
+						<Button size="sm" asChild>
+							<Link to="/chat">
+								Chat
+								<ArrowRight size={14} />
+							</Link>
+						</Button>
+					) : (
+						<>
+							<Button variant="ghost" size="sm" asChild>
+								<Link to="/sign-in">Log in</Link>
+							</Button>
+							<Button size="sm" asChild>
+								<Link to="/sign-in">
+									Get Started
+									<ArrowRight size={14} />
+								</Link>
+							</Button>
+						</>
+					)}
 				</div>
 
 				<button
@@ -577,17 +590,28 @@ function LandingNav() {
 							</button>
 							<Separator className="my-2" />
 							<div className="flex flex-col gap-2 pt-1">
-								<Button variant="ghost" className="justify-start" asChild>
-									<Link to="/chat" onClick={() => setOpen(false)}>
-										Log in
-									</Link>
-								</Button>
-								<Button asChild>
-									<Link to="/chat" onClick={() => setOpen(false)}>
-										Get Started
-										<ArrowRight size={14} />
-									</Link>
-								</Button>
+								{isSignedIn ? (
+									<Button asChild>
+										<Link to="/chat" onClick={() => setOpen(false)}>
+											Enter Harness
+											<ArrowRight size={14} />
+										</Link>
+									</Button>
+								) : (
+									<>
+										<Button variant="ghost" className="justify-start" asChild>
+											<Link to="/sign-in" onClick={() => setOpen(false)}>
+												Log in
+											</Link>
+										</Button>
+										<Button asChild>
+											<Link to="/sign-in" onClick={() => setOpen(false)}>
+												Get Started
+												<ArrowRight size={14} />
+											</Link>
+										</Button>
+									</>
+								)}
 							</div>
 						</nav>
 					</motion.div>
@@ -600,6 +624,8 @@ function LandingNav() {
 /* ─────────────────────── Hero Section ─────────────────────── */
 
 function HeroSection() {
+	const { isSignedIn } = useAuth();
+
 	return (
 		<section className="relative overflow-hidden bg-white pb-16 pt-20 text-black md:pb-24 md:pt-28 lg:pb-32 lg:pt-36">
 			<FloatingDots />
@@ -644,8 +670,8 @@ function HeroSection() {
 							className="flex flex-wrap items-center gap-4"
 						>
 							<Button size="lg" asChild>
-								<Link to="/chat">
-									Get Started
+								<Link to={isSignedIn ? "/chat" : "/sign-in"}>
+									{isSignedIn ? "Go to Chat" : "Get Started"}
 									<ArrowRight size={16} />
 								</Link>
 							</Button>
@@ -854,6 +880,8 @@ function HowItWorksSection() {
 /* ─────────────────────── CTA Section ─────────────────────── */
 
 function CTASection() {
+	const { isSignedIn } = useAuth();
+
 	return (
 		<section className="relative overflow-hidden bg-white pb-24 pt-24 text-black md:pb-36 md:pt-36 lg:pb-44 lg:pt-44">
 			<GradientOrb
@@ -894,8 +922,8 @@ function CTASection() {
 						</p>
 						<div className="flex flex-wrap items-center justify-center gap-4">
 							<Button size="lg" asChild>
-								<Link to="/chat">
-									Get Started Free
+								<Link to={isSignedIn ? "/chat" : "/sign-in"}>
+									{isSignedIn ? "Go to Chat" : "Get Started Free"}
 									<ArrowRight size={16} />
 								</Link>
 							</Button>

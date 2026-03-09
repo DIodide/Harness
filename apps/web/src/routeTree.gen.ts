@@ -14,6 +14,7 @@ import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as HarnessesIndexRouteImport } from './routes/harnesses/index'
 import { Route as ChatIndexRouteImport } from './routes/chat/index'
+import { Route as HarnessesHarnessIdRouteImport } from './routes/harnesses/$harnessId'
 
 const SignInRoute = SignInRouteImport.update({
   id: '/sign-in',
@@ -40,11 +41,17 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
   path: '/chat/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const HarnessesHarnessIdRoute = HarnessesHarnessIdRouteImport.update({
+  id: '/harnesses/$harnessId',
+  path: '/harnesses/$harnessId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
+  '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
   '/chat/': typeof ChatIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
 }
@@ -52,6 +59,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
+  '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
   '/chat': typeof ChatIndexRoute
   '/harnesses': typeof HarnessesIndexRoute
 }
@@ -60,21 +68,42 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
+  '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
   '/chat/': typeof ChatIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/onboarding' | '/sign-in' | '/chat/' | '/harnesses/'
+  fullPaths:
+    | '/'
+    | '/onboarding'
+    | '/sign-in'
+    | '/harnesses/$harnessId'
+    | '/chat/'
+    | '/harnesses/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/onboarding' | '/sign-in' | '/chat' | '/harnesses'
-  id: '__root__' | '/' | '/onboarding' | '/sign-in' | '/chat/' | '/harnesses/'
+  to:
+    | '/'
+    | '/onboarding'
+    | '/sign-in'
+    | '/harnesses/$harnessId'
+    | '/chat'
+    | '/harnesses'
+  id:
+    | '__root__'
+    | '/'
+    | '/onboarding'
+    | '/sign-in'
+    | '/harnesses/$harnessId'
+    | '/chat/'
+    | '/harnesses/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   OnboardingRoute: typeof OnboardingRoute
   SignInRoute: typeof SignInRoute
+  HarnessesHarnessIdRoute: typeof HarnessesHarnessIdRoute
   ChatIndexRoute: typeof ChatIndexRoute
   HarnessesIndexRoute: typeof HarnessesIndexRoute
 }
@@ -116,6 +145,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/harnesses/$harnessId': {
+      id: '/harnesses/$harnessId'
+      path: '/harnesses/$harnessId'
+      fullPath: '/harnesses/$harnessId'
+      preLoaderRoute: typeof HarnessesHarnessIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -123,6 +159,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   OnboardingRoute: OnboardingRoute,
   SignInRoute: SignInRoute,
+  HarnessesHarnessIdRoute: HarnessesHarnessIdRoute,
   ChatIndexRoute: ChatIndexRoute,
   HarnessesIndexRoute: HarnessesIndexRoute,
 }

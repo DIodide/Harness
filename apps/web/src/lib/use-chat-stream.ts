@@ -11,26 +11,66 @@ export interface ToolCallEvent {
 	result?: string;
 }
 
+export interface UsageData {
+	promptTokens: number;
+	completionTokens: number;
+	totalTokens: number;
+	cost?: number;
+}
+
+export interface StreamPart {
+	type: "text" | "reasoning" | "tool_call";
+	content?: string;
+	tool?: string;
+	arguments?: Record<string, unknown>;
+	call_id?: string;
+	result?: string;
+}
+
 export interface ConvoStreamState {
 	content: string | null;
+	reasoning: string | null;
 	toolCalls: ToolCallEvent[];
+	parts: StreamPart[];
 	pendingDoneContent: string | null;
+	usage: UsageData | null;
+	model: string | null;
 }
 
 interface UseChatStreamCallbacks {
 	onToken: (conversationId: string, content: string) => void;
+	onThinking: (conversationId: string, content: string) => void;
 	onToolCall: (conversationId: string, event: ToolCallEvent) => void;
 	onToolResult: (
 		conversationId: string,
 		event: { call_id: string; result: string },
 	) => void;
-	onDone: (conversationId: string, fullContent: string) => void;
+	onDone: (
+		conversationId: string,
+		fullContent: string,
+		usage?: UsageData,
+		model?: string,
+	) => void;
+	onMcpError: (
+		conversationId: string,
+		event: { server_name: string; server_url: string; reason: string },
+	) => void;
 	onError: (conversationId: string, error: string) => void;
+	onAbort?: (conversationId: string) => void;
 }
 
 export interface ChatStreamRequest {
 	messages: Array<{ role: string; content: string }>;
-	harness: { model: string; mcps: string[]; name: string };
+	harness: {
+		model: string;
+		mcp_servers: Array<{
+			name: string;
+			url: string;
+			auth_type: "none" | "bearer" | "oauth";
+			auth_token?: string;
+		}>;
+		name: string;
+	};
 	conversation_id: string;
 }
 
@@ -101,14 +141,25 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 									case "token":
 										cbRef.current.onToken(convoId, data.content);
 										break;
+									case "thinking":
+										cbRef.current.onThinking(convoId, data.content);
+										break;
 									case "tool_call":
 										cbRef.current.onToolCall(convoId, data);
 										break;
 									case "tool_result":
 										cbRef.current.onToolResult(convoId, data);
 										break;
+									case "mcp_error":
+										cbRef.current.onMcpError(convoId, data);
+										break;
 									case "done":
-										cbRef.current.onDone(convoId, data.content);
+										cbRef.current.onDone(
+											convoId,
+											data.content,
+											data.usage,
+											data.model,
+										);
 										break;
 									case "error":
 										cbRef.current.onError(convoId, data.message);
@@ -122,7 +173,9 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 					}
 				}
 			} catch (err: unknown) {
-				if (err instanceof Error && err.name !== "AbortError") {
+				if (err instanceof Error && err.name === "AbortError") {
+					cbRef.current.onAbort?.(convoId);
+				} else if (err instanceof Error) {
 					cbRef.current.onError(convoId, err.message);
 				}
 			} finally {

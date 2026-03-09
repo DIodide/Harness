@@ -10,8 +10,16 @@ export default defineSchema({
 			v.literal("stopped"),
 			v.literal("draft"),
 		),
-		mcps: v.array(v.string()),
+		mcpServers: v.array(
+			v.object({
+				name: v.string(),
+				url: v.string(),
+				authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth")),
+				authToken: v.optional(v.string()),
+			}),
+		),
 		skills: v.array(v.string()),
+		suggestedPrompts: v.optional(v.array(v.string())),
 		userId: v.string(),
 		lastUsedAt: v.optional(v.number()),
 	}).index("by_user", ["userId"]),
@@ -29,10 +37,66 @@ export default defineSchema({
 		conversationId: v.id("conversations"),
 		role: v.union(v.literal("user"), v.literal("assistant")),
 		content: v.string(),
+		reasoning: v.optional(v.string()),
+		toolCalls: v.optional(
+			v.array(
+				v.object({
+					tool: v.string(),
+					arguments: v.any(),
+					call_id: v.string(),
+					result: v.string(),
+				}),
+			),
+		),
+		parts: v.optional(
+			v.array(
+				v.object({
+					type: v.union(
+						v.literal("text"),
+						v.literal("reasoning"),
+						v.literal("tool_call"),
+					),
+					content: v.optional(v.string()),
+					tool: v.optional(v.string()),
+					arguments: v.optional(v.any()),
+					call_id: v.optional(v.string()),
+					result: v.optional(v.string()),
+				}),
+			),
+		),
+		usage: v.optional(
+			v.object({
+				promptTokens: v.number(),
+				completionTokens: v.number(),
+				totalTokens: v.number(),
+				cost: v.optional(v.number()),
+			}),
+		),
+		model: v.optional(v.string()),
+		interrupted: v.optional(v.boolean()),
 	}).index("by_conversation", ["conversationId"]),
+
+	mcpOAuthTokens: defineTable({
+		userId: v.string(),
+		mcpServerUrl: v.string(),
+		accessToken: v.string(),
+		refreshToken: v.optional(v.string()),
+		expiresAt: v.number(),
+		scopes: v.string(),
+		authServerUrl: v.string(),
+	})
+		.index("by_user_and_server", ["userId", "mcpServerUrl"])
+		.index("by_user", ["userId"]),
 
 	userSettings: defineTable({
 		userId: v.string(),
 		autoSwitchHarness: v.boolean(),
+		displayMode: v.optional(
+			v.union(
+				v.literal("zen"),
+				v.literal("standard"),
+				v.literal("developer"),
+			),
+		),
 	}).index("by_user", ["userId"]),
 });

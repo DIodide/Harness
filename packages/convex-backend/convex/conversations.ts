@@ -11,7 +11,7 @@ export const list = query({
 				q.eq("userId", identity.subject),
 			)
 			.order("desc")
-			.collect();
+			.take(50);
 	},
 });
 

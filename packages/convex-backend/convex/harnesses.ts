@@ -32,7 +32,14 @@ export const create = mutation({
 			v.literal("stopped"),
 			v.literal("draft"),
 		),
-		mcps: v.array(v.string()),
+		mcpServers: v.array(
+			v.object({
+				name: v.string(),
+				url: v.string(),
+				authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth")),
+				authToken: v.optional(v.string()),
+			}),
+		),
 		skills: v.array(v.string()),
 	},
 	handler: async (ctx, args) => {
@@ -58,8 +65,18 @@ export const update = mutation({
 				v.literal("draft"),
 			),
 		),
-		mcps: v.optional(v.array(v.string())),
+		mcpServers: v.optional(
+			v.array(
+				v.object({
+					name: v.string(),
+					url: v.string(),
+					authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth")),
+					authToken: v.optional(v.string()),
+				}),
+			),
+		),
 		skills: v.optional(v.array(v.string())),
+		suggestedPrompts: v.optional(v.array(v.string())),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();

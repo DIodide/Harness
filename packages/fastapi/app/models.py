@@ -1,9 +1,18 @@
+from typing import Literal
+
 from pydantic import BaseModel
+
+
+class McpServer(BaseModel):
+    name: str
+    url: str
+    auth_type: Literal["none", "bearer", "oauth"] = "none"
+    auth_token: str | None = None
 
 
 class HarnessConfig(BaseModel):
     model: str
-    mcps: list[str]
+    mcp_servers: list[McpServer] = []
     name: str
 
 
