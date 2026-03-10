@@ -1,9 +1,8 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
-import { useQuery } from "@tanstack/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import {
 	ArrowLeft,
@@ -96,15 +95,19 @@ function OnboardingPage() {
 
 	const [name, setName] = useState("");
 	const [model, setModel] = useState("");
-	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>([]);
+	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>(
+		[],
+	);
 	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>([]);
 	const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
-	
 
 	const [stepIndex, setStepIndex] = useState(0);
 
 	const allMcpServers = useMemo(
-		() => [...customMcpServers, ...presetIdsToServerEntries(selectedPresetMcps)],
+		() => [
+			...customMcpServers,
+			...presetIdsToServerEntries(selectedPresetMcps),
+		],
 		[customMcpServers, selectedPresetMcps],
 	);
 
@@ -170,7 +173,6 @@ function OnboardingPage() {
 			}
 		},
 	});
-
 
 	const canProceed = () => {
 		if (currentStep === "name")
@@ -310,11 +312,11 @@ function OnboardingPage() {
 									onTogglePreset={togglePresetMcp}
 								/>
 							)}
-						{currentStep === "connect" && (
-							<StepConnect
-								servers={allMcpServers.filter((s) => s.authType === "oauth")}
-							/>
-						)}
+							{currentStep === "connect" && (
+								<StepConnect
+									servers={allMcpServers.filter((s) => s.authType === "oauth")}
+								/>
+							)}
 							{currentStep === "skills" && (
 								<StepSkills selected={selectedSkills} toggle={toggleSkill} />
 							)}
@@ -696,11 +698,7 @@ function AddMcpServerForm({
 	);
 }
 
-function StepConnect({
-	servers
-}: {
-	servers: McpServerEntry[];
-}) {
+function StepConnect({ servers }: { servers: McpServerEntry[] }) {
 	const { data: tokenStatuses } = useQuery(
 		convexQuery(api.mcpOAuthTokens.listStatuses, {}),
 	);
@@ -709,17 +707,17 @@ function StepConnect({
 		const now = Date.now();
 		const result: Record<string, boolean> = {};
 		for (const server of servers) {
-			const persisted = tokenStatuses?.find((s) => s.mcpServerUrl === server.url)
+			const persisted = tokenStatuses?.find(
+				(s) => s.mcpServerUrl === server.url,
+			);
 			console.log("Persisted status for", persisted?.mcpServerUrl);
 			if (persisted?.connected && persisted.expiresAt * 1000 > now) {
 				console.log("Adding server", server.url);
 				result[server.url] = true;
 			}
-
 		}
 		return result;
-	},
-	[tokenStatuses, servers]);
+	}, [tokenStatuses, servers]);
 
 	const allConnected = Object.keys(connectedServers).length === servers.length;
 	console.log("Current statuses:", tokenStatuses);
@@ -734,13 +732,13 @@ function StepConnect({
 			</div>
 
 			<div className="space-y-2">
-		{servers.map((server) => (
-			<OAuthConnectRow
-				key={server.url}
-				server={server}
-				isConnected={connectedServers[server.url] ?? false}
-			/>
-		))}
+				{servers.map((server) => (
+					<OAuthConnectRow
+						key={server.url}
+						server={server}
+						isConnected={connectedServers[server.url] ?? false}
+					/>
+				))}
 			</div>
 
 			{allConnected && (
