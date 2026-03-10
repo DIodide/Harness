@@ -7,102 +7,162 @@ export interface McpServerEntry {
 
 export interface PresetMcpDefinition {
 	id: string;
-	name: string;
 	description: string;
 	iconName: string;
 	category: string;
+	server: McpServerEntry;
 }
 
 export const PRESET_MCPS: PresetMcpDefinition[] = [
 	{
 		id: "github",
-		name: "GitHub",
 		description: "Repos, issues, pull requests, and code search",
 		iconName: "GitBranch",
 		category: "dev",
+		server: {
+			name: "GitHub",
+			url: "https://api.githubcopilot.com/mcp/",
+			authType: "oauth",
+		},
 	},
 	{
 		id: "postgres",
-		name: "PostgreSQL",
 		description: "Query and manage relational database tables",
 		iconName: "Database",
 		category: "data",
+		server: {
+			name: "PostgreSQL",
+			url: "",
+			authType: "none",
+		},
 	},
 	{
 		id: "slack",
-		name: "Slack",
 		description: "Send messages and read channel history",
 		iconName: "MessageSquare",
 		category: "comms",
+		server: {
+			name: "Slack",
+			url: "https://mcp.slack.com/sse",
+			authType: "oauth",
+		},
 	},
 	{
 		id: "notion",
-		name: "Notion",
 		description: "Read and write pages, databases, and blocks",
 		iconName: "FileText",
 		category: "productivity",
+		server: {
+			name: "Notion",
+			url: "https://mcp.notion.com/sse",
+			authType: "oauth",
+		},
 	},
 	{
 		id: "linear",
-		name: "Linear",
 		description: "Issues, projects, and engineering workflows",
 		iconName: "Box",
 		category: "dev",
+		server: {
+			name: "Linear",
+			url: "https://mcp.linear.app/mcp",
+			authType: "oauth",
+		},
 	},
 	{
 		id: "google-drive",
-		name: "Google Drive",
 		description: "Browse, read, and manage files and documents",
 		iconName: "Cloud",
 		category: "productivity",
+		server: {
+			name: "Google Drive",
+			url: "https://mcp.googleapis.com/drive/sse",
+			authType: "oauth",
+		},
 	},
 	{
 		id: "stripe",
-		name: "Stripe",
 		description: "Payments, subscriptions, and billing data",
 		iconName: "BarChart2",
 		category: "finance",
+		server: {
+			name: "Stripe",
+			url: "https://mcp.stripe.com/sse",
+			authType: "bearer",
+		},
 	},
 	{
 		id: "jira",
-		name: "Jira",
 		description: "Agile sprints, tickets, and release tracking",
 		iconName: "Calendar",
 		category: "dev",
+		server: {
+			name: "Jira",
+			url: "https://mcp.atlassian.com/jira/sse",
+			authType: "oauth",
+		},
 	},
 	{
 		id: "figma",
-		name: "Figma",
 		description: "Design files, components, and prototypes",
 		iconName: "Globe",
 		category: "design",
+		server: {
+			name: "Figma",
+			url: "https://mcp.figma.com/sse",
+			authType: "oauth",
+		},
 	},
 	{
 		id: "aws",
-		name: "AWS",
 		description: "Cloud infrastructure, S3, Lambda, and more",
 		iconName: "Cloud",
 		category: "infra",
+		server: {
+			name: "AWS",
+			url: "https://mcp.amazonaws.com/sse",
+			authType: "bearer",
+		},
 	},
 	{
 		id: "zapier",
-		name: "Zapier",
 		description: "Trigger and manage cross-app automations",
 		iconName: "Zap",
 		category: "automation",
+		server: {
+			name: "Zapier",
+			url: "https://mcp.zapier.com/sse",
+			authType: "oauth",
+		},
 	},
 	{
 		id: "openapi",
-		name: "OpenAPI",
 		description: "Connect any REST API via OpenAPI spec",
 		iconName: "Code2",
 		category: "dev",
+		server: {
+			name: "OpenAPI",
+			url: "",
+			authType: "none",
+		},
 	},
 	{
 		id: "browserbase",
-		name: "Browserbase",
 		description: "Browse the web and interact with live pages",
 		iconName: "Bot",
 		category: "automation",
+		server: {
+			name: "Browserbase",
+			url: "https://mcp.browserbase.com/sse",
+			authType: "bearer",
+		},
 	},
 ];
+
+/** Converts an array of selected preset IDs into their McpServerEntry objects. */
+export function presetIdsToServerEntries(ids: string[]): McpServerEntry[] {
+	return ids.flatMap((id) => {
+		const preset = PRESET_MCPS.find((p) => p.id === id);
+		return preset ? [preset.server] : [];
+	});
+}

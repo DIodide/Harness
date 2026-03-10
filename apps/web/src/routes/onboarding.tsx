@@ -1,5 +1,6 @@
 import { useAuth } from "@clerk/tanstack-react-start";
-import { useConvexMutation } from "@convex-dev/react-query";
+import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation } from "@tanstack/react-query";
@@ -22,7 +23,7 @@ import {
 	Zap,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { HarnessMark } from "../components/harness-mark";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
@@ -39,6 +40,7 @@ import {
 } from "../components/ui/select";
 import { env } from "../env";
 import type { McpServerEntry } from "../lib/mcp";
+import { presetIdsToServerEntries } from "../lib/mcp";
 import { MODELS } from "../lib/models";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
@@ -94,16 +96,19 @@ function OnboardingPage() {
 
 	const [name, setName] = useState("");
 	const [model, setModel] = useState("");
-	const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
+	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>([]);
 	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>([]);
 	const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
-	const [oauthConnected, setOauthConnected] = useState<Record<string, boolean>>(
-		{},
-	);
+	
 
 	const [stepIndex, setStepIndex] = useState(0);
 
-	const hasOAuthServers = mcpServers.some((s) => s.authType === "oauth");
+	const allMcpServers = useMemo(
+		() => [...customMcpServers, ...presetIdsToServerEntries(selectedPresetMcps)],
+		[customMcpServers, selectedPresetMcps],
+	);
+
+	const hasOAuthServers = allMcpServers.some((s) => s.authType === "oauth");
 
 	const steps = useMemo(() => {
 		if (!hasOAuthServers) return BASE_STEPS;
@@ -127,7 +132,7 @@ function OnboardingPage() {
 			navigate({ to: "/chat", search: { harnessId: id as string } });
 
 			// Fire-and-forget: generate suggested prompts from MCP tools
-			if (mcpServers.length > 0) {
+			if (allMcpServers.length > 0) {
 				(async () => {
 					try {
 						const token = await getToken();
@@ -140,7 +145,7 @@ function OnboardingPage() {
 									...(token ? { Authorization: `Bearer ${token}` } : {}),
 								},
 								body: JSON.stringify({
-									mcp_servers: mcpServers.map((s) => ({
+									mcp_servers: allMcpServers.map((s) => ({
 										name: s.name,
 										url: s.url,
 										auth_type: s.authType,
@@ -166,6 +171,7 @@ function OnboardingPage() {
 		},
 	});
 
+
 	const canProceed = () => {
 		if (currentStep === "name")
 			return name.trim().length > 0 && model.length > 0;
@@ -185,7 +191,7 @@ function OnboardingPage() {
 			name: name.trim(),
 			model,
 			status: "started",
-			mcpServers,
+			mcpServers: allMcpServers,
 			skills: selectedSkills,
 		});
 	};
@@ -195,17 +201,17 @@ function OnboardingPage() {
 			name: name.trim() || "Untitled Harness",
 			model: model || "gpt-4o",
 			status: "draft",
-			mcpServers,
+			mcpServers: allMcpServers,
 			skills: selectedSkills,
 		});
 	};
 
 	const handleAddServer = (server: McpServerEntry) => {
-		setMcpServers((prev) => [...prev, server]);
+		setCustomMcpServers((prev) => [...prev, server]);
 	};
 
 	const handleRemoveServer = (index: number) => {
-		setMcpServers((prev) => prev.filter((_, i) => i !== index));
+		setCustomMcpServers((prev) => prev.filter((_, i) => i !== index));
 	};
 
 	const toggleSkill = (id: string) => {
@@ -297,25 +303,18 @@ function OnboardingPage() {
 							)}
 							{currentStep === "mcps" && (
 								<StepMcpServers
-									servers={mcpServers}
+									servers={customMcpServers}
 									onAdd={handleAddServer}
 									onRemove={handleRemoveServer}
 									selectedPresets={selectedPresetMcps}
 									onTogglePreset={togglePresetMcp}
 								/>
 							)}
-							{currentStep === "connect" && (
-								<StepConnect
-									servers={mcpServers.filter((s) => s.authType === "oauth")}
-									connected={oauthConnected}
-									onConnected={(url) =>
-										setOauthConnected((prev) => ({
-											...prev,
-											[url]: true,
-										}))
-									}
-								/>
-							)}
+						{currentStep === "connect" && (
+							<StepConnect
+								servers={allMcpServers.filter((s) => s.authType === "oauth")}
+							/>
+						)}
 							{currentStep === "skills" && (
 								<StepSkills selected={selectedSkills} toggle={toggleSkill} />
 							)}
@@ -698,16 +697,33 @@ function AddMcpServerForm({
 }
 
 function StepConnect({
-	servers,
-	connected,
-	onConnected,
+	servers
 }: {
 	servers: McpServerEntry[];
-	connected: Record<string, boolean>;
-	onConnected: (url: string) => void;
 }) {
-	const allConnected = servers.every((s) => connected[s.url]);
+	const { data: tokenStatuses } = useQuery(
+		convexQuery(api.mcpOAuthTokens.listStatuses, {}),
+	);
 
+	const connectedServers = useMemo(() => {
+		const now = Date.now();
+		const result: Record<string, boolean> = {};
+		for (const server of servers) {
+			const persisted = tokenStatuses?.find((s) => s.mcpServerUrl === server.url)
+			console.log("Persisted status for", persisted?.mcpServerUrl);
+			if (persisted?.connected && persisted.expiresAt * 1000 > now) {
+				console.log("Adding server", server.url);
+				result[server.url] = true;
+			}
+
+		}
+		return result;
+	},
+	[tokenStatuses, servers]);
+
+	const allConnected = Object.keys(connectedServers).length === servers.length;
+	console.log("Current statuses:", tokenStatuses);
+	console.log("Computed connections:", connectedServers);
 	return (
 		<div className="space-y-4">
 			<div>
@@ -718,14 +734,13 @@ function StepConnect({
 			</div>
 
 			<div className="space-y-2">
-				{servers.map((server) => (
-					<OAuthConnectRow
-						key={server.url}
-						server={server}
-						isConnected={!!connected[server.url]}
-						onConnected={() => onConnected(server.url)}
-					/>
-				))}
+		{servers.map((server) => (
+			<OAuthConnectRow
+				key={server.url}
+				server={server}
+				isConnected={connectedServers[server.url] ?? false}
+			/>
+		))}
 			</div>
 
 			{allConnected && (
@@ -753,14 +768,21 @@ function StepConnect({
 function OAuthConnectRow({
 	server,
 	isConnected,
-	onConnected,
 }: {
 	server: McpServerEntry;
 	isConnected: boolean;
-	onConnected: () => void;
 }) {
 	const { getToken } = useAuth();
 	const [connecting, setConnecting] = useState(false);
+
+	// Refs so the cleanup effect always sees the latest handler/interval.
+	const cleanupRef = useRef<(() => void) | null>(null);
+
+	useEffect(() => {
+		return () => {
+			cleanupRef.current?.();
+		};
+	}, []);
 
 	const handleConnect = useCallback(async () => {
 		setConnecting(true);
@@ -783,9 +805,8 @@ function OAuthConnectRow({
 
 			const handler = (event: MessageEvent) => {
 				if (event.data?.type === "mcp-oauth-callback") {
-					window.removeEventListener("message", handler);
+					cleanup();
 					if (event.data.success) {
-						onConnected();
 						toast.success(`Connected to ${server.name}`);
 					} else {
 						toast.error(event.data.error || "OAuth connection failed");
@@ -794,20 +815,27 @@ function OAuthConnectRow({
 					popup?.close();
 				}
 			};
-			window.addEventListener("message", handler);
 
 			const interval = setInterval(() => {
 				if (popup?.closed) {
-					clearInterval(interval);
-					window.removeEventListener("message", handler);
+					cleanup();
 					setConnecting(false);
 				}
 			}, 500);
+
+			const cleanup = () => {
+				clearInterval(interval);
+				window.removeEventListener("message", handler);
+				cleanupRef.current = null;
+			};
+			cleanupRef.current = cleanup;
+
+			window.addEventListener("message", handler);
 		} catch {
 			toast.error("Failed to start OAuth flow");
 			setConnecting(false);
 		}
-	}, [getToken, server.url, server.name, onConnected]);
+	}, [getToken, server.url, server.name]);
 
 	return (
 		<motion.div

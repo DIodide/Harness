@@ -66,9 +66,9 @@ export function PresetMcpGrid({ selected, onToggle }: PresetMcpGridProps) {
 								{Icon && (
 									<Icon size={12} className="shrink-0 text-muted-foreground" />
 								)}
-								<p className="text-xs font-medium text-foreground">
-									{mcp.name}
-								</p>
+							<p className="text-xs font-medium text-foreground">
+								{mcp.server.name}
+							</p>
 							</div>
 							<p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
 								{mcp.description}
