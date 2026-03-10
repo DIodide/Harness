@@ -40,6 +40,7 @@ import {
 import { Separator } from "../../components/ui/separator";
 import { Skeleton } from "../../components/ui/skeleton";
 import { env } from "../../env";
+import type { McpServerEntry } from "../../lib/mcp";
 import { MODELS } from "../../lib/models";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
@@ -52,13 +53,6 @@ export const Route = createFileRoute("/harnesses/$harnessId")({
 	},
 	component: HarnessEditPage,
 });
-
-interface McpServerEntry {
-	name: string;
-	url: string;
-	authType: "none" | "bearer" | "oauth";
-	authToken?: string;
-}
 
 function HarnessEditPage() {
 	const { harnessId } = Route.useParams();

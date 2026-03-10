@@ -25,6 +25,8 @@ import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { HarnessMark } from "../components/harness-mark";
+import { PresetMcpGrid } from "../components/preset-mcp-grid";
+import type { McpServerEntry } from "../lib/mcp";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Checkbox } from "../components/ui/checkbox";
@@ -50,12 +52,6 @@ export const Route = createFileRoute("/onboarding")({
 	component: OnboardingPage,
 });
 
-interface McpServerEntry {
-	name: string;
-	url: string;
-	authType: "none" | "bearer" | "oauth";
-	authToken?: string;
-}
 
 const AVAILABLE_SKILLS = [
 	{ id: "coding", name: "Coding", description: "Write and review code" },
@@ -100,6 +96,7 @@ function OnboardingPage() {
 	const [name, setName] = useState("");
 	const [model, setModel] = useState("");
 	const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
+	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>([]);
 	const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
 	const [oauthConnected, setOauthConnected] = useState<Record<string, boolean>>(
 		{},
@@ -218,6 +215,12 @@ function OnboardingPage() {
 		);
 	};
 
+	const togglePresetMcp = (id: string) => {
+		setSelectedPresetMcps((prev) =>
+			prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id],
+		);
+	};
+
 	return (
 		<div className="flex min-h-screen flex-col bg-background">
 			<header className="flex items-center justify-between border-b border-border px-6 py-4">
@@ -237,7 +240,7 @@ function OnboardingPage() {
 				</Button>
 			</header>
 
-			<div className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-6 py-10">
+			<div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 py-10">
 				<div className="mb-2 text-center">
 					<h1 className="text-2xl font-medium tracking-tight text-foreground">
 						Let's build your first harness
@@ -293,13 +296,15 @@ function OnboardingPage() {
 									setModel={setModel}
 								/>
 							)}
-							{currentStep === "mcps" && (
-								<StepMcpServers
-									servers={mcpServers}
-									onAdd={handleAddServer}
-									onRemove={handleRemoveServer}
-								/>
-							)}
+						{currentStep === "mcps" && (
+							<StepMcpServers
+								servers={mcpServers}
+								onAdd={handleAddServer}
+								onRemove={handleRemoveServer}
+								selectedPresets={selectedPresetMcps}
+								onTogglePreset={togglePresetMcp}
+							/>
+						)}
 							{currentStep === "connect" && (
 								<StepConnect
 									servers={mcpServers.filter((s) => s.authType === "oauth")}
@@ -422,74 +427,82 @@ function StepMcpServers({
 	servers,
 	onAdd,
 	onRemove,
+	selectedPresets,
+	onTogglePreset,
 }: {
 	servers: McpServerEntry[];
 	onAdd: (server: McpServerEntry) => void;
 	onRemove: (index: number) => void;
+	selectedPresets: string[];
+	onTogglePreset: (id: string) => void;
 }) {
 	return (
-		<div className="space-y-4">
-			<div>
-				<p className="text-xs text-muted-foreground">
-					Add MCP servers to give your agent tools and capabilities. Provide the
-					streamable HTTP URL for each server.
-				</p>
+		<div className="space-y-6">
+			<div className="space-y-3">
+				<div>
+					<p className="text-xs font-medium text-foreground">Popular MCP Servers</p>
+					<p className="mt-0.5 text-xs text-muted-foreground">
+						Select from common integrations to add to your harness.
+					</p>
+				</div>
+				<PresetMcpGrid selected={selectedPresets} onToggle={onTogglePreset} />
 			</div>
 
-			{servers.length > 0 && (
-				<div className="space-y-2">
-					{servers.map((server, i) => (
-						<motion.div
-							key={`${server.name}-${server.url}`}
-							initial={{ opacity: 0, y: 4 }}
-							animate={{ opacity: 1, y: 0 }}
-							className="group flex items-center gap-3 border border-border px-3 py-2.5"
-						>
-							<Server size={14} className="shrink-0 text-muted-foreground" />
-							<div className="min-w-0 flex-1">
-								<p className="text-xs font-medium text-foreground">
-									{server.name}
-								</p>
-								<p className="truncate text-[11px] text-muted-foreground">
-									{server.url}
-								</p>
-							</div>
-							{server.authType === "bearer" && (
-								<Badge variant="secondary" className="shrink-0 text-[10px]">
-									<Shield size={8} />
-									Bearer
-								</Badge>
-							)}
-							{server.authType === "oauth" && (
-								<Badge
-									variant="secondary"
-									className="shrink-0 gap-1 text-[10px]"
-								>
-									<Shield size={8} />
-									OAuth
-								</Badge>
-							)}
-							<Button
-								variant="ghost"
-								size="icon-xs"
-								onClick={() => onRemove(i)}
-								className="shrink-0 opacity-0 group-hover:opacity-100"
-							>
-								<Trash2 size={12} />
-							</Button>
-						</motion.div>
-					))}
+			<div className="space-y-3">
+				<div className="flex items-center gap-3">
+					<div className="h-px flex-1 bg-border" />
+					<p className="text-[11px] text-muted-foreground">or add custom</p>
+					<div className="h-px flex-1 bg-border" />
 				</div>
-			)}
 
-			<AddMcpServerForm onAdd={onAdd} />
+				{servers.length > 0 && (
+					<div className="space-y-2">
+						{servers.map((server, i) => (
+							<motion.div
+								key={`${server.name}-${server.url}`}
+								initial={{ opacity: 0, y: 4 }}
+								animate={{ opacity: 1, y: 0 }}
+								className="group flex items-center gap-3 border border-border px-3 py-2.5"
+							>
+								<Server size={14} className="shrink-0 text-muted-foreground" />
+								<div className="min-w-0 flex-1">
+									<p className="text-xs font-medium text-foreground">
+										{server.name}
+									</p>
+									<p className="truncate text-[11px] text-muted-foreground">
+										{server.url}
+									</p>
+								</div>
+								{server.authType === "bearer" && (
+									<Badge variant="secondary" className="shrink-0 text-[10px]">
+										<Shield size={8} />
+										Bearer
+									</Badge>
+								)}
+								{server.authType === "oauth" && (
+									<Badge
+										variant="secondary"
+										className="shrink-0 gap-1 text-[10px]"
+									>
+										<Shield size={8} />
+										OAuth
+									</Badge>
+								)}
+								<Button
+									variant="ghost"
+									size="icon-xs"
+									onClick={() => onRemove(i)}
+									className="shrink-0 opacity-0 group-hover:opacity-100"
+								>
+									<Trash2 size={12} />
+								</Button>
+							</motion.div>
+						))}
+					</div>
+				)}
 
-			{servers.length === 0 && (
-				<p className="text-center text-[11px] text-muted-foreground/60">
-					No MCP servers added yet. You can add them later from the harness
-					settings.
-				</p>
-			)}
+				<AddMcpServerForm onAdd={onAdd} />
+			</div>
 		</div>
 	);
 }
