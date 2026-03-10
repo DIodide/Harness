@@ -16,7 +16,10 @@ import type { ComponentType } from "react";
 import { PRESET_MCPS } from "../lib/mcp";
 import { Checkbox } from "./ui/checkbox";
 
-const ICON_MAP: Record<string, ComponentType<{ size?: number; className?: string }>> = {
+const ICON_MAP: Record<
+	string,
+	ComponentType<{ size?: number; className?: string }>
+> = {
 	BarChart2,
 	Bot,
 	Box,
@@ -63,7 +66,9 @@ export function PresetMcpGrid({ selected, onToggle }: PresetMcpGridProps) {
 								{Icon && (
 									<Icon size={12} className="shrink-0 text-muted-foreground" />
 								)}
-								<p className="text-xs font-medium text-foreground">{mcp.name}</p>
+								<p className="text-xs font-medium text-foreground">
+									{mcp.name}
+								</p>
 							</div>
 							<p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
 								{mcp.description}

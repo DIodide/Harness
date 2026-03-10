@@ -26,7 +26,6 @@ import { useCallback, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { HarnessMark } from "../components/harness-mark";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
-import type { McpServerEntry } from "../lib/mcp";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Checkbox } from "../components/ui/checkbox";
@@ -39,6 +38,7 @@ import {
 	SelectValue,
 } from "../components/ui/select";
 import { env } from "../env";
+import type { McpServerEntry } from "../lib/mcp";
 import { MODELS } from "../lib/models";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
@@ -51,7 +51,6 @@ export const Route = createFileRoute("/onboarding")({
 	},
 	component: OnboardingPage,
 });
-
 
 const AVAILABLE_SKILLS = [
 	{ id: "coding", name: "Coding", description: "Write and review code" },
@@ -296,15 +295,15 @@ function OnboardingPage() {
 									setModel={setModel}
 								/>
 							)}
-						{currentStep === "mcps" && (
-							<StepMcpServers
-								servers={mcpServers}
-								onAdd={handleAddServer}
-								onRemove={handleRemoveServer}
-								selectedPresets={selectedPresetMcps}
-								onTogglePreset={togglePresetMcp}
-							/>
-						)}
+							{currentStep === "mcps" && (
+								<StepMcpServers
+									servers={mcpServers}
+									onAdd={handleAddServer}
+									onRemove={handleRemoveServer}
+									selectedPresets={selectedPresetMcps}
+									onTogglePreset={togglePresetMcp}
+								/>
+							)}
 							{currentStep === "connect" && (
 								<StepConnect
 									servers={mcpServers.filter((s) => s.authType === "oauth")}
@@ -440,7 +439,9 @@ function StepMcpServers({
 		<div className="space-y-6">
 			<div className="space-y-3">
 				<div>
-					<p className="text-xs font-medium text-foreground">Popular MCP Servers</p>
+					<p className="text-xs font-medium text-foreground">
+						Popular MCP Servers
+					</p>
 					<p className="mt-0.5 text-xs text-muted-foreground">
 						Select from common integrations to add to your harness.
 					</p>
