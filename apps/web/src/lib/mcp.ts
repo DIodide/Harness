@@ -15,9 +15,21 @@ export interface PresetMcpDefinition {
 
 export const PRESET_MCPS: PresetMcpDefinition[] = [
 	{
+		id: "junctionengine",
+		description: "Get Princeton course information with live registrar data and student reviews.",
+		iconName: "https://www.google.com/s2/favicons?domain=princeton.edu&sz=64",
+		category: "student",
+		server: {
+			name: "Junction Engine",
+			url: "https://junction-engine.tigerapps.org/mcp",
+			authType: "none",
+		},
+	},
+	{
 		id: "github",
-		description: "Repos, issues, pull requests, and code search",
-		iconName: "GitBranch",
+		description:
+			"Browse repos, manage issues and pull requests, and search code.",
+		iconName: "github",
 		category: "dev",
 		server: {
 			name: "GitHub",
@@ -26,43 +38,23 @@ export const PRESET_MCPS: PresetMcpDefinition[] = [
 		},
 	},
 	{
-		id: "postgres",
-		description: "Query and manage relational database tables",
-		iconName: "Database",
-		category: "data",
-		server: {
-			name: "PostgreSQL",
-			url: "",
-			authType: "none",
-		},
-	},
-	{
-		id: "slack",
-		description: "Send messages and read channel history",
-		iconName: "MessageSquare",
-		category: "comms",
-		server: {
-			name: "Slack",
-			url: "https://mcp.slack.com/sse",
-			authType: "oauth",
-		},
-	},
-	{
 		id: "notion",
-		description: "Read and write pages, databases, and blocks",
-		iconName: "FileText",
+		description:
+			"Read and write pages, databases, and blocks in your workspace.",
+		iconName: "notion",
 		category: "productivity",
 		server: {
 			name: "Notion",
-			url: "https://mcp.notion.com/sse",
+			url: "https://mcp.notion.com/mcp",
 			authType: "oauth",
 		},
 	},
 	{
 		id: "linear",
-		description: "Issues, projects, and engineering workflows",
-		iconName: "Box",
-		category: "dev",
+		description:
+			"Create and track issues, manage projects, and streamline engineering workflows.",
+		iconName: "linear",
+		category: "productivity",
 		server: {
 			name: "Linear",
 			url: "https://mcp.linear.app/mcp",
@@ -70,91 +62,97 @@ export const PRESET_MCPS: PresetMcpDefinition[] = [
 		},
 	},
 	{
-		id: "google-drive",
-		description: "Browse, read, and manage files and documents",
-		iconName: "Cloud",
-		category: "productivity",
+		id: "slack",
+		description:
+			"(wait until deployed)Send messages, read channel history, and search conversations.",
+		iconName: "slack",
+		category: "comms",
 		server: {
-			name: "Google Drive",
-			url: "https://mcp.googleapis.com/drive/sse",
+			name: "Slack",
+			url: "https://mcp.slack.com/mcp",
 			authType: "oauth",
 		},
 	},
-	{
-		id: "stripe",
-		description: "Payments, subscriptions, and billing data",
-		iconName: "BarChart2",
-		category: "finance",
-		server: {
-			name: "Stripe",
-			url: "https://mcp.stripe.com/sse",
-			authType: "bearer",
-		},
-	},
+	// Not supported for none VIPs yet
+	// {
+	// 	id: "figma",
+	// 	description: "Inspect design files, components, and prototypes.",
+	// 	iconName: "figma",
+	// 	category: "design",
+	// 	server: {
+	// 		name: "Figma",
+	// 		url: "https://mcp.figma.com/mcp",
+	// 		authType: "oauth",
+	// 	},
+	// },
+	// looks like a pain
+	// {
+	// 	id: "cloudflare",
+	// 	description: "Manage Workers, KV, R2, and DNS records.",
+	// 	iconName: "cloudflare",
+	// 	category: "dev",
+	// 	server: {
+	// 		name: "Cloudflare",
+	// 		url: "https://mcp.cloudflare.com/mcp",
+	// 		authType: "none",
+	// 	},
+	// },
+	// {
+	// 	id: "supabase",
+	// 	description:
+	// 		"Query your database, manage tables, and trigger edge functions.",
+	// 	iconName: "supabase",
+	// 	category: "dev",
+	// 	server: {
+	// 		name: "Supabase",
+	// 		url: "https://mcp.supabase.com/mcp",
+	// 		authType: "oauth",
+	// 	},
+	// },
 	{
 		id: "jira",
-		description: "Agile sprints, tickets, and release tracking",
-		iconName: "Calendar",
-		category: "dev",
+		description: "Create tickets, track sprints, and manage Agile releases.",
+		iconName: "jira",
+		category: "productivity",
 		server: {
 			name: "Jira",
-			url: "https://mcp.atlassian.com/jira/sse",
+			url: "https://mcp.atlassian.com/v1/mcp",
 			authType: "oauth",
 		},
 	},
 	{
-		id: "figma",
-		description: "Design files, components, and prototypes",
-		iconName: "Globe",
-		category: "design",
-		server: {
-			name: "Figma",
-			url: "https://mcp.figma.com/sse",
-			authType: "oauth",
-		},
-	},
-	{
-		id: "aws",
-		description: "Cloud infrastructure, S3, Lambda, and more",
-		iconName: "Cloud",
-		category: "infra",
-		server: {
-			name: "AWS",
-			url: "https://mcp.amazonaws.com/sse",
-			authType: "bearer",
-		},
-	},
-	{
-		id: "zapier",
-		description: "Trigger and manage cross-app automations",
-		iconName: "Zap",
-		category: "automation",
-		server: {
-			name: "Zapier",
-			url: "https://mcp.zapier.com/sse",
-			authType: "oauth",
-		},
-	},
-	{
-		id: "openapi",
-		description: "Connect any REST API via OpenAPI spec",
-		iconName: "Code2",
+		id: "awsknowledge",
+		description:
+			"Search AWS documentation and knowledge bases for services and best practices.",
+		iconName: "https://www.google.com/s2/favicons?domain=aws.amazon.com&sz=64",
 		category: "dev",
 		server: {
-			name: "OpenAPI",
-			url: "",
+			name: "AWS Knowledge",
+			url: "https://knowledge-mcp.global.api.aws",
 			authType: "none",
 		},
 	},
 	{
-		id: "browserbase",
-		description: "Browse the web and interact with live pages",
-		iconName: "Bot",
-		category: "automation",
+		id: "exa",
+		description: "AI-powered semantic web search and content retrieval.",
+		iconName: "https://www.google.com/s2/favicons?domain=exa.ai&sz=64",
+		category: "web",
 		server: {
-			name: "Browserbase",
-			url: "https://mcp.browserbase.com/sse",
-			authType: "bearer",
+			name: "Exa",
+			url: "https://mcp.exa.ai/mcp",
+			authType: "none",
+		},
+	},
+	{
+		id: "context7",
+		description:
+			"Fetch up-to-date library docs and code examples for any framework.",
+		iconName: "https://www.google.com/s2/favicons?domain=context7.com&sz=64",
+		category: "dev",
+		server: {
+			name: "Context7",
+			url: "https://mcp.context7.com/mcp",
+			authType: "none",
 		},
 	},
 ];

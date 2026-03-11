@@ -1,38 +1,32 @@
-import {
-	BarChart2,
-	Bot,
-	Box,
-	Calendar,
-	Cloud,
-	Code2,
-	Database,
-	FileText,
-	GitBranch,
-	Globe,
-	MessageSquare,
-	Zap,
-} from "lucide-react";
-import type { ComponentType } from "react";
+import { useState } from "react";
 import { PRESET_MCPS } from "../lib/mcp";
 import { Checkbox } from "./ui/checkbox";
 
-const ICON_MAP: Record<
-	string,
-	ComponentType<{ size?: number; className?: string }>
-> = {
-	BarChart2,
-	Bot,
-	Box,
-	Calendar,
-	Cloud,
-	Code2,
-	Database,
-	FileText,
-	GitBranch,
-	Globe,
-	MessageSquare,
-	Zap,
-};
+function McpLogo({ iconName, name }: { iconName: string; name: string }) {
+	const [failed, setFailed] = useState(false);
+
+	if (!iconName || failed) {
+		return (
+			<span className="flex size-4 shrink-0 items-center justify-center rounded-sm bg-muted text-[9px] font-bold uppercase text-muted-foreground">
+				{name[0]}
+			</span>
+		);
+	}
+
+	const isFavicon = iconName.startsWith("http");
+	const src = isFavicon ? iconName : `https://cdn.simpleicons.org/${iconName}`;
+
+	return (
+		<img
+			src={src}
+			alt={name}
+			width={14}
+			height={14}
+			className={`shrink-0${isFavicon ? "" : " dark:invert"}`}
+			onError={() => setFailed(true)}
+		/>
+	);
+}
 
 interface PresetMcpGridProps {
 	selected: string[];
@@ -43,7 +37,6 @@ export function PresetMcpGrid({ selected, onToggle }: PresetMcpGridProps) {
 	return (
 		<div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
 			{PRESET_MCPS.map((mcp) => {
-				const Icon = ICON_MAP[mcp.iconName];
 				const isSelected = selected.includes(mcp.id);
 				return (
 					<button
@@ -63,9 +56,7 @@ export function PresetMcpGrid({ selected, onToggle }: PresetMcpGridProps) {
 						/>
 						<div className="min-w-0 flex-1">
 							<div className="flex items-center gap-1.5">
-								{Icon && (
-									<Icon size={12} className="shrink-0 text-muted-foreground" />
-								)}
+								<McpLogo iconName={mcp.iconName} name={mcp.server.name} />
 								<p className="text-xs font-medium text-foreground">
 									{mcp.server.name}
 								</p>
