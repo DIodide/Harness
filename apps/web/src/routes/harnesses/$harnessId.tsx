@@ -19,14 +19,10 @@ import {
 	X,
 } from "lucide-react";
 import { motion } from "motion/react";
-import {
-	type KeyboardEvent,
-	useCallback,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
+import { type KeyboardEvent, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
+import { OAuthConnectRow } from "../../components/mcp-oauth-connect-row";
+import { PresetMcpGrid } from "../../components/preset-mcp-grid";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -41,6 +37,7 @@ import { Separator } from "../../components/ui/separator";
 import { Skeleton } from "../../components/ui/skeleton";
 import { env } from "../../env";
 import type { McpServerEntry } from "../../lib/mcp";
+import { PRESET_MCPS } from "../../lib/mcp";
 import { MODELS } from "../../lib/models";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
@@ -120,6 +117,51 @@ function HarnessEditPage() {
 
 	const hasChanges = name !== null || model !== null || mcpServers !== null;
 
+	// Derived: which preset IDs are already in the server list
+	const selectedPresetMcps = useMemo(
+		() =>
+			PRESET_MCPS.filter((p) =>
+				currentMcpServers.some(
+					(s) => s.url === p.server.url && s.name === p.server.name,
+				),
+			).map((p) => p.id),
+		[currentMcpServers],
+	);
+
+	// Derived: servers that don't match any preset (manually added)
+	const customMcpServers = useMemo(
+		() =>
+			currentMcpServers.filter(
+				(s) =>
+					!PRESET_MCPS.some(
+						(p) => p.server.name === s.name && p.server.url === s.url,
+					),
+			),
+		[currentMcpServers],
+	);
+
+	const togglePresetMcp = (id: string) => {
+		const preset = PRESET_MCPS.find((p) => p.id === id);
+		if (!preset) return;
+		const isSelected = currentMcpServers.some(
+			(s) => s.name === preset.server.name,
+		);
+		setMcpServers(
+			isSelected
+				? currentMcpServers.filter(
+						(s) =>
+							!(s.name === preset.server.name && s.url === preset.server.url),
+					)
+				: [...currentMcpServers, preset.server],
+		);
+	};
+
+	// OAuth servers for the connections section
+	const oauthServers = useMemo(
+		() => currentMcpServers.filter((s) => s.authType === "oauth"),
+		[currentMcpServers],
+	);
+
 	const handleSave = () => {
 		const updates: Record<string, unknown> = {
 			id: harnessId as Id<"harnesses">,
@@ -192,7 +234,7 @@ function HarnessEditPage() {
 			</header>
 
 			<div className="flex-1 p-6">
-				<div className="mx-auto max-w-2xl space-y-8">
+				<div className="mx-auto max-w-3xl space-y-8">
 					{/* Name & Model */}
 					<motion.section
 						initial={{ opacity: 0, y: 8 }}
@@ -258,21 +300,71 @@ function HarnessEditPage() {
 							</Badge>
 						</div>
 
-						{currentMcpServers.length > 0 && (
-							<div className="mb-4 space-y-2">
-								{currentMcpServers.map((server, i) => (
-									<McpServerRow
-										key={`${server.name}-${i}`}
-										server={server}
-										onRemove={() => handleRemoveServer(i)}
-										onUpdate={(updated) => handleUpdateServer(i, updated)}
-									/>
-								))}
+						<div className="space-y-3">
+							<div>
+								<p className="text-xs font-medium text-foreground">
+									Popular MCP Servers
+								</p>
+								<p className="mt-0.5 text-xs text-muted-foreground">
+									Select from common integrations to add to your harness.
+								</p>
 							</div>
-						)}
+							<PresetMcpGrid
+								selected={selectedPresetMcps}
+								onToggle={togglePresetMcp}
+							/>
+						</div>
 
-						<AddMcpServerForm onAdd={handleAddServer} />
+						<div className="mt-4 space-y-3">
+							<div className="flex items-center gap-3">
+								<div className="h-px flex-1 bg-border" />
+								<p className="text-[11px] text-muted-foreground">
+									or add custom
+								</p>
+								<div className="h-px flex-1 bg-border" />
+							</div>
+
+							{customMcpServers.length > 0 && (
+								<div className="space-y-2">
+									{customMcpServers.map((server) => {
+										const i = currentMcpServers.findIndex(
+											(s) => s.name === server.name && s.url === server.url,
+										);
+										return (
+											<McpServerRow
+												key={`${server.name}-${server.url}`}
+												server={server}
+												onRemove={() => handleRemoveServer(i)}
+												onUpdate={(updated) => handleUpdateServer(i, updated)}
+											/>
+										);
+									})}
+								</div>
+							)}
+
+							<AddMcpServerForm onAdd={handleAddServer} />
+						</div>
 					</motion.section>
+
+					<Separator />
+
+					{/* OAuth Connections */}
+					{oauthServers.length > 0 && (
+						<motion.section
+							initial={{ opacity: 0, y: 8 }}
+							animate={{ opacity: 1, y: 0 }}
+							transition={{ delay: 0.08 }}
+						>
+							<h2 className="mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+								OAuth Connections
+							</h2>
+							<p className="mb-4 text-xs text-muted-foreground">
+								Connect your OAuth-authenticated servers. Connections persist
+								across sessions.
+							</p>
+							<OAuthConnectionsSection servers={oauthServers} />
+						</motion.section>
+					)}
 
 					<Separator />
 
@@ -388,7 +480,10 @@ function McpServerRow({
 				</Badge>
 			)}
 			{server.authType === "oauth" && (
-				<OAuthStatusBadge serverUrl={server.url} />
+				<Badge variant="secondary" className="shrink-0 text-[10px]">
+					<Shield size={8} />
+					OAuth
+				</Badge>
 			)}
 			<Button
 				variant="ghost"
@@ -594,115 +689,35 @@ function AddMcpServerForm({
 	);
 }
 
-function OAuthStatusBadge({ serverUrl }: { serverUrl: string }) {
-	const { getToken } = useAuth();
-	const [status, setStatus] = useState<
-		"unknown" | "connected" | "disconnected"
-	>("unknown");
-	const [connecting, setConnecting] = useState(false);
+function OAuthConnectionsSection({ servers }: { servers: McpServerEntry[] }) {
+	const { data: tokenStatuses } = useQuery(
+		convexQuery(api.mcpOAuthTokens.listStatuses, {}),
+	);
 
-	const checkStatus = useCallback(async () => {
-		try {
-			const token = await getToken();
-			const res = await fetch(
-				`${API_URL}/api/mcp/oauth/status?server_url=${encodeURIComponent(serverUrl)}`,
-				{
-					headers: {
-						Authorization: `Bearer ${token}`,
-					},
-				},
+	const connectedByUrl = useMemo(() => {
+		const now = Date.now();
+		const result: Record<string, boolean> = {};
+		for (const server of servers) {
+			const persisted = tokenStatuses?.find(
+				(s) => s.mcpServerUrl === server.url,
 			);
-			if (res.ok) {
-				const data = await res.json();
-				setStatus(data.connected ? "connected" : "disconnected");
+			if (persisted?.connected && persisted.expiresAt * 1000 > now) {
+				result[server.url] = true;
 			}
-		} catch {
-			setStatus("disconnected");
 		}
-	}, [getToken, serverUrl]);
-
-	// Check status on mount
-	useEffect(() => {
-		checkStatus();
-	}, [checkStatus]);
-
-	const handleConnect = async () => {
-		setConnecting(true);
-		try {
-			const token = await getToken();
-			const res = await fetch(
-				`${API_URL}/api/mcp/oauth/start?server_url=${encodeURIComponent(serverUrl)}`,
-				{
-					headers: {
-						Authorization: `Bearer ${token}`,
-					},
-				},
-			);
-			if (!res.ok) throw new Error("Failed to start OAuth");
-			const data = await res.json();
-
-			// Open popup for OAuth flow
-			const popup = window.open(
-				data.authorization_url,
-				"mcp-oauth",
-				"width=600,height=700",
-			);
-
-			// Listen for callback message from popup
-			const handler = (event: MessageEvent) => {
-				if (event.data?.type === "mcp-oauth-callback") {
-					window.removeEventListener("message", handler);
-					if (event.data.success) {
-						setStatus("connected");
-						toast.success("Connected to MCP server via OAuth");
-					} else {
-						toast.error(event.data.error || "OAuth connection failed");
-					}
-					setConnecting(false);
-					popup?.close();
-				}
-			};
-			window.addEventListener("message", handler);
-
-			// Fallback: if popup closes without message
-			const interval = setInterval(() => {
-				if (popup?.closed) {
-					clearInterval(interval);
-					window.removeEventListener("message", handler);
-					setConnecting(false);
-					checkStatus();
-				}
-			}, 500);
-		} catch {
-			toast.error("Failed to start OAuth flow");
-			setConnecting(false);
-		}
-	};
-
-	if (status === "connected") {
-		return (
-			<Badge variant="secondary" className="shrink-0 gap-1 text-[10px]">
-				<div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-				OAuth
-			</Badge>
-		);
-	}
+		return result;
+	}, [tokenStatuses, servers]);
 
 	return (
-		<Button
-			variant="outline"
-			size="sm"
-			className="h-5 shrink-0 px-2 text-[10px]"
-			onClick={handleConnect}
-			disabled={connecting}
-		>
-			{connecting ? (
-				<Loader2 size={8} className="animate-spin" />
-			) : (
-				<Shield size={8} />
-			)}
-			Connect
-		</Button>
+		<div className="space-y-2">
+			{servers.map((server) => (
+				<OAuthConnectRow
+					key={server.url}
+					server={server}
+					isConnected={connectedByUrl[server.url] ?? false}
+				/>
+			))}
+		</div>
 	);
 }
 
@@ -717,7 +732,7 @@ function EditSkeleton() {
 				<Skeleton className="h-8 w-28" />
 			</header>
 			<div className="flex-1 p-6">
-				<div className="mx-auto max-w-2xl space-y-8">
+				<div className="mx-auto max-w-3xl space-y-8">
 					<div className="space-y-4">
 						<Skeleton className="h-4 w-20" />
 						<Skeleton className="h-9 w-80" />
