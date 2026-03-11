@@ -10,6 +10,7 @@ import {
 } from "@tanstack/react-router";
 import {
 	ArrowLeft,
+	Copy,
 	Cpu,
 	Edit,
 	Layers,
@@ -65,6 +66,9 @@ function HarnessesPage() {
 	const removeHarness = useMutation({
 		mutationFn: useConvexMutation(api.harnesses.remove),
 	});
+	const duplicateHarness = useMutation({
+		mutationFn: useConvexMutation(api.harnesses.duplicate),
+	});
 
 	const [deleteTarget, setDeleteTarget] = useState<Id<"harnesses"> | null>(
 		null,
@@ -73,6 +77,10 @@ function HarnessesPage() {
 	if (isLoading) {
 		return <LoadingSkeleton />;
 	}
+
+	const handleDuplicate = (id: Id<"harnesses">) => {
+		duplicateHarness.mutate({ id });
+	};
 
 	const active = harnesses?.filter((h) => h.status === "started") ?? [];
 	const stopped = harnesses?.filter((h) => h.status === "stopped") ?? [];
@@ -130,6 +138,7 @@ function HarnessesPage() {
 								harnesses={active}
 								onToggle={handleToggleStatus}
 								onDelete={setDeleteTarget}
+								onDuplicate={handleDuplicate}
 								onEdit={(id) =>
 									navigate({
 										to: "/harnesses/$harnessId",
@@ -144,6 +153,7 @@ function HarnessesPage() {
 								harnesses={stopped}
 								onToggle={handleToggleStatus}
 								onDelete={setDeleteTarget}
+								onDuplicate={handleDuplicate}
 								onEdit={(id) =>
 									navigate({
 										to: "/harnesses/$harnessId",
@@ -158,6 +168,7 @@ function HarnessesPage() {
 								harnesses={drafts}
 								onToggle={handleToggleStatus}
 								onDelete={setDeleteTarget}
+								onDuplicate={handleDuplicate}
 								onEdit={(id) =>
 									navigate({
 										to: "/harnesses/$harnessId",
@@ -201,6 +212,7 @@ function HarnessGroup({
 	harnesses,
 	onToggle,
 	onDelete,
+	onDuplicate,
 	onEdit,
 }: {
 	title: string;
@@ -222,6 +234,7 @@ function HarnessGroup({
 		status: "started" | "stopped" | "draft",
 	) => void;
 	onDelete: (id: Id<"harnesses">) => void;
+	onDuplicate: (id: Id<"harnesses">) => void;
 	onEdit: (id: Id<"harnesses">) => void;
 }) {
 	return (
@@ -241,6 +254,7 @@ function HarnessGroup({
 							harness={h}
 							onToggle={onToggle}
 							onDelete={onDelete}
+							onDuplicate={onDuplicate}
 							onEdit={onEdit}
 						/>
 					</motion.div>
@@ -254,6 +268,7 @@ function HarnessCard({
 	harness,
 	onToggle,
 	onDelete,
+	onDuplicate,
 	onEdit,
 }: {
 	harness: {
@@ -274,6 +289,7 @@ function HarnessCard({
 		status: "started" | "stopped" | "draft",
 	) => void;
 	onDelete: (id: Id<"harnesses">) => void;
+	onDuplicate: (id: Id<"harnesses">) => void;
 	onEdit: (id: Id<"harnesses">) => void;
 }) {
 	const isDraft = harness.status === "draft";
@@ -308,6 +324,10 @@ function HarnessCard({
 							<DropdownMenuItem onClick={() => onEdit(harness._id)}>
 								<Edit size={12} />
 								Edit
+							</DropdownMenuItem>
+							<DropdownMenuItem onClick={() => onDuplicate(harness._id)}>
+								<Copy size={12} />
+								Duplicate
 							</DropdownMenuItem>
 							{!isDraft && (
 								<DropdownMenuItem
