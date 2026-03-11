@@ -16,7 +16,8 @@ export interface PresetMcpDefinition {
 export const PRESET_MCPS: PresetMcpDefinition[] = [
 	{
 		id: "junctionengine",
-		description: "Get Princeton course information with live registrar data and student reviews.",
+		description:
+			"Get Princeton course information with live registrar data and student reviews.",
 		iconName: "https://www.google.com/s2/favicons?domain=princeton.edu&sz=64",
 		category: "student",
 		server: {
