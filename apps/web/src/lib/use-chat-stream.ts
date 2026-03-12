@@ -70,6 +70,7 @@ export interface ChatStreamRequest {
 			auth_token?: string;
 		}>;
 		name: string;
+		skills: string[];
 	};
 	conversation_id: string;
 }

@@ -23,6 +23,7 @@ import { type KeyboardEvent, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { OAuthConnectRow } from "../../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../../components/preset-mcp-grid";
+import { PresetSkillGrid } from "../../components/preset-skill-grid";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -109,13 +110,16 @@ function HarnessEditPage() {
 	const [name, setName] = useState<string | null>(null);
 	const [model, setModel] = useState<string | null>(null);
 	const [mcpServers, setMcpServers] = useState<McpServerEntry[] | null>(null);
+	const [skills, setSkills] = useState<string[] | null>(null);
 
 	// Use local state if edited, otherwise fall back to server data
 	const currentName = name ?? harness?.name ?? "";
 	const currentModel = model ?? harness?.model ?? "";
 	const currentMcpServers = mcpServers ?? harness?.mcpServers ?? [];
+	const currentSkills = skills ?? harness?.skills ?? [];
 
-	const hasChanges = name !== null || model !== null || mcpServers !== null;
+	const hasChanges =
+		name !== null || model !== null || mcpServers !== null || skills !== null;
 
 	// Derived: which preset IDs are already in the server list
 	const selectedPresetMcps = useMemo(
@@ -156,6 +160,15 @@ function HarnessEditPage() {
 		);
 	};
 
+	const toggleSkill = (id: string) => {
+		const isSelected = currentSkills.includes(id);
+		setSkills(
+			isSelected
+				? currentSkills.filter((s) => s !== id)
+				: [...currentSkills, id],
+		);
+	};
+
 	// OAuth servers for the connections section
 	const oauthServers = useMemo(
 		() => currentMcpServers.filter((s) => s.authType === "oauth"),
@@ -169,6 +182,7 @@ function HarnessEditPage() {
 		if (name !== null) updates.name = name;
 		if (model !== null) updates.model = model;
 		if (mcpServers !== null) updates.mcpServers = mcpServers;
+		if (skills !== null) updates.skills = skills;
 		updateHarness.mutate(updates as Parameters<typeof updateHarness.mutate>[0]);
 	};
 
@@ -368,11 +382,31 @@ function HarnessEditPage() {
 
 					<Separator />
 
-					{/* Status */}
+					{/* Skills */}
 					<motion.section
 						initial={{ opacity: 0, y: 8 }}
 						animate={{ opacity: 1, y: 0 }}
 						transition={{ delay: 0.1 }}
+					>
+						<div className="mb-4">
+							<h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+								Skills
+							</h2>
+							<p className="mt-1 text-xs text-muted-foreground">
+								Skills give the agent specialized guidelines it can draw on
+								during conversations.
+							</p>
+						</div>
+						<PresetSkillGrid selected={currentSkills} onToggle={toggleSkill} />
+					</motion.section>
+
+					<Separator />
+
+					{/* Status */}
+					<motion.section
+						initial={{ opacity: 0, y: 8 }}
+						animate={{ opacity: 1, y: 0 }}
+						transition={{ delay: 0.12 }}
 					>
 						<h2 className="mb-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">
 							Status

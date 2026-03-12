@@ -10,6 +10,11 @@ from app.models import ChatRequest
 from app.services.convex import save_assistant_message, patch_message_usage
 from app.services.mcp_client import call_tool, list_tools
 from app.services.openrouter import stream_chat
+from app.services.skills import (
+    get_skill_content as fetch_skill_content,
+    get_skill_manifest,
+    get_skill_tool_definition,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -56,6 +61,16 @@ async def chat_stream(
                 }
 
         messages = [m.model_dump() for m in body.messages]
+
+        # Prepend skills manifest as a system message and register the skill tool
+        if body.harness.skills:
+            manifest = get_skill_manifest(body.harness.skills)
+            messages.insert(0, {"role": "system", "content": manifest})
+
+            skill_tool = get_skill_tool_definition()
+            if tools is None:
+                tools = []
+            tools.append(skill_tool)
 
         # Accumulate across all iterations so reasoning/tool history isn't lost
         all_reasoning = ""
@@ -321,14 +336,22 @@ async def chat_stream(
             # Phase 2: Execute all tool calls in parallel, stream results as they complete
             async def _execute_tool(tool_info: dict) -> tuple[dict, str]:
                 """Execute a tool and return (tool_info, result) for identification."""
+                tool_name = tool_info["tool_name"]
+
+                # Built-in skill tool — resolve locally, no MCP call needed
+                if tool_name == "get_skill_content":
+                    skill_id = tool_info["args"].get("skill_id", "")
+                    logger.info("Resolving built-in skill tool for '%s'", skill_id)
+                    return tool_info, fetch_skill_content(skill_id)
+
                 logger.info(
                     "Executing MCP tool '%s' with args: %s",
-                    tool_info["tool_name"],
+                    tool_name,
                     json.dumps(tool_info["args"])[:200],
                 )
                 result = await call_tool(
                     http_client,
-                    tool_info["tool_name"],
+                    tool_name,
                     tool_info["args"],
                     body.harness.mcp_servers,
                     user_id=user_id,

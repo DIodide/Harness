@@ -25,9 +25,9 @@ import { useMemo, useState } from "react";
 import { HarnessMark } from "../components/harness-mark";
 import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
+import { PresetSkillGrid } from "../components/preset-skill-grid";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Checkbox } from "../components/ui/checkbox";
 import { Input } from "../components/ui/input";
 import {
 	Select,
@@ -51,35 +51,6 @@ export const Route = createFileRoute("/onboarding")({
 	},
 	component: OnboardingPage,
 });
-
-const AVAILABLE_SKILLS = [
-	{ id: "coding", name: "Coding", description: "Write and review code" },
-	{
-		id: "research",
-		name: "Research",
-		description: "Gather and synthesize information",
-	},
-	{
-		id: "writing",
-		name: "Writing",
-		description: "Draft documents and content",
-	},
-	{
-		id: "analysis",
-		name: "Data Analysis",
-		description: "Analyze datasets and trends",
-	},
-	{
-		id: "debugging",
-		name: "Debugging",
-		description: "Find and fix issues in code",
-	},
-	{
-		id: "devops",
-		name: "DevOps",
-		description: "Infrastructure and deployment",
-	},
-];
 
 const BASE_STEPS = [
 	{ key: "name", label: "Name & Model", icon: Wrench },
@@ -767,37 +738,14 @@ function StepSkills({
 }) {
 	return (
 		<div className="space-y-3">
-			<p className="text-xs text-muted-foreground">
-				Select the skills your agent should have.
-			</p>
-			<div className="grid gap-2 sm:grid-cols-2">
-				{AVAILABLE_SKILLS.map((skill) => (
-					<button
-						key={skill.id}
-						type="button"
-						onClick={() => toggle(skill.id)}
-						className={`flex items-start gap-3 border p-3 text-left transition-colors ${
-							selected.includes(skill.id)
-								? "border-foreground bg-foreground/3"
-								: "border-border hover:border-foreground/20"
-						}`}
-					>
-						<Checkbox
-							checked={selected.includes(skill.id)}
-							className="mt-0.5"
-							tabIndex={-1}
-						/>
-						<div>
-							<p className="text-xs font-medium text-foreground">
-								{skill.name}
-							</p>
-							<p className="text-xs text-muted-foreground">
-								{skill.description}
-							</p>
-						</div>
-					</button>
-				))}
+			<div>
+				<p className="text-xs font-medium text-foreground">Agent Skills</p>
+				<p className="mt-0.5 text-xs text-muted-foreground">
+					Select the skills your agent should have. Each skill gives the agent
+					specialized guidelines it can draw on during conversations.
+				</p>
 			</div>
+			<PresetSkillGrid selected={selected} onToggle={toggle} />
 		</div>
 	);
 }

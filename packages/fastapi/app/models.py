@@ -14,6 +14,7 @@ class HarnessConfig(BaseModel):
     model: str
     mcp_servers: list[McpServer] = []
     name: str
+    skills: list[str] = []
 
 
 class MessagePayload(BaseModel):

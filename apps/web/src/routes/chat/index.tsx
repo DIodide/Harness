@@ -658,6 +658,7 @@ function ChatPage() {
 						auth_token: s.authToken,
 					})),
 					name: activeHarness.name,
+					skills: activeHarness.skills,
 				},
 				conversation_id: convoId,
 			});
@@ -715,6 +716,7 @@ function ChatPage() {
 					auth_token: s.authToken,
 				})),
 				name: activeHarness.name,
+				skills: activeHarness.skills,
 			};
 
 			chatStream.stream({
@@ -1930,6 +1932,7 @@ function ChatInput({
 		_id: Id<"harnesses">;
 		name: string;
 		model: string;
+		skills: string[];
 		mcpServers: Array<{
 			name: string;
 			url: string;
@@ -1950,6 +1953,7 @@ function ChatInput({
 				auth_token?: string;
 			}>;
 			name: string;
+			skills: string[];
 		};
 		conversation_id: string;
 	}) => Promise<void>;
@@ -2034,6 +2038,7 @@ function ChatInput({
 				auth_token: s.authToken,
 			})),
 			name: activeHarness.name,
+			skills: activeHarness.skills,
 		};
 
 		let convoId = conversationId;
