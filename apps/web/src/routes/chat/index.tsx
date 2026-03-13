@@ -97,6 +97,7 @@ import {
 	type UsageData,
 	useChatStream,
 } from "../../lib/use-chat-stream";
+import { SandboxResult } from "../../components/sandbox-result";
 import { cn } from "../../lib/utils";
 
 export const Route = createFileRoute("/chat/")({
@@ -658,6 +659,17 @@ function ChatPage() {
 						auth_token: s.authToken,
 					})),
 					name: activeHarness.name,
+					harness_id: activeHarness._id,
+					sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
+					sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
+					sandbox_config: (activeHarness as any).sandboxConfig
+						? {
+								persistent: (activeHarness as any).sandboxConfig.persistent,
+								auto_start: (activeHarness as any).sandboxConfig.autoStart,
+								default_language: (activeHarness as any).sandboxConfig.defaultLanguage,
+								resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
+							}
+						: undefined,
 				},
 				conversation_id: convoId,
 			});
@@ -715,6 +727,17 @@ function ChatPage() {
 					auth_token: s.authToken,
 				})),
 				name: activeHarness.name,
+				harness_id: activeHarness._id,
+				sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
+				sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
+				sandbox_config: (activeHarness as any).sandboxConfig
+					? {
+							persistent: (activeHarness as any).sandboxConfig.persistent,
+							auto_start: (activeHarness as any).sandboxConfig.autoStart,
+							default_language: (activeHarness as any).sandboxConfig.defaultLanguage,
+							resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
+						}
+					: undefined,
 			};
 
 			chatStream.stream({
@@ -1325,6 +1348,20 @@ function ChatHeader({
 						healthStatuses={mcpHealthStatuses}
 					/>
 				)}
+
+				{harness && (harness as any).sandboxEnabled && (
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<div className="flex items-center gap-1.5 border border-border px-2 py-1 text-[10px] text-muted-foreground">
+								<div className="h-1.5 w-1.5 bg-emerald-500" />
+								<span>Sandbox</span>
+							</div>
+						</TooltipTrigger>
+						<TooltipContent>
+							<p>Sandbox enabled — code execution, file system, and terminal available</p>
+						</TooltipContent>
+					</Tooltip>
+				)}
 			</div>
 		</header>
 	);
@@ -1768,9 +1805,67 @@ function ToolCallBlock({
 	isStreaming: boolean;
 }) {
 	const [open, setOpen] = useState(false);
-	const displayName = tool.includes("__") ? tool.replace("__", " / ") : tool;
+	const isSandboxTool = tool.startsWith("sandbox__");
+	const displayName = isSandboxTool
+		? tool.replace("sandbox__", "sandbox / ")
+		: tool.includes("__")
+			? tool.replace("__", " / ")
+			: tool;
 	const authError = result ? parseAuthRequiredError(result) : null;
 
+	// For sandbox tools with results, render rich result inline (always visible)
+	if (isSandboxTool && result && !isStreaming && !authError) {
+		return (
+			<div className="mb-1.5">
+				<button
+					type="button"
+					onClick={() => setOpen((o) => !o)}
+					className="flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+				>
+					<motion.span
+						animate={{ rotate: open ? 90 : 0 }}
+						transition={{ duration: 0.15 }}
+						className="flex"
+					>
+						<ChevronRight size={10} />
+					</motion.span>
+					<Wrench size={10} className="text-emerald-500" />
+					<span>{displayName}</span>
+				</button>
+
+				{/* Rich sandbox result (always visible) */}
+				<div className="ml-4 mt-1">
+					<SandboxResult result={result} toolName={tool} args={args} />
+				</div>
+
+				{/* Collapsible raw arguments (for developer mode) */}
+				<AnimatePresence>
+					{open && (
+						<motion.div
+							initial={{ height: 0, opacity: 0 }}
+							animate={{ height: "auto", opacity: 1 }}
+							exit={{ height: 0, opacity: 0 }}
+							transition={{ duration: 0.2 }}
+							className="overflow-hidden"
+						>
+							<div className="mt-1.5 ml-4 space-y-2 border-l-2 border-muted-foreground/20 pl-3 text-[11px] leading-relaxed text-muted-foreground">
+								<div>
+									<p className="mb-0.5 font-medium text-foreground/70">
+										Arguments
+									</p>
+									<pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[10px]">
+										{JSON.stringify(args, null, 2)}
+									</pre>
+								</div>
+							</div>
+						</motion.div>
+					)}
+				</AnimatePresence>
+			</div>
+		);
+	}
+
+	// Default rendering for MCP tools and streaming sandbox tools
 	return (
 		<div className="mb-1.5">
 			<button
@@ -2034,6 +2129,18 @@ function ChatInput({
 				auth_token: s.authToken,
 			})),
 			name: activeHarness.name,
+			harness_id: activeHarness._id,
+			sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
+			sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
+			sandbox_config: (activeHarness as any).sandboxConfig
+				? {
+						persistent: (activeHarness as any).sandboxConfig.persistent,
+						auto_start: (activeHarness as any).sandboxConfig.autoStart,
+						default_language: (activeHarness as any).sandboxConfig
+							.defaultLanguage,
+						resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
+					}
+				: undefined,
 		};
 
 		let convoId = conversationId;
