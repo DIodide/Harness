@@ -123,6 +123,30 @@ class DaytonaService:
         client = self._get_client()
         return client.get(sandbox_id)
 
+    def _ensure_running(self, sandbox_id: str) -> Any:
+        """Get a sandbox, auto-starting it if stopped/archived."""
+        client = self._get_client()
+        sandbox = client.get(sandbox_id)
+        raw = getattr(sandbox, "status", None)
+        status = (raw.value if hasattr(raw, "value") else str(raw)).lower()
+        logger.info(
+            "Sandbox '%s' status: %s (raw: %r)", sandbox_id, status, raw,
+        )
+        if status not in ("started",):
+            logger.info(
+                "Sandbox '%s' is %s — auto-starting", sandbox_id, status,
+            )
+            client.start(sandbox, timeout=60)
+            sandbox = client.get(sandbox_id)
+            new_raw = getattr(sandbox, "status", None)
+            new_status = (
+                new_raw.value if hasattr(new_raw, "value") else str(new_raw)
+            ).lower()
+            logger.info(
+                "Auto-started sandbox '%s', now %s", sandbox_id, new_status,
+            )
+        return sandbox
+
     def start_sandbox(self, sandbox_id: str) -> None:
         """Start a stopped sandbox."""
         client = self._get_client()
@@ -154,7 +178,7 @@ class DaytonaService:
         timeout: int = 30,
     ) -> CodeExecutionResult:
         """Execute code in a sandbox (stateless)."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         logger.info(
             "Executing %s code in sandbox '%s' (timeout=%ds)",
             language, sandbox_id, timeout,
@@ -197,7 +221,7 @@ class DaytonaService:
         timeout: int = 60,
     ) -> CommandResult:
         """Execute a shell command in a sandbox."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         logger.info(
             "Running command in sandbox '%s': %s",
             sandbox_id, command[:100],
@@ -217,7 +241,7 @@ class DaytonaService:
         self, sandbox_id: str, path: str = "/home/daytona",
     ) -> list[FileInfo]:
         """List files in a sandbox directory."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         files = sandbox.fs.list_files(path)
         return [
             FileInfo(
@@ -231,7 +255,7 @@ class DaytonaService:
 
     def read_file(self, sandbox_id: str, path: str) -> str:
         """Read file content from a sandbox."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         content = sandbox.fs.download_file(path)
         if isinstance(content, bytes):
             return content.decode("utf-8", errors="replace")
@@ -241,35 +265,35 @@ class DaytonaService:
         self, sandbox_id: str, path: str, content: str,
     ) -> None:
         """Write content to a file in a sandbox."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         sandbox.fs.upload_file(content.encode("utf-8"), path)
 
     def delete_file(
         self, sandbox_id: str, path: str, recursive: bool = False,
     ) -> None:
         """Delete a file or directory in a sandbox."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         sandbox.fs.delete_file(path, recursive=recursive)
 
     def create_directory(
         self, sandbox_id: str, path: str,
     ) -> None:
         """Create a directory in a sandbox."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         sandbox.fs.create_folder(path, "0755")
 
     def move_file(
         self, sandbox_id: str, source: str, destination: str,
     ) -> None:
         """Move/rename a file in a sandbox."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         sandbox.fs.move_files(source, destination)
 
     def search_file_contents(
         self, sandbox_id: str, path: str, pattern: str,
     ) -> list[dict]:
         """Search file contents in a sandbox (grep-like)."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         matches = sandbox.fs.find_files(path, pattern)
         return [
             {
@@ -284,7 +308,7 @@ class DaytonaService:
         self, sandbox_id: str, path: str, pattern: str,
     ) -> list[str]:
         """Search file names in a sandbox (glob-like)."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         result = sandbox.fs.search_files(path, pattern)
         if hasattr(result, "files"):
             return result.files
@@ -298,7 +322,7 @@ class DaytonaService:
         replacement: str,
     ) -> list[dict]:
         """Find and replace across files in a sandbox."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         results = sandbox.fs.replace_in_files(
             files, pattern, replacement,
         )
@@ -322,7 +346,7 @@ class DaytonaService:
         password: str | None = None,
     ) -> str:
         """Clone a git repository into a sandbox."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         if path is None:
             repo_name = url.rstrip("/").split("/")[-1]
             repo_name = repo_name.replace(".git", "")
@@ -343,7 +367,7 @@ class DaytonaService:
         self, sandbox_id: str, path: str,
     ) -> GitStatus:
         """Get git status for a repo in a sandbox."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         status = sandbox.git.status(path)
         files = []
         file_status = getattr(status, "file_status", None)
@@ -366,14 +390,14 @@ class DaytonaService:
         self, sandbox_id: str, path: str, files: list[str],
     ) -> None:
         """Stage files in a sandbox repo."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         sandbox.git.add(path, files)
 
     def git_commit(
         self, sandbox_id: str, path: str, message: str,
     ) -> str:
         """Commit staged changes. Returns the commit SHA."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         result = sandbox.git.commit(
             path, message, "Harness", "harness@daytona.io",
         )
@@ -387,7 +411,7 @@ class DaytonaService:
         password: str | None = None,
     ) -> None:
         """Push commits to remote."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         kwargs: dict[str, Any] = {}
         if username:
             kwargs["username"] = username
@@ -403,7 +427,7 @@ class DaytonaService:
         password: str | None = None,
     ) -> None:
         """Pull from remote."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         kwargs: dict[str, Any] = {}
         if username:
             kwargs["username"] = username
@@ -415,7 +439,7 @@ class DaytonaService:
         self, sandbox_id: str, path: str,
     ) -> dict:
         """List branches in a sandbox repo."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         result = sandbox.git.branches(path)
         branches = []
         if hasattr(result, "branches"):
@@ -433,7 +457,7 @@ class DaytonaService:
         create: bool = False,
     ) -> None:
         """Checkout a branch in a sandbox repo."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         if create:
             sandbox.git.create_branch(path, branch)
         sandbox.git.checkout_branch(path, branch)
@@ -485,7 +509,7 @@ class DaytonaService:
         commands via run_command authenticate automatically.
         """
         cred_line = f"https://{username}:{token}@github.com"
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         # Write the credentials file
         sandbox.process.exec(
             f'printf "%s\\n" "{cred_line}" > /home/daytona/.git-credentials'
@@ -503,7 +527,7 @@ class DaytonaService:
         self, sandbox_id: str, port: int,
     ) -> str:
         """Get a preview URL for a port on the sandbox."""
-        sandbox = self.get_sandbox(sandbox_id)
+        sandbox = self._ensure_running(sandbox_id)
         return sandbox.get_preview_link(port)
 
 

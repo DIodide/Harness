@@ -782,6 +782,64 @@ def _issuer_from_token_endpoint(token_endpoint: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def start_github_oauth_flow(
+    user_id: str,
+    redirect_uri: str,
+) -> tuple[str, str]:
+    """Start a direct GitHub OAuth flow (no MCP discovery).
+
+    Returns (authorization_url, state).
+    """
+    client_id = settings.github_oauth_client_id
+    if not client_id:
+        raise OAuthError("GitHub OAuth client ID not configured")
+
+    state = secrets.token_urlsafe(32)
+    code_verifier, code_challenge = _generate_pkce_pair()
+
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "state": state,
+        "scope": "repo read:user",
+    }
+
+    authorization_url = (
+        f"https://github.com/login/oauth/authorize?{urlencode(params)}"
+    )
+
+    # Build a minimal AuthServerMeta so the callback can exchange the code
+    meta = AuthServerMeta(
+        authorization_endpoint="https://github.com/login/oauth/authorize",
+        token_endpoint="https://github.com/login/oauth/access_token",
+        registration_endpoint=None,
+        scopes_supported=["repo", "read:user"],
+        code_challenge_methods_supported=["S256"],
+        resource_metadata_url="",
+        supports_cimd=False,
+        fetched_at=time.time(),
+    )
+
+    registered = RegisteredClient(
+        client_id=client_id,
+        client_secret=settings.github_oauth_client_secret or None,
+    )
+
+    _pending_oauth[state] = PendingOAuth(
+        user_id=user_id,
+        mcp_server_url=GITHUB_STANDALONE_URL,
+        code_verifier=code_verifier,
+        scopes="repo read:user",
+        auth_server_meta=meta,
+        registered_client=registered,
+        redirect_uri=redirect_uri,
+        created_at=time.time(),
+    )
+
+    _cleanup_pending()
+    return authorization_url, state
+
+
 def _cleanup_pending() -> None:
     """Remove pending OAuth flows older than 10 minutes."""
     cutoff = time.time() - 600

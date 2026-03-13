@@ -228,7 +228,7 @@ async def download_file(
     """Download a raw file from a sandbox (images, binaries, etc.)."""
     service = _get_service()
     try:
-        sandbox = service.get_sandbox(sandbox_id)
+        sandbox = service._ensure_running(sandbox_id)
         data = sandbox.fs.download_file(path)
         if data is None:
             raise HTTPException(status_code=404, detail="File not found")

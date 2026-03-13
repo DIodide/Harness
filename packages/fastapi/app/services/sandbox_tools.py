@@ -442,7 +442,7 @@ def execute_sandbox_tool(
             if ext in image_exts:
                 # Return image as base64 for inline display
                 import base64
-                sandbox = service.get_sandbox(sandbox_id)
+                sandbox = service._ensure_running(sandbox_id)
                 raw = sandbox.fs.download_file(file_path)
                 if raw is None:
                     return json.dumps({"type": "error", "message": f"File not found: {file_path}"})
