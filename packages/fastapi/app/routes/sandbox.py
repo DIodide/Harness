@@ -9,6 +9,7 @@ terminal panel.
 
 import logging
 import mimetypes
+import shlex
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -18,6 +19,10 @@ from app.models import (
     SandboxExecuteRequest,
     SandboxCommandRequest,
     SandboxFileWriteRequest,
+    SandboxFileMoveRequest,
+    SandboxMkdirRequest,
+    GitAddRequest,
+    GitCommitRequest,
 )
 from app.services.daytona_service import get_daytona_service, DaytonaService
 
@@ -245,6 +250,73 @@ async def download_file(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.delete("/{sandbox_id}/files")
+async def delete_file(
+    sandbox_id: str,
+    path: str = Query(...),
+    recursive: bool = Query(default=False),
+    user: dict = Depends(get_current_user),
+):
+    """Delete a file or directory in a sandbox."""
+    service = _get_service()
+    try:
+        service.delete_file(sandbox_id, path, recursive=recursive)
+        return {"success": True, "path": path}
+    except Exception as e:
+        logger.error("File delete failed in sandbox '%s': %s", sandbox_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{sandbox_id}/files/move")
+async def move_file(
+    sandbox_id: str,
+    body: SandboxFileMoveRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Move/rename a file or directory in a sandbox."""
+    service = _get_service()
+    try:
+        service.move_file(sandbox_id, body.source, body.destination)
+        return {"success": True, "source": body.source, "destination": body.destination}
+    except Exception as e:
+        logger.error("File move failed in sandbox '%s': %s", sandbox_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{sandbox_id}/files/mkdir")
+async def create_directory(
+    sandbox_id: str,
+    body: SandboxMkdirRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Create a directory in a sandbox."""
+    service = _get_service()
+    try:
+        service.create_directory(sandbox_id, body.path)
+        return {"success": True, "path": body.path}
+    except Exception as e:
+        logger.error("Mkdir failed in sandbox '%s': %s", sandbox_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{sandbox_id}/files/search")
+async def search_files(
+    sandbox_id: str,
+    path: str = Query(default="/home/daytona"),
+    pattern: str = Query(...),
+    user: dict = Depends(get_current_user),
+):
+    """Search file contents in a sandbox (grep-like)."""
+    service = _get_service()
+    try:
+        matches = service.search_file_contents(sandbox_id, path, pattern)
+        return {"matches": matches, "pattern": pattern}
+    except Exception as e:
+        logger.error("Search failed in sandbox '%s': %s", sandbox_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 @router.get("/{sandbox_id}/git/status")
 async def git_status(
     sandbox_id: str,
@@ -253,6 +325,21 @@ async def git_status(
 ):
     """Get git status for a repo in a sandbox."""
     service = _get_service()
+    # First check if this is a git repo via a simple command
+    try:
+        check = service.run_command(
+            sandbox_id, f"git -C {shlex.quote(path)} rev-parse --is-inside-work-tree",
+        )
+        if check.exit_code != 0:
+            raise HTTPException(
+                status_code=400, detail="Not a git repository",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=400, detail="Not a git repository",
+        )
     try:
         status = service.git_status(sandbox_id, path)
         return {
@@ -263,4 +350,86 @@ async def git_status(
         }
     except Exception as e:
         logger.error("Git status failed in sandbox '%s': %s", sandbox_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{sandbox_id}/git/add")
+async def git_add(
+    sandbox_id: str,
+    body: GitAddRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Stage files for commit."""
+    service = _get_service()
+    try:
+        service.git_add(sandbox_id, body.path, body.files)
+        return {"success": True}
+    except Exception as e:
+        logger.error("Git add failed in sandbox '%s': %s", sandbox_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{sandbox_id}/git/commit")
+async def git_commit(
+    sandbox_id: str,
+    body: GitCommitRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Commit staged changes."""
+    service = _get_service()
+    try:
+        sha = service.git_commit(sandbox_id, body.path, body.message)
+        return {"success": True, "sha": sha}
+    except Exception as e:
+        logger.error("Git commit failed in sandbox '%s': %s", sandbox_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{sandbox_id}/git/diff")
+async def git_diff(
+    sandbox_id: str,
+    path: str = Query(...),
+    staged: bool = Query(default=False),
+    user: dict = Depends(get_current_user),
+):
+    """Get git diff."""
+    service = _get_service()
+    try:
+        diff = service.git_diff(sandbox_id, path, staged=staged)
+        return {"diff": diff}
+    except Exception as e:
+        logger.error("Git diff failed in sandbox '%s': %s", sandbox_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{sandbox_id}/git/log")
+async def git_log(
+    sandbox_id: str,
+    path: str = Query(...),
+    count: int = Query(default=20),
+    user: dict = Depends(get_current_user),
+):
+    """Get git log."""
+    service = _get_service()
+    try:
+        commits = service.git_log(sandbox_id, path, count=count)
+        return {"commits": commits}
+    except Exception as e:
+        logger.error("Git log failed in sandbox '%s': %s", sandbox_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{sandbox_id}/git/branches")
+async def git_branches(
+    sandbox_id: str,
+    path: str = Query(...),
+    user: dict = Depends(get_current_user),
+):
+    """List git branches."""
+    service = _get_service()
+    try:
+        result = service.git_branches(sandbox_id, path)
+        return result
+    except Exception as e:
+        logger.error("Git branches failed in sandbox '%s': %s", sandbox_id, e)
         raise HTTPException(status_code=500, detail=str(e))

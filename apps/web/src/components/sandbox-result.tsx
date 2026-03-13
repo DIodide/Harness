@@ -1,5 +1,4 @@
 import { useAuth } from "@clerk/clerk-react";
-import hljs from "highlight.js";
 import {
 	AlertTriangle,
 	Check,
@@ -10,78 +9,20 @@ import {
 	ExternalLink,
 	File,
 	Folder,
-	Github,
 	GitBranch,
+	Github,
 	Terminal,
 	X,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { env } from "../env";
+import { useSandboxPanel } from "../lib/sandbox-panel-context";
+import { detectLanguage, useHighlighted } from "../lib/syntax-highlight";
 import { cn } from "../lib/utils";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
-
-/** Map file extensions to highlight.js language names. */
-function detectLanguage(filePath: string): string | undefined {
-	const ext = filePath.split(".").pop()?.toLowerCase();
-	const map: Record<string, string> = {
-		ts: "typescript",
-		tsx: "typescript",
-		js: "javascript",
-		jsx: "javascript",
-		py: "python",
-		rb: "ruby",
-		rs: "rust",
-		go: "go",
-		java: "java",
-		kt: "kotlin",
-		swift: "swift",
-		c: "c",
-		cpp: "cpp",
-		h: "c",
-		hpp: "cpp",
-		cs: "csharp",
-		php: "php",
-		sh: "bash",
-		bash: "bash",
-		zsh: "bash",
-		yml: "yaml",
-		yaml: "yaml",
-		json: "json",
-		toml: "ini",
-		xml: "xml",
-		html: "html",
-		css: "css",
-		scss: "scss",
-		sql: "sql",
-		md: "markdown",
-		dockerfile: "dockerfile",
-		tf: "hcl",
-		lua: "lua",
-		r: "r",
-		ex: "elixir",
-		exs: "elixir",
-	};
-	return ext ? map[ext] : undefined;
-}
-
-/** Syntax-highlight code, returning an HTML string. */
-function useHighlighted(code: string, language?: string) {
-	return useMemo(() => {
-		if (!code) return "";
-		try {
-			if (language && hljs.getLanguage(language)) {
-				return hljs.highlight(code, { language }).value;
-			}
-			return hljs.highlightAuto(code).value;
-		} catch {
-			return "";
-		}
-	}, [code, language]);
-}
-
 
 interface SandboxResultProps {
 	result: string;
@@ -415,9 +356,7 @@ function FileContentResult({ data }: { data: Record<string, unknown> }) {
 				<div className="relative border-t border-border">
 					{highlighted ? (
 						<pre className="hljs max-h-80 overflow-auto px-3 py-2 text-xs leading-relaxed">
-							<code
-								dangerouslySetInnerHTML={{ __html: highlighted }}
-							/>
+							<code dangerouslySetInnerHTML={{ __html: highlighted }} />
 						</pre>
 					) : (
 						<pre className="max-h-80 overflow-auto bg-muted/20 px-3 py-2 text-xs leading-relaxed">
@@ -484,6 +423,7 @@ function ImageResult({ data }: { data: Record<string, unknown> }) {
 }
 
 function FileListResult({ data }: { data: Record<string, unknown> }) {
+	const panel = useSandboxPanel();
 	const path = data.path as string;
 	const files = data.files as Array<{
 		name: string;
@@ -503,9 +443,17 @@ function FileListResult({ data }: { data: Record<string, unknown> }) {
 			</div>
 			<div className="border-t border-border">
 				{files.map((file) => (
-					<div
+					<button
 						key={file.path}
-						className="flex items-center gap-2 px-3 py-1 text-xs hover:bg-muted/20"
+						type="button"
+						className="flex w-full items-center gap-2 px-3 py-1 text-left text-xs hover:bg-muted/30 cursor-pointer transition-colors"
+						onClick={() => {
+							if (file.is_dir) {
+								panel?.navigateTo(file.path);
+							} else {
+								panel?.openFile(file.path);
+							}
+						}}
 					>
 						{file.is_dir ? (
 							<Folder size={10} className="text-amber-500" />
@@ -520,7 +468,7 @@ function FileListResult({ data }: { data: Record<string, unknown> }) {
 								{formatBytes(file.size)}
 							</span>
 						)}
-					</div>
+					</button>
 				))}
 			</div>
 		</div>
@@ -745,18 +693,15 @@ function SearchResult({ data }: { data: Record<string, unknown> }) {
 										{String(m.file ?? "")}
 									</span>
 									{m.line != null && (
-										<span className="text-muted-foreground">:{String(m.line)}</span>
+										<span className="text-muted-foreground">
+											:{String(m.line)}
+										</span>
 									)}
-									<span className="truncate">
-										{String(m.content ?? "")}
-									</span>
+									<span className="truncate">{String(m.content ?? "")}</span>
 								</div>
 							))
 						: files.map((f) => (
-								<div
-									key={f}
-									className="px-3 py-1 text-xs hover:bg-muted/20"
-								>
+								<div key={f} className="px-3 py-1 text-xs hover:bg-muted/20">
 									{f}
 								</div>
 							))}
@@ -805,10 +750,9 @@ function GitHubAuthRequiredError({ message }: { message: string }) {
 
 		try {
 			const token = await getToken();
-			const res = await fetch(
-				`${API_URL}/api/mcp/oauth/github/start`,
-				{ headers: { Authorization: `Bearer ${token}` } },
-			);
+			const res = await fetch(`${API_URL}/api/mcp/oauth/github/start`, {
+				headers: { Authorization: `Bearer ${token}` },
+			});
 			if (!res.ok) throw new Error("Failed to start GitHub OAuth");
 			const data = await res.json();
 
@@ -853,9 +797,7 @@ function GitHubAuthRequiredError({ message }: { message: string }) {
 					{status === "connected" ? (
 						<div className="flex items-center gap-1.5 text-[11px] text-emerald-600">
 							<Check size={10} />
-							<span>
-								GitHub connected — retry your message to push.
-							</span>
+							<span>GitHub connected — retry your message to push.</span>
 						</div>
 					) : (
 						<Button

@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class McpServer(BaseModel):
@@ -53,15 +53,34 @@ class SandboxCreateRequest(BaseModel):
 class SandboxExecuteRequest(BaseModel):
     code: str
     language: Literal["python", "javascript", "typescript", "bash"] = "python"
-    timeout: int = 30
+    timeout: int = Field(default=30, gt=0, le=300)
 
 
 class SandboxCommandRequest(BaseModel):
     command: str
     working_directory: str = "/home/daytona"
-    timeout: int = 60
+    timeout: int = Field(default=60, gt=0, le=300)
 
 
 class SandboxFileWriteRequest(BaseModel):
     path: str
     content: str
+
+
+class SandboxFileMoveRequest(BaseModel):
+    source: str
+    destination: str
+
+
+class SandboxMkdirRequest(BaseModel):
+    path: str
+
+
+class GitAddRequest(BaseModel):
+    path: str = "/home/daytona"
+    files: list[str] = ["."]
+
+
+class GitCommitRequest(BaseModel):
+    path: str = "/home/daytona"
+    message: str

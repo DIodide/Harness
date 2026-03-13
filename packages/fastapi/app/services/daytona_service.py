@@ -6,6 +6,7 @@ code execution, filesystem operations, git operations, and terminal access.
 """
 
 import logging
+import shlex
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -469,7 +470,7 @@ class DaytonaService:
         fmt = "%H|%s|%an|%aI"
         result = self.run_command(
             sandbox_id,
-            f'git -C {path} log --oneline -{count}'
+            f'git -C {shlex.quote(path)} log --oneline -{count}'
             f' --format="{fmt}"',
         )
         commits = []
@@ -490,7 +491,7 @@ class DaytonaService:
         """Get git diff via shell command."""
         flag = " --cached" if staged else ""
         result = self.run_command(
-            sandbox_id, f"git -C {path} diff{flag}",
+            sandbox_id, f"git -C {shlex.quote(path)} diff{flag}",
         )
         return result.stdout
 
@@ -526,9 +527,23 @@ class DaytonaService:
     def get_preview_url(
         self, sandbox_id: str, port: int,
     ) -> str:
-        """Get a preview URL for a port on the sandbox."""
+        """Get a preview URL for a port on the sandbox.
+
+        Uses create_signed_preview_url for a self-contained signed URL
+        that works in iframes without cookie/callback auth flow.
+        Falls back to get_preview_link if signed URL is unavailable.
+        """
         sandbox = self._ensure_running(sandbox_id)
-        return sandbox.get_preview_link(port)
+        try:
+            # Signed URL: self-contained, works in iframes, 5 min expiry
+            result = sandbox.create_signed_preview_url(
+                port, expires_in_seconds=300,
+            )
+            return result.url
+        except Exception:
+            # Fallback to regular preview link
+            result = sandbox.get_preview_link(port)
+            return result.url
 
 
 # Module-level singleton

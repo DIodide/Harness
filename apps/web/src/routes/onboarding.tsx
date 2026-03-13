@@ -125,7 +125,13 @@ function OnboardingPage() {
 	const steps = useMemo(() => {
 		if (!hasOAuthServers) return BASE_STEPS;
 		// Insert connect step after MCP Servers, before Sandbox
-		return [BASE_STEPS[0], BASE_STEPS[1], CONNECT_STEP, BASE_STEPS[2], BASE_STEPS[3]];
+		return [
+			BASE_STEPS[0],
+			BASE_STEPS[1],
+			CONNECT_STEP,
+			BASE_STEPS[2],
+			BASE_STEPS[3],
+		];
 	}, [hasOAuthServers]);
 
 	// Clamp stepIndex if steps shrink (e.g. OAuth servers removed while on connect step)
@@ -204,9 +210,7 @@ function OnboardingPage() {
 			status: "started",
 			mcpServers,
 			skills: selectedSkills,
-			...(sandboxEnabled
-				? { sandboxEnabled: true, sandboxConfig }
-				: {}),
+			...(sandboxEnabled ? { sandboxEnabled: true, sandboxConfig } : {}),
 		} as any);
 	};
 
@@ -217,9 +221,7 @@ function OnboardingPage() {
 			status: "draft",
 			mcpServers,
 			skills: selectedSkills,
-			...(sandboxEnabled
-				? { sandboxEnabled: true, sandboxConfig }
-				: {}),
+			...(sandboxEnabled ? { sandboxEnabled: true, sandboxConfig } : {}),
 		} as any);
 	};
 
@@ -894,9 +896,7 @@ function StepSandbox({
 					onCheckedChange={(checked) => setEnabled(checked === true)}
 				/>
 				<div className="flex-1">
-					<p className="text-xs font-medium text-foreground">
-						Enable sandbox
-					</p>
+					<p className="text-xs font-medium text-foreground">Enable sandbox</p>
 					<p className="text-[11px] text-muted-foreground">
 						A sandbox will be auto-provisioned when you start chatting
 					</p>
@@ -919,9 +919,7 @@ function StepSandbox({
 						<div className="grid gap-2 sm:grid-cols-2">
 							<button
 								type="button"
-								onClick={() =>
-									setConfig({ ...config, persistent: false })
-								}
+								onClick={() => setConfig({ ...config, persistent: false })}
 								className={`flex items-start gap-2.5 border px-3 py-2.5 text-left transition-colors ${
 									!config.persistent
 										? "border-foreground bg-foreground/5"
@@ -938,9 +936,7 @@ function StepSandbox({
 							</button>
 							<button
 								type="button"
-								onClick={() =>
-									setConfig({ ...config, persistent: true })
-								}
+								onClick={() => setConfig({ ...config, persistent: true })}
 								className={`flex items-start gap-2.5 border px-3 py-2.5 text-left transition-colors ${
 									config.persistent
 										? "border-foreground bg-foreground/5"

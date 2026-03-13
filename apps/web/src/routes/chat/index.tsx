@@ -53,6 +53,8 @@ import {
 	type DisplayMode,
 	MessageActions,
 } from "../../components/message-actions";
+import { SandboxPanel } from "../../components/sandbox/sandbox-panel";
+import { SandboxResult } from "../../components/sandbox-result";
 import {
 	Avatar,
 	AvatarFallback,
@@ -91,13 +93,16 @@ import {
 } from "../../components/ui/tooltip";
 import { env } from "../../env";
 import {
+	SandboxPanelProvider,
+	useSandboxPanel,
+} from "../../lib/sandbox-panel-context";
+import {
 	type ConvoStreamState,
 	type StreamPart,
 	type ToolCallEvent,
 	type UsageData,
 	useChatStream,
 } from "../../lib/use-chat-stream";
-import { SandboxResult } from "../../components/sandbox-result";
 import { cn } from "../../lib/utils";
 
 export const Route = createFileRoute("/chat/")({
@@ -666,8 +671,10 @@ function ChatPage() {
 						? {
 								persistent: (activeHarness as any).sandboxConfig.persistent,
 								auto_start: (activeHarness as any).sandboxConfig.autoStart,
-								default_language: (activeHarness as any).sandboxConfig.defaultLanguage,
-								resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
+								default_language: (activeHarness as any).sandboxConfig
+									.defaultLanguage,
+								resource_tier: (activeHarness as any).sandboxConfig
+									.resourceTier,
 							}
 						: undefined,
 				},
@@ -734,7 +741,8 @@ function ChatPage() {
 					? {
 							persistent: (activeHarness as any).sandboxConfig.persistent,
 							auto_start: (activeHarness as any).sandboxConfig.autoStart,
-							default_language: (activeHarness as any).sandboxConfig.defaultLanguage,
+							default_language: (activeHarness as any).sandboxConfig
+								.defaultLanguage,
 							resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
 						}
 					: undefined,
@@ -759,91 +767,100 @@ function ChatPage() {
 		? chatStream.streamingConvoIds.has(activeConvoId)
 		: false;
 
+	const sandboxEnabled = (activeHarness as any)?.sandboxEnabled ?? false;
+	const daytonaSandboxId = (activeHarness as any)?.daytonaSandboxId ?? null;
+
 	return (
-		<div className="flex h-full overflow-hidden bg-background">
-			<AnimatePresence>
-				{sidebarOpen && (
-					<motion.aside
-						initial={{ width: 0, opacity: 0 }}
-						animate={{ width: 280, opacity: 1 }}
-						exit={{ width: 0, opacity: 0 }}
-						transition={{ duration: 0.2 }}
-						className="flex h-full flex-col overflow-hidden border-r border-border"
-					>
-						<ChatSidebar
-							conversations={conversations ?? []}
-							activeConvoId={activeConvoId}
-							onSelect={handleSelectConversation}
-							harnessId={activeHarnessId}
-							onClose={() => setSidebarOpen(false)}
-							streamingConvoIds={chatStream.streamingConvoIds}
-							doneConvoIds={doneConvoIds}
-						/>
-					</motion.aside>
-				)}
-			</AnimatePresence>
+		<SandboxPanelProvider sandboxId={sandboxEnabled ? daytonaSandboxId : null}>
+			<div className="flex h-full overflow-hidden bg-background">
+				<AnimatePresence>
+					{sidebarOpen && (
+						<motion.aside
+							initial={{ width: 0, opacity: 0 }}
+							animate={{ width: 280, opacity: 1 }}
+							exit={{ width: 0, opacity: 0 }}
+							transition={{ duration: 0.2 }}
+							className="flex h-full flex-col overflow-hidden border-r border-border"
+						>
+							<ChatSidebar
+								conversations={conversations ?? []}
+								activeConvoId={activeConvoId}
+								onSelect={handleSelectConversation}
+								harnessId={activeHarnessId}
+								onClose={() => setSidebarOpen(false)}
+								streamingConvoIds={chatStream.streamingConvoIds}
+								doneConvoIds={doneConvoIds}
+							/>
+						</motion.aside>
+					)}
+				</AnimatePresence>
 
-			<div className="flex flex-1 flex-col overflow-hidden">
-				<ChatHeader
-					harness={activeHarness}
-					harnesses={harnesses ?? []}
-					onSwitchHarness={setActiveHarnessId}
-					sidebarOpen={sidebarOpen}
-					onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-					isStreaming={isActiveConvoStreaming}
-					mcpHealthStatuses={mcpHealthStatuses}
-				/>
-
-				<McpFailureBanner
-					failures={mcpFailures}
-					onDismiss={(id) =>
-						setMcpFailures((prev) => prev.filter((f) => f.id !== id))
-					}
-					onDismissAll={() => setMcpFailures([])}
-				/>
-
-				{activeConvoId ? (
-					<ChatMessages
-						conversationId={activeConvoId}
-						messages={activeMessages ?? []}
-						streamingContent={activeStreamState.content}
-						streamingReasoning={activeStreamState.reasoning}
-						activeToolCalls={activeStreamState.toolCalls}
-						streamParts={activeStreamState.parts}
-						pendingDoneContent={activeStreamState.pendingDoneContent}
-						streamUsage={activeStreamState.usage}
-						streamModel={activeStreamState.model}
-						onStreamSynced={handleStreamSynced}
-						displayMode={
-							(userSettings?.displayMode as DisplayMode) ?? "standard"
-						}
-						onRegenerate={handleRegenerate}
+				<div className="flex flex-1 flex-col overflow-hidden">
+					<ChatHeader
+						harness={activeHarness}
+						harnesses={harnesses ?? []}
+						onSwitchHarness={setActiveHarnessId}
+						sidebarOpen={sidebarOpen}
+						onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
 						isStreaming={isActiveConvoStreaming}
+						mcpHealthStatuses={mcpHealthStatuses}
 					/>
-				) : (
-					<EmptyChat
-						suggestedPrompts={activeHarness?.suggestedPrompts}
-						onPromptClick={(text) => setPendingPrompt(text)}
-					/>
-				)}
 
-				<ChatInput
-					conversationId={activeConvoId}
-					activeHarness={activeHarness}
-					onConvoCreated={handleSelectConversation}
-					isStreaming={isActiveConvoStreaming}
-					onStream={chatStream.stream}
-					onInterrupt={handleInterrupt}
-					onEnqueue={enqueueMessage}
-					messages={activeMessages}
-					messageQueue={messageQueue}
-					onDequeue={dequeueMessage}
-					onSendNow={handleSendNow}
-					pendingPrompt={pendingPrompt}
-					onPendingPromptConsumed={() => setPendingPrompt(null)}
-				/>
+					<McpFailureBanner
+						failures={mcpFailures}
+						onDismiss={(id) =>
+							setMcpFailures((prev) => prev.filter((f) => f.id !== id))
+						}
+						onDismissAll={() => setMcpFailures([])}
+					/>
+
+					{activeConvoId ? (
+						<ChatMessages
+							conversationId={activeConvoId}
+							messages={activeMessages ?? []}
+							streamingContent={activeStreamState.content}
+							streamingReasoning={activeStreamState.reasoning}
+							activeToolCalls={activeStreamState.toolCalls}
+							streamParts={activeStreamState.parts}
+							pendingDoneContent={activeStreamState.pendingDoneContent}
+							streamUsage={activeStreamState.usage}
+							streamModel={activeStreamState.model}
+							onStreamSynced={handleStreamSynced}
+							displayMode={
+								(userSettings?.displayMode as DisplayMode) ?? "standard"
+							}
+							onRegenerate={handleRegenerate}
+							isStreaming={isActiveConvoStreaming}
+						/>
+					) : (
+						<EmptyChat
+							suggestedPrompts={activeHarness?.suggestedPrompts}
+							onPromptClick={(text) => setPendingPrompt(text)}
+						/>
+					)}
+
+					<ChatInput
+						conversationId={activeConvoId}
+						activeHarness={activeHarness}
+						onConvoCreated={handleSelectConversation}
+						isStreaming={isActiveConvoStreaming}
+						onStream={chatStream.stream}
+						onInterrupt={handleInterrupt}
+						onEnqueue={enqueueMessage}
+						messages={activeMessages}
+						messageQueue={messageQueue}
+						onDequeue={dequeueMessage}
+						onSendNow={handleSendNow}
+						pendingPrompt={pendingPrompt}
+						onPendingPromptConsumed={() => setPendingPrompt(null)}
+					/>
+				</div>
+
+				<AnimatePresence>
+					{sandboxEnabled && <SandboxPanelToggle />}
+				</AnimatePresence>
 			</div>
-		</div>
+		</SandboxPanelProvider>
 	);
 }
 
@@ -1349,22 +1366,48 @@ function ChatHeader({
 					/>
 				)}
 
-				{harness && (harness as any).sandboxEnabled && (
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<div className="flex items-center gap-1.5 border border-border px-2 py-1 text-[10px] text-muted-foreground">
-								<div className="h-1.5 w-1.5 bg-emerald-500" />
-								<span>Sandbox</span>
-							</div>
-						</TooltipTrigger>
-						<TooltipContent>
-							<p>Sandbox enabled — code execution, file system, and terminal available</p>
-						</TooltipContent>
-					</Tooltip>
-				)}
+				{harness && (harness as any).sandboxEnabled && <SandboxBadge />}
 			</div>
 		</header>
 	);
+}
+
+/** Clickable sandbox badge in the header — toggles the sandbox panel. */
+function SandboxBadge() {
+	const panel = useSandboxPanel();
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<button
+					type="button"
+					onClick={() => panel?.togglePanel()}
+					className={cn(
+						"flex items-center gap-1.5 border px-2 py-1 text-[10px] transition-colors",
+						panel?.panelOpen
+							? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+							: "border-border text-muted-foreground hover:bg-muted/30",
+					)}
+				>
+					<div className="h-1.5 w-1.5 bg-emerald-500" />
+					<span>Sandbox</span>
+				</button>
+			</TooltipTrigger>
+			<TooltipContent>
+				<p>
+					{panel?.panelOpen
+						? "Close sandbox panel"
+						: "Open sandbox panel — browse files and interact directly"}
+				</p>
+			</TooltipContent>
+		</Tooltip>
+	);
+}
+
+/** Renders the sandbox panel (animated) when open. */
+function SandboxPanelToggle() {
+	const panel = useSandboxPanel();
+	if (!panel?.panelOpen) return null;
+	return <SandboxPanel />;
 }
 
 function ChatMessages({
