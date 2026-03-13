@@ -113,3 +113,62 @@ async def patch_message_usage(
         logger.exception(
             "Failed to patch usage for conversation '%s'", conversation_id
         )
+
+
+async def create_sandbox_record(
+    http_client: httpx.AsyncClient,
+    user_id: str,
+    harness_id: str | None,
+    daytona_sandbox_id: str,
+    name: str,
+    language: str,
+    ephemeral: bool,
+    resources: dict,
+) -> str | None:
+    """Create a sandbox record in Convex and link it to the harness.
+
+    Returns the Convex sandbox document ID, or None on failure.
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        logger.warning("Convex not configured — skipping sandbox record creation")
+        return None
+
+    args: dict = {
+        "userId": user_id,
+        "daytonaSandboxId": daytona_sandbox_id,
+        "name": name,
+        "status": "running",
+        "language": language,
+        "ephemeral": ephemeral,
+        "resources": resources,
+    }
+    if harness_id:
+        args["harnessId"] = harness_id
+
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/mutation",
+            headers={
+                "Authorization": f"Convex {settings.convex_deploy_key}",
+            },
+            json={
+                "path": "sandboxes:createInternal",
+                "args": args,
+                "format": "json",
+            },
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        sandbox_doc_id = result.get("value")
+        logger.info(
+            "Created sandbox record '%s' (daytona_id=%s) for harness '%s'",
+            sandbox_doc_id, daytona_sandbox_id, harness_id,
+        )
+        return sandbox_doc_id
+    except Exception:
+        logger.exception(
+            "Failed to create sandbox record for daytona_id '%s'",
+            daytona_sandbox_id,
+        )
+        return None

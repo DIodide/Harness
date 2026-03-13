@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     # Create one at https://github.com/settings/applications/new
     github_oauth_client_id: str = ""
     github_oauth_client_secret: str = ""
+    # Daytona sandbox configuration
+    daytona_api_key: str = ""
+    daytona_api_url: str = "https://app.daytona.io/api"
+    daytona_target: str = "us"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

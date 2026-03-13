@@ -7,14 +7,15 @@ Implements:
 - POST /revoke    — Delete stored tokens for an MCP server
 """
 
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.auth import verify_token
-from app.config import settings
 from app.services.mcp_oauth import (
+    GITHUB_STANDALONE_URL,
     OAuthDiscoveryError,
     OAuthError,
     exchange_code,
@@ -156,6 +157,42 @@ async def oauth_revoke(
     return JSONResponse({"revoked": True})
 
 
+# ── Dedicated GitHub OAuth (independent of MCP) ──────────────
+
+@router.get("/github/status")
+async def github_oauth_status(
+    request: Request,
+    token: dict = Depends(verify_token),
+):
+    """Check if user has a valid standalone GitHub token for sandbox git."""
+    user_id = token.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Missing user ID")
+
+    http_client = request.app.state.http_client
+    access_token = await get_valid_token(
+        http_client, user_id, GITHUB_STANDALONE_URL,
+    )
+
+    return JSONResponse({"connected": access_token is not None})
+
+
+@router.post("/github/revoke")
+async def github_oauth_revoke(
+    request: Request,
+    token: dict = Depends(verify_token),
+):
+    """Revoke the standalone GitHub OAuth token."""
+    user_id = token.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Missing user ID")
+
+    http_client = request.app.state.http_client
+    await _convex_delete_tokens(http_client, user_id, GITHUB_STANDALONE_URL)
+
+    return JSONResponse({"revoked": True})
+
+
 def _close_popup_html(
     success: bool,
     server_url: str = "",
@@ -168,7 +205,6 @@ def _close_popup_html(
         "serverUrl": server_url,
         "error": error,
     }
-    import json
 
     return f"""<!DOCTYPE html>
 <html>

@@ -25,6 +25,10 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Sentinel URL used as the mcpServerUrl key for standalone GitHub tokens
+# (i.e. GitHub auth for sandbox git operations without a GitHub MCP server).
+GITHUB_STANDALONE_URL = "https://github.com/__harness_sandbox_auth__"
+
 # Cache for discovered metadata to avoid repeated HTTP calls.
 _auth_server_cache: dict[str, "AuthServerMeta"] = {}
 _AUTH_SERVER_CACHE_TTL = 300.0  # 5 minutes

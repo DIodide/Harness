@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routes import chat, health, mcp_health, mcp_oauth
+from app.routes import chat, health, mcp_health, mcp_oauth, sandbox
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     settings.validate_startup()
     logger.info("Starting Harness API")
+    if settings.daytona_api_key:
+        logger.info("Daytona sandbox support ENABLED (target=%s)", settings.daytona_target)
+    else:
+        logger.info("Daytona sandbox support DISABLED (no API key)")
 
     app.state.http_client = httpx.AsyncClient(
         limits=httpx.Limits(
@@ -59,3 +63,4 @@ app.include_router(health.router)
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(mcp_oauth.router, prefix="/api/mcp/oauth", tags=["mcp-oauth"])
 app.include_router(mcp_health.router, prefix="/api/mcp/health", tags=["mcp-health"])
+app.include_router(sandbox.router, prefix="/api/sandbox", tags=["sandbox"])
