@@ -726,6 +726,38 @@ function ChatPage() {
 		[activeHarness, activeConvoId, chatStream, removeMessage],
 	);
 
+	const forkConversation = useMutation({
+		mutationFn: useConvexMutation(api.conversations.fork),
+	});
+
+	const handleFork = useCallback(
+		async (messageId: Id<"messages">) => {
+			if (!activeConvoId) return;
+			const newConvoId = await forkConversation.mutateAsync({
+				conversationId: activeConvoId,
+				upToMessageId: messageId,
+			});
+			handleSelectConversation(newConvoId);
+		},
+		[activeConvoId, forkConversation, handleSelectConversation],
+	);
+
+	const handleEditPrompt = useCallback(
+		async (messageId: Id<"messages">, content: string) => {
+			if (!activeMessages) return;
+			const idx = activeMessages.findIndex((m) => m._id === messageId);
+			if (idx === -1) return;
+			// Delete the assistant reply that immediately follows, if it exists
+			const next = activeMessages[idx + 1];
+			if (next?.role === "assistant") {
+				await removeMessage.mutateAsync({ id: next._id });
+			}
+			await removeMessage.mutateAsync({ id: messageId });
+			setPendingPrompt(content);
+		},
+		[activeMessages, removeMessage],
+	);
+
 	if (harnessesLoading || !harnesses || harnesses.length === 0) {
 		return <ChatSkeleton />;
 	}
@@ -795,6 +827,8 @@ function ChatPage() {
 							(userSettings?.displayMode as DisplayMode) ?? "standard"
 						}
 						onRegenerate={handleRegenerate}
+						onFork={handleFork}
+						onEditPrompt={handleEditPrompt}
 						isStreaming={isActiveConvoStreaming}
 					/>
 				) : (
@@ -1343,6 +1377,8 @@ function ChatMessages({
 	onStreamSynced,
 	displayMode,
 	onRegenerate,
+	onFork,
+	onEditPrompt,
 	isStreaming,
 }: {
 	conversationId: Id<"conversations">;
@@ -1387,6 +1423,8 @@ function ChatMessages({
 		messageId: Id<"messages">,
 		history: Array<{ role: string; content: string }>,
 	) => void;
+	onFork: (messageId: Id<"messages">) => void;
+	onEditPrompt: (messageId: Id<"messages">, content: string) => void;
 	isStreaming: boolean;
 }) {
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -1407,6 +1445,11 @@ function ChatMessages({
 		el.addEventListener("scroll", handleScroll, { passive: true });
 		return () => el.removeEventListener("scroll", handleScroll);
 	}, []);
+
+	// Find the last user message ID so the edit button only appears on it
+	const lastUserMessageId = [...(messages ?? [])]
+		.reverse()
+		.find((m) => m.role === "user")?._id;
 
 	// Detect whether Convex has synced the assistant message (computed during render)
 	const lastMsg = messages?.[messages.length - 1];
@@ -1610,6 +1653,14 @@ function ChatMessages({
 													}));
 													onRegenerate(msg._id, history);
 												}
+											: undefined
+									}
+									onFork={
+										msg.role === "assistant" ? () => onFork(msg._id) : undefined
+									}
+									onEditPrompt={
+										msg.role === "user" && msg._id === lastUserMessageId
+											? () => onEditPrompt(msg._id, msg.content)
 											: undefined
 									}
 								/>
