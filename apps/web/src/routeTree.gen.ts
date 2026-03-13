@@ -14,6 +14,7 @@ import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as HarnessesIndexRouteImport } from './routes/harnesses/index'
 import { Route as ChatIndexRouteImport } from './routes/chat/index'
+import { Route as ShareTokenRouteImport } from './routes/share/$token'
 import { Route as HarnessesHarnessIdRouteImport } from './routes/harnesses/$harnessId'
 
 const SignInRoute = SignInRouteImport.update({
@@ -41,6 +42,11 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
   path: '/chat/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ShareTokenRoute = ShareTokenRouteImport.update({
+  id: '/share/$token',
+  path: '/share/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const HarnessesHarnessIdRoute = HarnessesHarnessIdRouteImport.update({
   id: '/harnesses/$harnessId',
   path: '/harnesses/$harnessId',
@@ -52,6 +58,7 @@ export interface FileRoutesByFullPath {
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
+  '/share/$token': typeof ShareTokenRoute
   '/chat/': typeof ChatIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
 }
@@ -60,6 +67,7 @@ export interface FileRoutesByTo {
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
+  '/share/$token': typeof ShareTokenRoute
   '/chat': typeof ChatIndexRoute
   '/harnesses': typeof HarnessesIndexRoute
 }
@@ -69,6 +77,7 @@ export interface FileRoutesById {
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
+  '/share/$token': typeof ShareTokenRoute
   '/chat/': typeof ChatIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
 }
@@ -79,6 +88,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/sign-in'
     | '/harnesses/$harnessId'
+    | '/share/$token'
     | '/chat/'
     | '/harnesses/'
   fileRoutesByTo: FileRoutesByTo
@@ -87,6 +97,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/sign-in'
     | '/harnesses/$harnessId'
+    | '/share/$token'
     | '/chat'
     | '/harnesses'
   id:
@@ -95,6 +106,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/sign-in'
     | '/harnesses/$harnessId'
+    | '/share/$token'
     | '/chat/'
     | '/harnesses/'
   fileRoutesById: FileRoutesById
@@ -104,6 +116,7 @@ export interface RootRouteChildren {
   OnboardingRoute: typeof OnboardingRoute
   SignInRoute: typeof SignInRoute
   HarnessesHarnessIdRoute: typeof HarnessesHarnessIdRoute
+  ShareTokenRoute: typeof ShareTokenRoute
   ChatIndexRoute: typeof ChatIndexRoute
   HarnessesIndexRoute: typeof HarnessesIndexRoute
 }
@@ -145,6 +158,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/share/$token': {
+      id: '/share/$token'
+      path: '/share/$token'
+      fullPath: '/share/$token'
+      preLoaderRoute: typeof ShareTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/harnesses/$harnessId': {
       id: '/harnesses/$harnessId'
       path: '/harnesses/$harnessId'
@@ -160,19 +180,10 @@ const rootRouteChildren: RootRouteChildren = {
   OnboardingRoute: OnboardingRoute,
   SignInRoute: SignInRoute,
   HarnessesHarnessIdRoute: HarnessesHarnessIdRoute,
+  ShareTokenRoute: ShareTokenRoute,
   ChatIndexRoute: ChatIndexRoute,
   HarnessesIndexRoute: HarnessesIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}

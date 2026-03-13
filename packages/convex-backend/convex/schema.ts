@@ -88,6 +88,15 @@ export default defineSchema({
 		.index("by_user_and_server", ["userId", "mcpServerUrl"])
 		.index("by_user", ["userId"]),
 
+	sharedConversations: defineTable({
+		conversationId: v.id("conversations"),
+		shareToken: v.string(),
+		userId: v.string(),
+		createdAt: v.number(),
+	})
+		.index("by_token", ["shareToken"])
+		.index("by_conversation", ["conversationId"]),
+
 	userSettings: defineTable({
 		userId: v.string(),
 		autoSwitchHarness: v.boolean(),

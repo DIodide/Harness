@@ -80,6 +80,16 @@ export const remove = mutation({
 		for (const msg of messages) {
 			await ctx.db.delete(msg._id);
 		}
+		// Cascade-delete any share records
+		const shares = await ctx.db
+			.query("sharedConversations")
+			.withIndex("by_conversation", (q) =>
+				q.eq("conversationId", args.id),
+			)
+			.collect();
+		for (const share of shares) {
+			await ctx.db.delete(share._id);
+		}
 		await ctx.db.delete(args.id);
 	},
 });

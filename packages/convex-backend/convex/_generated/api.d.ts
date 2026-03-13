@@ -13,6 +13,7 @@ import type * as harnesses from "../harnesses.js";
 import type * as mcpOAuthTokens from "../mcpOAuthTokens.js";
 import type * as messages from "../messages.js";
 import type * as seed from "../seed.js";
+import type * as sharing from "../sharing.js";
 import type * as userSettings from "../userSettings.js";
 
 import type {
@@ -27,6 +28,7 @@ declare const fullApi: ApiFromModules<{
   mcpOAuthTokens: typeof mcpOAuthTokens;
   messages: typeof messages;
   seed: typeof seed;
+  sharing: typeof sharing;
   userSettings: typeof userSettings;
 }>;
 

@@ -12,11 +12,11 @@ import {
 import {
 	AlertTriangle,
 	ArrowUp,
-	Brain,
 	Check,
 	ChevronDown,
-	ChevronRight,
+	Copy,
 	Cpu,
+	Link2,
 	Loader2,
 	LogOut,
 	MessageSquare,
@@ -28,7 +28,6 @@ import {
 	Square,
 	Trash2,
 	User,
-	Wrench,
 	X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -46,13 +45,12 @@ import { MarkdownMessage } from "../../components/markdown-message";
 import {
 	type HealthStatus,
 	McpServerStatus,
-	OAuthReconnectPrompt,
-	parseAuthRequiredError,
 } from "../../components/mcp-server-status";
 import {
 	type DisplayMode,
 	MessageActions,
 } from "../../components/message-actions";
+import { ThinkingBlock, ToolCallBlock } from "../../components/message-parts";
 import {
 	Avatar,
 	AvatarFallback,
@@ -769,6 +767,7 @@ function ChatPage() {
 					onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
 					isStreaming={isActiveConvoStreaming}
 					mcpHealthStatuses={mcpHealthStatuses}
+					activeConvoId={activeConvoId}
 				/>
 
 				<McpFailureBanner
@@ -1240,6 +1239,7 @@ function ChatHeader({
 	onToggleSidebar,
 	isStreaming,
 	mcpHealthStatuses,
+	activeConvoId,
 }: {
 	harness?: {
 		_id: Id<"harnesses">;
@@ -1264,7 +1264,10 @@ function ChatHeader({
 	onToggleSidebar: () => void;
 	isStreaming: boolean;
 	mcpHealthStatuses?: Record<string, HealthStatus>;
+	activeConvoId: Id<"conversations"> | null;
 }) {
+	const [shareOpen, setShareOpen] = useState(false);
+
 	return (
 		<header className="flex items-center justify-between border-b border-border px-4 py-2.5">
 			<div className="flex items-center gap-2">
@@ -1326,7 +1329,135 @@ function ChatHeader({
 					/>
 				)}
 			</div>
+
+			{activeConvoId && (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							variant="ghost"
+							size="icon-xs"
+							onClick={() => setShareOpen(true)}
+						>
+							<Link2 size={14} />
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent>Share conversation</TooltipContent>
+				</Tooltip>
+			)}
+
+			{activeConvoId && (
+				<ShareDialog
+					conversationId={activeConvoId}
+					open={shareOpen}
+					onOpenChange={setShareOpen}
+				/>
+			)}
 		</header>
+	);
+}
+
+function ShareDialog({
+	conversationId,
+	open,
+	onOpenChange,
+}: {
+	conversationId: Id<"conversations">;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+}) {
+	const { data: shareStatus } = useQuery(
+		convexQuery(api.sharing.getShareStatus, { conversationId }),
+	);
+	const createShare = useMutation({
+		mutationFn: useConvexMutation(api.sharing.createShare),
+	});
+	const revokeShare = useMutation({
+		mutationFn: useConvexMutation(api.sharing.revokeShare),
+	});
+	const [copied, setCopied] = useState(false);
+
+	const shareUrl = shareStatus?.shareToken
+		? `${window.location.origin}/share/${shareStatus.shareToken}`
+		: null;
+
+	const handleCreate = async () => {
+		const token = await createShare.mutateAsync({ conversationId });
+		const url = `${window.location.origin}/share/${token}`;
+		navigator.clipboard.writeText(url);
+		toast.success("Link copied to clipboard");
+	};
+
+	const handleCopy = () => {
+		if (shareUrl) {
+			navigator.clipboard.writeText(shareUrl);
+			setCopied(true);
+			setTimeout(() => setCopied(false), 1500);
+		}
+	};
+
+	const handleRevoke = async () => {
+		await revokeShare.mutateAsync({ conversationId });
+		toast.success("Share link revoked");
+	};
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="sm:max-w-md">
+				<DialogHeader>
+					<DialogTitle className="text-sm">Share conversation</DialogTitle>
+					<DialogDescription className="text-xs">
+						Anyone with the link can view this conversation.
+					</DialogDescription>
+				</DialogHeader>
+
+				{shareStatus?.shareToken ? (
+					<div className="space-y-3">
+						<div className="flex items-center gap-2">
+							<input
+								readOnly
+								value={shareUrl ?? ""}
+								className="flex-1 rounded border border-border bg-muted/50 px-2.5 py-1.5 font-mono text-[11px] text-foreground outline-none"
+							/>
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={handleCopy}
+								className="shrink-0 gap-1.5 text-xs"
+							>
+								{copied ? <Check size={12} /> : <Copy size={12} />}
+								{copied ? "Copied" : "Copy"}
+							</Button>
+						</div>
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={handleRevoke}
+							disabled={revokeShare.isPending}
+							className="text-xs text-destructive hover:text-destructive"
+						>
+							{revokeShare.isPending ? (
+								<Loader2 size={12} className="animate-spin" />
+							) : (
+								"Revoke link"
+							)}
+						</Button>
+					</div>
+				) : (
+					<Button
+						onClick={handleCreate}
+						disabled={createShare.isPending}
+						className="gap-1.5 text-xs"
+					>
+						{createShare.isPending ? (
+							<Loader2 size={12} className="animate-spin" />
+						) : (
+							<Link2 size={12} />
+						)}
+						Create shareable link
+					</Button>
+				)}
+			</DialogContent>
+		</Dialog>
 	);
 }
 
@@ -1689,159 +1820,6 @@ function ChatMessages({
 					</motion.div>
 				)}
 			</div>
-		</div>
-	);
-}
-
-function ThinkingBlock({
-	content,
-	isStreaming,
-}: {
-	content: string;
-	isStreaming: boolean;
-}) {
-	const [open, setOpen] = useState(true);
-	const [userToggled, setUserToggled] = useState(false);
-
-	// Auto-collapse when thinking finishes, unless the user manually toggled
-	useEffect(() => {
-		if (!isStreaming && !userToggled) {
-			setOpen(false);
-		}
-	}, [isStreaming, userToggled]);
-
-	return (
-		<div className="mb-2">
-			<button
-				type="button"
-				onClick={() => {
-					setUserToggled(true);
-					setOpen((o) => !o);
-				}}
-				className="flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-			>
-				<motion.span
-					animate={{ rotate: open ? 90 : 0 }}
-					transition={{ duration: 0.15 }}
-					className="flex"
-				>
-					<ChevronRight size={10} />
-				</motion.span>
-				<Brain size={10} />
-				{isStreaming ? (
-					<span className="flex items-center gap-1">
-						Thinking
-						<Loader2 size={8} className="animate-spin" />
-					</span>
-				) : (
-					<span>Thought process</span>
-				)}
-			</button>
-			<AnimatePresence>
-				{open && (
-					<motion.div
-						initial={{ height: 0, opacity: 0 }}
-						animate={{ height: "auto", opacity: 1 }}
-						exit={{ height: 0, opacity: 0 }}
-						transition={{ duration: 0.2 }}
-						className="overflow-hidden"
-					>
-						<div className="mt-1.5 border-l-2 border-muted-foreground/20 pl-3 text-[11px] leading-relaxed text-muted-foreground">
-							<MarkdownMessage content={content} />
-						</div>
-					</motion.div>
-				)}
-			</AnimatePresence>
-		</div>
-	);
-}
-
-function ToolCallBlock({
-	tool,
-	arguments: args,
-	result,
-	isStreaming,
-}: {
-	tool: string;
-	arguments: Record<string, unknown>;
-	result?: string;
-	isStreaming: boolean;
-}) {
-	const [open, setOpen] = useState(false);
-	const displayName = tool.includes("__") ? tool.replace("__", " / ") : tool;
-	const authError = result ? parseAuthRequiredError(result) : null;
-
-	return (
-		<div className="mb-1.5">
-			<button
-				type="button"
-				onClick={() => setOpen((o) => !o)}
-				className="flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-			>
-				<motion.span
-					animate={{ rotate: open ? 90 : 0 }}
-					transition={{ duration: 0.15 }}
-					className="flex"
-				>
-					<ChevronRight size={10} />
-				</motion.span>
-				{isStreaming ? (
-					<Loader2 size={10} className="animate-spin" />
-				) : authError ? (
-					<Wrench size={10} className="text-destructive" />
-				) : (
-					<Wrench size={10} className="text-emerald-500" />
-				)}
-				<span>
-					{displayName}
-					{isStreaming ? "..." : ""}
-				</span>
-				{authError && (
-					<span className="text-[10px] text-destructive">— auth required</span>
-				)}
-			</button>
-
-			{authError && (
-				<div className="mt-1.5 ml-4">
-					<OAuthReconnectPrompt
-						serverUrl={authError.serverUrl}
-						errorMessage={authError.error}
-					/>
-				</div>
-			)}
-
-			<AnimatePresence>
-				{open && (
-					<motion.div
-						initial={{ height: 0, opacity: 0 }}
-						animate={{ height: "auto", opacity: 1 }}
-						exit={{ height: 0, opacity: 0 }}
-						transition={{ duration: 0.2 }}
-						className="overflow-hidden"
-					>
-						<div className="mt-1.5 space-y-2 border-l-2 border-muted-foreground/20 pl-3 text-[11px] leading-relaxed text-muted-foreground">
-							<div>
-								<p className="mb-0.5 font-medium text-foreground/70">
-									Arguments
-								</p>
-								<pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[10px]">
-									{JSON.stringify(args, null, 2)}
-								</pre>
-							</div>
-							{result && !authError && (
-								<div>
-									<p className="mb-0.5 font-medium text-foreground/70">
-										Result
-									</p>
-									<pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[10px]">
-										{result}
-									</pre>
-								</div>
-							)}
-						</div>
-					</motion.div>
-				)}
-			</AnimatePresence>
 		</div>
 	);
 }
