@@ -31,7 +31,11 @@ export default defineSchema({
 		lastMessageAt: v.number(),
 	})
 		.index("by_user", ["userId"])
-		.index("by_user_last_message", ["userId", "lastMessageAt"]),
+		.index("by_user_last_message", ["userId", "lastMessageAt"])
+		.searchIndex("search_title", {
+			searchField: "title",
+			filterFields: ["userId"],
+		}),
 
 	messages: defineTable({
 		conversationId: v.id("conversations"),
@@ -74,7 +78,13 @@ export default defineSchema({
 		),
 		model: v.optional(v.string()),
 		interrupted: v.optional(v.boolean()),
-	}).index("by_conversation", ["conversationId"]),
+	})
+		.index("by_conversation", ["conversationId"])
+		.searchIndex("search_content", {
+			searchField: "content",
+			filterFields: ["conversationId"]
+		}),
+
 
 	mcpOAuthTokens: defineTable({
 		userId: v.string(),

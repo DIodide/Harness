@@ -23,7 +23,9 @@ import {
 	PanelLeftClose,
 	PanelLeftOpen,
 	Plus,
+	Search, // Icon for search
 	Settings,
+	SlidersHorizontal,
 	Sparkles,
 	Square,
 	Trash2,
@@ -41,6 +43,7 @@ import {
 	useState,
 } from "react";
 import toast from "react-hot-toast";
+import { Input } from "../../components/ui/input"; // reuse input from components
 import { HarnessMark } from "../../components/harness-mark";
 import { MarkdownMessage } from "../../components/markdown-message";
 import {
@@ -693,6 +696,17 @@ function ChatPage() {
 		[userSettings, conversations, harnesses],
 	);
 
+	// State handlers for searching
+	const [scrollToMessageId, setScrollToMessageId] =
+		useState<Id<"messages"> | null>(null);
+	const handleSelectMessage = useCallback(
+		(convoId: Id<"conversations">, messageId: Id<"messages">) => {
+			handleSelectConversation(convoId);
+			setScrollToMessageId(messageId);
+		},
+		[handleSelectConversation],
+	);
+
 	const removeMessage = useMutation({
 		mutationFn: useConvexMutation(api.messages.remove),
 	});
@@ -751,6 +765,7 @@ function ChatPage() {
 							conversations={conversations ?? []}
 							activeConvoId={activeConvoId}
 							onSelect={handleSelectConversation}
+							onSelectMessage={handleSelectMessage}
 							harnessId={activeHarnessId}
 							onClose={() => setSidebarOpen(false)}
 							streamingConvoIds={chatStream.streamingConvoIds}
@@ -796,6 +811,8 @@ function ChatPage() {
 						}
 						onRegenerate={handleRegenerate}
 						isStreaming={isActiveConvoStreaming}
+						scrollToMessageId={scrollToMessageId}
+						onClearScrollTarget={() => setScrollToMessageId(null)}
 					/>
 				) : (
 					<EmptyChat
@@ -824,10 +841,43 @@ function ChatPage() {
 	);
 }
 
+function HighlightText({ text, query }: { text: string; query: string }) {
+	if (!query) return <>{text}</>;
+
+	const lowerText = text.toLowerCase();
+	const lowerQuery = query.toLowerCase();
+	const parts: React.ReactNode[] = [];
+	let lastIndex = 0;
+
+	let index = lowerText.indexOf(lowerQuery, lastIndex);
+	while (index !== -1) {
+		if (index > lastIndex) {
+			parts.push(text.slice(lastIndex, index));
+		}
+		parts.push(
+			<mark
+				key={index}
+				className="bg-yellow-200 dark:bg-yellow-800 text-inherit rounded-sm"
+			>
+				{text.slice(index, index + query.length)}
+			</mark>,
+		);
+		lastIndex = index + query.length;
+		index = lowerText.indexOf(lowerQuery, lastIndex);
+	}
+
+	if (lastIndex < text.length) {
+		parts.push(text.slice(lastIndex));
+	}
+
+	return <>{parts}</>;
+}
+
 function ChatSidebar({
 	conversations,
 	activeConvoId,
 	onSelect,
+	onSelectMessage, // called when user clicks a content match
 	harnessId,
 	onClose,
 	streamingConvoIds,
@@ -841,6 +891,10 @@ function ChatSidebar({
 	}>;
 	activeConvoId: Id<"conversations"> | null;
 	onSelect: (id: Id<"conversations"> | null) => void;
+	onSelectMessage: (
+		convoId: Id<"conversations">,
+		messageId: Id<"messages">,
+	) => void;
 	harnessId: Id<"harnesses"> | null;
 	onClose: () => void;
 	streamingConvoIds: Set<string>;
@@ -858,7 +912,28 @@ function ChatSidebar({
 		onSelect(null);
 	};
 
+	const [searchQuery, setSearchQuery] = useState("");
+
+	// const filtered = conversations.filter((c) =>
+	// 	c.title.toLowerCase().includes(searchQuery.toLowerCase())
+	// );
+	// const grouped = groupByDate(filtered)
+
+	// conditionally query if there's actual text in search bar
+	const searchResults = useQuery(
+		convexQuery(
+			api.conversations.search,
+			searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		),
+	);
+
 	const grouped = groupByDate(conversations);
+
+	// const displayConversations = searchQuery
+	// 	? (searchResults.data ?? [])
+	// 	: conversations;
+
+	// const grouped = groupByDate(displayConversations)
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -893,8 +968,94 @@ function ChatSidebar({
 
 			<Separator />
 
+			{/* Add input component connected to searchQuery state */}
+			<div className="px-2 py-2">
+				<div className="relative">
+					<Search
+						size={14}
+						className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+					/>
+					<Input
+						placeholder="Search chats..."
+						value={searchQuery}
+						onChange={(e) => setSearchQuery(e.target.value)}
+						className="h-8 pl-8 text-xs"
+					/>
+				</div>
+			</div>
+
 			<ScrollArea className="min-h-0 flex-1 px-2 py-2">
-				{conversations.length === 0 ? (
+				{/* BRANCH 1: Active search — show search results */}
+				{searchQuery && searchResults.data ? (
+					<div className="space-y-4">
+						{/* --- TITLE MATCHES SECTION --- */}
+						{searchResults.data.titleMatches.length > 0 && (
+							<div>
+								{/* Section header — same style as "Today", "Yesterday" etc. */}
+								<p className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+									Conversations
+								</p>
+
+								{searchResults.data.titleMatches.map((convo) => (
+									<button
+										key={convo._id}
+										type="button"
+										onClick={() => onSelect(convo._id)}
+										className={cn(
+											"flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+											activeConvoId === convo._id
+												? "bg-muted text-foreground"
+												: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+										)}
+									>
+										<MessageSquare size={12} className="shrink-0" />
+										{/* HighlightText wraps matching text in <mark> tags */}
+										<HighlightText text={convo.title} query={searchQuery} />
+									</button>
+								))}
+							</div>
+						)}
+
+						{/* --- CONTENT MATCHES SECTION --- */}
+						{searchResults.data.contentMatches.length > 0 && (
+							<div>
+								<p className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+									Messages
+								</p>
+
+								{searchResults.data.contentMatches.map((match) => (
+									<button
+										key={match.messageId}
+										type="button"
+										onClick={() =>
+											onSelectMessage(match.conversationId, match.messageId)
+										}
+										className="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors
+		text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+									>
+										{/* Line 1: which conversation this message is from */}
+										<span className="text-[11px] font-medium text-foreground truncate">
+											{match.conversationTitle}
+										</span>
+										{/* Line 2: the snippet with the match highlighted */}
+										<span className="text-[11px] leading-snug">
+											<HighlightText text={match.snippet} query={searchQuery} />
+										</span>
+									</button>
+								))}
+							</div>
+						)}
+
+						{/* --- NO RESULTS --- */}
+						{searchResults.data.titleMatches.length === 0 &&
+							searchResults.data.contentMatches.length === 0 && (
+								<p className="px-2 py-8 text-center text-xs text-muted-foreground">
+									No results found
+								</p>
+							)}
+					</div>
+				) : /* BRANCH 2 & 3: Normal mode */
+				conversations.length === 0 ? (
 					<p className="px-2 py-8 text-center text-xs text-muted-foreground">
 						No conversations yet
 					</p>
@@ -988,7 +1149,7 @@ function ChatSidebar({
 					asChild
 				>
 					<Link to="/harnesses">
-						<Settings size={12} />
+						<SlidersHorizontal size={12} />
 						Manage Harnesses
 					</Link>
 				</Button>
@@ -1344,6 +1505,8 @@ function ChatMessages({
 	displayMode,
 	onRegenerate,
 	isStreaming,
+	scrollToMessageId,
+	onClearScrollTarget,
 }: {
 	conversationId: Id<"conversations">;
 	messages: Array<{
@@ -1388,6 +1551,8 @@ function ChatMessages({
 		history: Array<{ role: string; content: string }>,
 	) => void;
 	isStreaming: boolean;
+	scrollToMessageId: Id<"messages"> | null;
+	onClearScrollTarget: () => void;
 }) {
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const userHasScrolledUp = useRef(false);
@@ -1452,6 +1617,22 @@ function ChatMessages({
 		}
 	}, [messages, streamingContent, streamingReasoning]);
 
+	useEffect(() => {
+		if (!scrollToMessageId || !messages?.length) return;
+
+		const el = document.querySelector(
+			`[data-message-id="${scrollToMessageId}"]`,
+		);
+		if (el) {
+			el.scrollIntoView({ behavior: "smooth", block: "center" });
+			el.classList.add("ring-2", "ring-primary", "ring-offset-2");
+			setTimeout(() => {
+				el.classList.remove("ring-2", "ring-primary", "ring-offset-2");
+			}, 2000);
+			onClearScrollTarget();
+		}
+	}, [scrollToMessageId, messages, onClearScrollTarget]);
+
 	if (messages.length === 0 && !isActivelyStreaming) {
 		return (
 			<div className="flex flex-1 items-center justify-center">
@@ -1471,6 +1652,7 @@ function ChatMessages({
 					return (
 						<motion.div
 							key={msg._id}
+							data-message-id={msg._id}
 							initial={isJustSynced ? false : { opacity: 0, y: 8 }}
 							animate={{ opacity: 1, y: 0 }}
 							transition={isJustSynced ? { duration: 0 } : { delay: i * 0.03 }}
