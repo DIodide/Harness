@@ -43,7 +43,6 @@ import {
 	useState,
 } from "react";
 import toast from "react-hot-toast";
-import { Input } from "../../components/ui/input"; // reuse input from components
 import { HarnessMark } from "../../components/harness-mark";
 import { MarkdownMessage } from "../../components/markdown-message";
 import {
@@ -77,6 +76,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
+import { Input } from "../../components/ui/input"; // reuse input from components
 import { ScrollArea } from "../../components/ui/scroll-area";
 import {
 	Select,
