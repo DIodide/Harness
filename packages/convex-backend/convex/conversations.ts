@@ -1,5 +1,7 @@
 import { v } from "convex/values";
+import { Id } from "./_generated/dataModel"
 import { mutation, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 
 export const list = query({
 	handler: async (ctx) => {
@@ -84,35 +86,49 @@ export const remove = mutation({
 	},
 });
 
-export const search = query({
-	args: { query: v.string() },
+export const searchTitles = query({
+	args: { query: v.string(), paginationOpts: paginationOptsValidator },
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) return { titleMatches: [], contentMatches: [] };
-
-		// 1. Search conversation titles
-		const titleMatches = await ctx.db
+		if (!identity)
+			return { page: [], isDone: true, continueCursor: "" };
+		
+		return await ctx.db
 			.query("conversations")
 			.withSearchIndex("search_title", (q) =>
 				q.search("title", args.query).eq("userId", identity.subject)
 			)
-			.take(10);
+			.paginate(args.paginationOpts);
+	},
+});
 
-		// 2. Search message content
-		const messageHits = await ctx.db
+export const searchContent = query({
+	args: { query: v.string(), paginationOpts: paginationOptsValidator },
+	handler: async (ctx, args ) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity)
+			return { page: [], isDone: true, continueCursor: ""};
+
+		const result = await ctx.db
 			.query("messages")
 			.withSearchIndex("search_content", (q) =>
 				q.search("content", args.query)
 			)
-			.take(30);
-
-		// 3. Build content matches with snippets
-		const contentMatches = [];
-		for (const msg of messageHits) {
+			.paginate(args.paginationOpts);
+		
+		// Enrich each message with snippet + convo title
+		// make sure it has an annotated type so convex doesn't infer the paginate type
+		const enrichedPage: {
+			messageId: Id<"messages">;
+			conversationId: Id<"conversations">;
+			conversationTitle: string;
+			role: string;
+			snippet: string;
+		}[] = [];
+		for (const msg of result.page) {
 			const convo = await ctx.db.get(msg.conversationId);
-			if (!convo || convo.userId !== identity.subject) continue;
+			if (!convo || convo.userId !== identity.subject) continue
 
-			// Extract a snippet around the first occurrence of the query
 			const lowerContent = msg.content.toLowerCase();
 			const lowerQuery = args.query.toLowerCase();
 			const matchIndex = lowerContent.indexOf(lowerQuery);
@@ -125,12 +141,10 @@ export const search = query({
 					+ msg.content.slice(start, end)
 					+ (end < msg.content.length ? "..." : "");
 			} else {
-				// Full-text search matched but exact substring didn't
-				// (e.g. different word forms) — just take the beginning
 				snippet = msg.content.slice(0, 80) + (msg.content.length > 80 ? "..." : "");
 			}
 
-			contentMatches.push({
+			enrichedPage.push({
 				messageId: msg._id,
 				conversationId: msg.conversationId,
 				conversationTitle: convo.title,
@@ -139,6 +153,9 @@ export const search = query({
 			});
 		}
 
-		return { titleMatches, contentMatches };
+		return {
+			...result,
+			page: enrichedPage,
+		};
 	},
 });

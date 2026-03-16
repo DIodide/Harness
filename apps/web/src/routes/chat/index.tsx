@@ -9,6 +9,7 @@ import {
 	redirect,
 	useNavigate,
 } from "@tanstack/react-router";
+import { usePaginatedQuery } from "convex/react"; // any downsides to mixing convex/react with tanstack/react-query?
 import {
 	AlertTriangle,
 	ArrowUp,
@@ -913,27 +914,27 @@ function ChatSidebar({
 	};
 
 	const [searchQuery, setSearchQuery] = useState("");
+	const [titlesExpanded, setTitlesExpanded] = useState(false);
+	const [contentExpanded, setContentExpanded] = useState(false);
 
-	// const filtered = conversations.filter((c) =>
-	// 	c.title.toLowerCase().includes(searchQuery.toLowerCase())
-	// );
-	// const grouped = groupByDate(filtered)
+	const INITIAL_TITLE_COUNT = 5;
+	const INITIAL_CONTENT_COUNT = 15;
+	const LOAD_MORE_TITLE_COUNT = 50;
+	const LOAD_MORE_CONTENT_COUNT = 100;
 
-	// conditionally query if there's actual text in search bar
-	const searchResults = useQuery(
-		convexQuery(
-			api.conversations.search,
-			searchQuery.length > 0 ? { query: searchQuery } : "skip",
-		),
+	const titleSearch = usePaginatedQuery(
+		api.conversations.searchTitles,
+		searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		{ initialNumItems: INITIAL_TITLE_COUNT },
+	);
+
+	const contentSearch = usePaginatedQuery(
+		api.conversations.searchContent,
+		searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		{ initialNumItems: INITIAL_CONTENT_COUNT },
 	);
 
 	const grouped = groupByDate(conversations);
-
-	// const displayConversations = searchQuery
-	// 	? (searchResults.data ?? [])
-	// 	: conversations;
-
-	// const grouped = groupByDate(displayConversations)
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -978,7 +979,11 @@ function ChatSidebar({
 					<Input
 						placeholder="Search chats..."
 						value={searchQuery}
-						onChange={(e) => setSearchQuery(e.target.value)}
+						onChange={(e) => {
+							setSearchQuery(e.target.value);
+							setTitlesExpanded(false);
+							setContentExpanded(false);
+						}}
 						className="h-8 pl-8 text-xs"
 					/>
 				</div>
@@ -986,17 +991,45 @@ function ChatSidebar({
 
 			<ScrollArea className="min-h-0 flex-1 px-2 py-2">
 				{/* BRANCH 1: Active search — show search results */}
-				{searchQuery && searchResults.data ? (
-					<div className="space-y-4">
+				{searchQuery &&
+				(titleSearch.status !== "LoadingFirstPage" ||
+					contentSearch.status !== "LoadingFirstPage") ? (
+					<div className="flex flex-col gap-4 h-full">
 						{/* --- TITLE MATCHES SECTION --- */}
-						{searchResults.data.titleMatches.length > 0 && (
-							<div>
-								{/* Section header — same style as "Today", "Yesterday" etc. */}
-								<p className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-									Conversations
-								</p>
-
-								{searchResults.data.titleMatches.map((convo) => (
+						{titleSearch.results.length > 0 && (
+							<div className="flex flex-col shrink-0">
+								<div className="sticky top-0 z-10 mb-1 flex items-center gap-2 bg-background px-2 py-1">
+									<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+										Conversations
+									</p>
+									{titlesExpanded ? (
+										<button
+											type="button"
+											onClick={() => setTitlesExpanded(false)}
+											className="text-[11px] text-blue-500 hover:text-blue-600"
+										>
+											Show Less
+										</button>
+									) : titleSearch.results.length > INITIAL_TITLE_COUNT ||
+										titleSearch.status === "CanLoadMore" ? (
+										<button
+											type="button"
+											onClick={() => {
+												if (titleSearch.status === "CanLoadMore") {
+													titleSearch.loadMore(LOAD_MORE_TITLE_COUNT);
+												}
+												setTitlesExpanded(true);
+											}}
+											className="text-[11px] text-blue-500 hover:text-blue-600"
+										>
+											Show More
+										</button>
+									) : null}
+								</div>
+								{(titlesExpanded
+									? titleSearch.results
+									: titleSearch.results.slice(0, INITIAL_TITLE_COUNT)
+								).map((convo) => (
 									<button
 										key={convo._id}
 										type="button"
@@ -1009,46 +1042,82 @@ function ChatSidebar({
 										)}
 									>
 										<MessageSquare size={12} className="shrink-0" />
-										{/* HighlightText wraps matching text in <mark> tags */}
-										<HighlightText text={convo.title} query={searchQuery} />
+										<span className="truncate">
+											<HighlightText text={convo.title} query={searchQuery} />
+										</span>
 									</button>
 								))}
 							</div>
 						)}
 
 						{/* --- CONTENT MATCHES SECTION --- */}
-						{searchResults.data.contentMatches.length > 0 && (
-							<div>
-								<p className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-									Messages
-								</p>
-
-								{searchResults.data.contentMatches.map((match) => (
-									<button
-										key={match.messageId}
-										type="button"
-										onClick={() =>
-											onSelectMessage(match.conversationId, match.messageId)
-										}
-										className="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors
-		text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-									>
-										{/* Line 1: which conversation this message is from */}
-										<span className="text-[11px] font-medium text-foreground truncate">
-											{match.conversationTitle}
-										</span>
-										{/* Line 2: the snippet with the match highlighted */}
-										<span className="text-[11px] leading-snug">
-											<HighlightText text={match.snippet} query={searchQuery} />
-										</span>
-									</button>
-								))}
+						{contentSearch.results.length > 0 && (
+							<div className="flex flex-col flex-1 min-h-0">
+								<div className="sticky top-0 z-10 mb-1 flex items-center gap-2 bg-background px-2 py-1">
+									<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+										Messages
+									</p>
+									{contentExpanded ? (
+										<button
+											type="button"
+											onClick={() => setContentExpanded(false)}
+											className="text-[11px] text-blue-500 hover:text-blue-600"
+										>
+											Show Less
+										</button>
+									) : contentSearch.results.length > INITIAL_CONTENT_COUNT ||
+										contentSearch.status === "CanLoadMore" ? (
+										<button
+											type="button"
+											onClick={() => {
+												if (contentSearch.status === "CanLoadMore") {
+													contentSearch.loadMore(LOAD_MORE_CONTENT_COUNT);
+												}
+												setContentExpanded(true);
+											}}
+											className="text-[11px] text-blue-500 hover:text-blue-600"
+										>
+											Show More
+										</button>
+									) : null}
+								</div>
+								<div
+									className={cn(
+										"overflow-y-auto",
+										contentExpanded && "flex-1 min-h-0",
+									)}
+								>
+									{(contentExpanded
+										? contentSearch.results
+										: contentSearch.results.slice(0, INITIAL_CONTENT_COUNT)
+									).map((match) => (
+										<button
+											key={match.messageId}
+											type="button"
+											onClick={() =>
+												onSelectMessage(match.conversationId, match.messageId)
+											}
+											className="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors
+												text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+										>
+											<span className="text-[11px] font-medium text-foreground truncate">
+												{match.conversationTitle}
+											</span>
+											<span className="text-[11px] leading-snug">
+												<HighlightText
+													text={match.snippet}
+													query={searchQuery}
+												/>
+											</span>
+										</button>
+									))}
+								</div>
 							</div>
 						)}
 
 						{/* --- NO RESULTS --- */}
-						{searchResults.data.titleMatches.length === 0 &&
-							searchResults.data.contentMatches.length === 0 && (
+						{titleSearch.results.length === 0 &&
+							contentSearch.results.length === 0 && (
 								<p className="px-2 py-8 text-center text-xs text-muted-foreground">
 									No results found
 								</p>
@@ -1625,10 +1694,23 @@ function ChatMessages({
 		);
 		if (el) {
 			el.scrollIntoView({ behavior: "smooth", block: "center" });
-			el.classList.add("ring-2", "ring-primary", "ring-offset-2");
+			// Add ring + yellow highlight
+			el.classList.add(
+				"ring-2",
+				"ring-primary",
+				"ring-offset-2",
+				"highlight-fade",
+			);
+
 			setTimeout(() => {
-				el.classList.remove("ring-2", "ring-primary", "ring-offset-2");
-			}, 2000);
+				el.classList.remove(
+					"ring-2",
+					"ring-primary",
+					"ring-offset-2",
+					"highlight-fade",
+				);
+			}, 3000);
+
 			onClearScrollTarget();
 		}
 	}, [scrollToMessageId, messages, onClearScrollTarget]);
