@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     # Public base URL of the FastAPI backend, used for OAuth redirect URIs.
     fastapi_base_url: str = "http://localhost:8000"
+    # Clerk issuer URL used to pin and validate JWT `iss` claims.
+    # Must be set to your Clerk Frontend API URL, e.g. https://<your-clerk-subdomain>.clerk.accounts.dev
+    clerk_issuer: str = ""
     # Pre-registered GitHub OAuth App credentials (for GitHub MCP server).
     # Create one at https://github.com/settings/applications/new
     github_oauth_client_id: str = ""
@@ -29,6 +32,10 @@ class Settings(BaseSettings):
         if not self.convex_deploy_key:
             logger.warning(
                 "CONVEX_DEPLOY_KEY is not set — backend cannot save messages to Convex"
+            )
+        if not self.clerk_issuer:
+            logger.warning(
+                "CLERK_ISSUER is not set — JWT authentication will fail for all requests"
             )
 
 
