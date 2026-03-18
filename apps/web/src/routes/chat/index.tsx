@@ -23,6 +23,7 @@ import {
 	MessageSquare,
 	PanelLeftClose,
 	PanelLeftOpen,
+	Paperclip,
 	Plus,
 	Search, // Icon for search
 	Settings,
@@ -102,6 +103,11 @@ import {
 	useChatStream,
 } from "../../lib/use-chat-stream";
 import { cn } from "../../lib/utils";
+import { AttachmentChip } from "../../components/attachment-chip";
+import {
+	type PendingAttachment,
+	useFileAttachments,
+} from "../../hooks/use-file-attachments";
 
 export const Route = createFileRoute("/chat/")({
 	validateSearch: (search: Record<string, unknown>) => ({
@@ -2595,6 +2601,11 @@ function ChatInput({
 }) {
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const fileInputRef = useRef<HTMLInputElement>(null);
+	const [isDragOver, setIsDragOver] = useState(false);
+
+	const { attachments, addFiles, removeAttachment, clearAttachments, hasUploading } =
+		useFileAttachments();
 
 	// Fill input from suggested prompt click
 	useEffect(() => {
@@ -2648,6 +2659,7 @@ function ChatInput({
 		setText("");
 		setHistoryIndex(-1);
 		setDraft("");
+		clearAttachments();
 
 		// If streaming, just enqueue — don't interrupt
 		if (isStreaming && conversationId) {
@@ -2742,10 +2754,72 @@ function ChatInput({
 		}
 	};
 
+	const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+		const files = Array.from(e.clipboardData.files).filter(
+			(f) => f.type.startsWith("image/") || f.type === "application/pdf",
+		);
+		if (files.length > 0) {
+			e.preventDefault();
+			addFiles(files);
+		}
+	};
+
+	const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+		e.preventDefault();
+		if (e.dataTransfer.types.includes("Files")) {
+			setIsDragOver(true);
+		}
+	};
+
+	const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+		// Only clear if leaving the container entirely (not moving to a child)
+		if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+			setIsDragOver(false);
+		}
+	};
+
+	const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+		e.preventDefault();
+		setIsDragOver(false);
+		const files = Array.from(e.dataTransfer.files);
+		if (files.length > 0) addFiles(files);
+	};
+
 	const showStopButton = isStreaming && !text.trim();
 
 	return (
-		<div className="border-t border-border px-4 py-3">
+		<div
+			className={cn(
+				"relative border-t border-border px-4 py-3 transition-colors",
+				isDragOver && "bg-primary/5",
+			)}
+			onDragOver={handleDragOver}
+			onDragLeave={handleDragLeave}
+			onDrop={handleDrop}
+		>
+			{/* Drop overlay */}
+			{isDragOver && (
+				<div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-primary/50 bg-primary/5">
+					<div className="flex items-center gap-2 text-sm font-medium text-primary">
+						<Paperclip size={16} />
+						Drop files to attach
+					</div>
+				</div>
+			)}
+
+			{/* Hidden file input */}
+			<input
+				ref={fileInputRef}
+				type="file"
+				accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
+				multiple
+				className="hidden"
+				onChange={(e) => {
+					if (e.target.files) addFiles(Array.from(e.target.files));
+					e.target.value = "";
+				}}
+			/>
+
 			<div className="mx-auto max-w-3xl">
 				{/* Queued messages as chips above the input */}
 				<AnimatePresence>
@@ -2799,7 +2873,41 @@ function ChatInput({
 					)}
 				</AnimatePresence>
 
+				{/* Attachment preview strip */}
+				<AnimatePresence>
+					{attachments.length > 0 && (
+						<motion.div
+							initial={{ opacity: 0, height: 0 }}
+							animate={{ opacity: 1, height: "auto" }}
+							exit={{ opacity: 0, height: 0 }}
+							className="mb-2 flex flex-wrap gap-2 overflow-hidden"
+						>
+							{attachments.map((attachment) => (
+								<AttachmentChip
+									key={attachment.localId}
+									attachment={attachment}
+									onRemove={() => removeAttachment(attachment.localId)}
+								/>
+							))}
+						</motion.div>
+					)}
+				</AnimatePresence>
+
 				<div className="flex items-end gap-2 border border-border bg-background px-3 py-2 focus-within:border-foreground/30">
+					{/* Attach button */}
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button
+								type="button"
+								onClick={() => fileInputRef.current?.click()}
+								className="mb-0.5 shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+							>
+								<Paperclip size={15} />
+							</button>
+						</TooltipTrigger>
+						<TooltipContent>Attach image or PDF</TooltipContent>
+					</Tooltip>
+
 					<textarea
 						ref={textareaRef}
 						value={text}
@@ -2811,6 +2919,7 @@ function ChatInput({
 							}
 						}}
 						onKeyDown={handleKeyDown}
+						onPaste={handlePaste}
 						placeholder="Send a message..."
 						rows={1}
 						className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
@@ -2829,6 +2938,7 @@ function ChatInput({
 								disabled={
 									!showStopButton &&
 									(!text.trim() ||
+										hasUploading ||
 										sendMessage.isPending ||
 										createConvo.isPending)
 								}
