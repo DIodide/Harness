@@ -1,4 +1,5 @@
 import { api } from "@harness/convex-backend/convex/_generated/api";
+import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useConvex } from "convex/react";
 import { useCallback, useRef, useState } from "react";
 import toast from "react-hot-toast";
@@ -118,11 +119,33 @@ export function useFileAttachments() {
 
 	const hasUploading = attachments.some((a) => a.status === "uploading");
 
+	const resolveSignedUrls = useCallback(
+		async (
+			readyAttachments: Array<{
+				storageId: string;
+				mimeType: string;
+				fileName: string;
+			}>,
+		): Promise<Array<{ url: string; mime_type: string; file_name: string }>> => {
+			const results = await Promise.all(
+				readyAttachments.map(async (a) => {
+					const url = await convex.query(api.files.getFileUrl, {
+						storageId: a.storageId as Id<"_storage">,
+					});
+					return url ? { url, mime_type: a.mimeType, file_name: a.fileName } : null;
+				}),
+			);
+			return results.filter((r): r is NonNullable<typeof r> => r !== null);
+		},
+		[convex],
+	);
+
 	return {
 		attachments,
 		addFiles,
 		removeAttachment,
 		clearAttachments,
 		hasUploading,
+		resolveSignedUrls,
 	};
 }

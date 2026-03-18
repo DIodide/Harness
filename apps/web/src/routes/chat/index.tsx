@@ -104,6 +104,7 @@ import {
 } from "../../lib/use-chat-stream";
 import { cn } from "../../lib/utils";
 import { AttachmentChip } from "../../components/attachment-chip";
+import { MessageAttachments } from "../../components/message-attachments";
 import {
 	type PendingAttachment,
 	useFileAttachments,
@@ -1760,6 +1761,12 @@ function ChatMessages({
 		};
 		model?: string;
 		interrupted?: boolean;
+		attachments?: Array<{
+			storageId: Id<"_storage">;
+			mimeType: string;
+			fileName: string;
+			fileSize: number;
+		}>;
 	}>;
 	streamingContent: string | null;
 	streamingReasoning: string | null;
@@ -2018,7 +2025,13 @@ function ChatMessages({
 										</AvatarFallback>
 									</Avatar>
 								)}
-								<div className="max-w-[80%]">
+								<div className={cn(
+									"max-w-[80%]",
+									msg.role === "user" && "flex flex-col items-end",
+								)}>
+									{msg.role === "user" && msg.attachments && msg.attachments.length > 0 && (
+										<MessageAttachments attachments={msg.attachments} />
+									)}
 									<div
 										className={cn(
 											"text-sm leading-relaxed",
@@ -2604,7 +2617,7 @@ function ChatInput({
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [isDragOver, setIsDragOver] = useState(false);
 
-	const { attachments, addFiles, removeAttachment, clearAttachments, hasUploading } =
+	const { attachments, addFiles, removeAttachment, clearAttachments, hasUploading, resolveSignedUrls } =
 		useFileAttachments();
 
 	// Fill input from suggested prompt click
@@ -2689,12 +2702,23 @@ function ChatInput({
 			onConvoCreated(newId);
 		}
 
+		// Capture ready attachments before clearing
+		const readyAttachments = attachments
+			.filter((a) => a.status === "ready" && a.storageId)
+			.map((a) => ({
+				storageId: a.storageId as Id<"_storage">,
+				mimeType: a.mimeType,
+				fileName: a.fileName,
+				fileSize: a.fileSize,
+			}));
+
 		// Save user message to Convex
 		await sendMessage.mutateAsync({
 			conversationId: convoId,
 			role: "user",
 			content,
 			harnessId: activeHarness._id,
+			...(readyAttachments.length > 0 ? { attachments: readyAttachments } : {}),
 		});
 
 		// Build message history for the LLM
@@ -2705,11 +2729,17 @@ function ChatInput({
 			})) ?? [];
 		history.push({ role: "user", content });
 
+		// Resolve signed URLs for any attachments
+		const signedAttachments = readyAttachments.length > 0
+			? await resolveSignedUrls(readyAttachments)
+			: undefined;
+
 		// Start streaming from FastAPI
 		onStream({
 			messages: history,
 			harness: harnessConfig,
 			conversation_id: convoId,
+			...(signedAttachments && signedAttachments.length > 0 ? { attachments: signedAttachments } : {}),
 		});
 	};
 
@@ -2790,7 +2820,7 @@ function ChatInput({
 	return (
 		<div
 			className={cn(
-				"relative border-t border-border px-4 py-3 transition-colors",
+				"relative border-t border-border px-4 py-2 transition-colors",
 				isDragOver && "bg-primary/5",
 			)}
 			onDragOver={handleDragOver}
@@ -2820,7 +2850,7 @@ function ChatInput({
 				}}
 			/>
 
-			<div className="mx-auto max-w-3xl">
+			<div className="mx-auto max-w-xl">
 				{/* Queued messages as chips above the input */}
 				<AnimatePresence>
 					{messageQueue.length > 0 && (

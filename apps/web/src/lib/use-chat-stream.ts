@@ -72,6 +72,7 @@ export interface ChatStreamRequest {
 		name: string;
 	};
 	conversation_id: string;
+	attachments?: Array<{ url: string; mime_type: string; file_name: string }>;
 }
 
 export function useChatStream(callbacks: UseChatStreamCallbacks) {
