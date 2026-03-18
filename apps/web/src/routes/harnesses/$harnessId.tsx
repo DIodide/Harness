@@ -312,6 +312,18 @@ function HarnessEditPage() {
 	);
 }
 
+function validateMcpUrl(url: string): string | null {
+	if (/\s/.test(url)) return "URL must not contain spaces";
+	try {
+		const parsed = new URL(url);
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+			return "URL must start with http:// or https://";
+	} catch {
+		return "Please enter a valid URL";
+	}
+	return null;
+}
+
 function McpServerRow({
 	server,
 	onRemove,
@@ -323,10 +335,12 @@ function McpServerRow({
 }) {
 	const [editingUrl, setEditingUrl] = useState(false);
 	const [urlDraft, setUrlDraft] = useState(server.url);
+	const [urlError, setUrlError] = useState("");
 	const inputRef = useRef<HTMLInputElement>(null);
 
 	const startEditing = () => {
 		setUrlDraft(server.url);
+		setUrlError("");
 		setEditingUrl(true);
 		// Focus after React renders the input
 		setTimeout(() => inputRef.current?.focus(), 0);
@@ -335,13 +349,20 @@ function McpServerRow({
 	const commitUrl = () => {
 		const trimmed = urlDraft.trim();
 		if (trimmed && trimmed !== server.url) {
+			const error = validateMcpUrl(trimmed);
+			if (error) {
+				setUrlError(error);
+				return;
+			}
 			onUpdate({ ...server, url: trimmed });
 		}
+		setUrlError("");
 		setEditingUrl(false);
 	};
 
 	const cancelEdit = () => {
 		setUrlDraft(server.url);
+		setUrlError("");
 		setEditingUrl(false);
 	};
 
@@ -363,15 +384,23 @@ function McpServerRow({
 			<div className="min-w-0 flex-1">
 				<p className="text-xs font-medium text-foreground">{server.name}</p>
 				{editingUrl ? (
-					<div className="mt-0.5 flex items-center gap-1.5">
-						<Input
-							ref={inputRef}
-							value={urlDraft}
-							onChange={(e) => setUrlDraft(e.target.value)}
-							onBlur={commitUrl}
-							onKeyDown={handleKeyDown}
-							className="h-6 text-[11px]"
-						/>
+					<div className="mt-0.5 flex flex-col gap-0.5">
+						<div className="flex items-center gap-1.5">
+							<Input
+								ref={inputRef}
+								value={urlDraft}
+								onChange={(e) => {
+									setUrlDraft(e.target.value);
+									setUrlError("");
+								}}
+								onBlur={commitUrl}
+								onKeyDown={handleKeyDown}
+								className="h-6 text-[11px]"
+							/>
+						</div>
+						{urlError && (
+							<p className="text-[10px] text-destructive">{urlError}</p>
+						)}
 					</div>
 				) : (
 					<button
@@ -426,10 +455,19 @@ function AddMcpServerForm({
 		setAuthType("none");
 		setAuthToken("");
 		setShowToken(false);
+		setUrlError("");
 	};
+
+	const [urlError, setUrlError] = useState("");
 
 	const handleSubmit = () => {
 		if (!name.trim() || !url.trim()) return;
+		const error = validateMcpUrl(url.trim());
+		if (error) {
+			setUrlError(error);
+			return;
+		}
+		setUrlError("");
 		onAdd({
 			name: name.trim(),
 			url: url.trim(),
@@ -500,10 +538,16 @@ function AddMcpServerForm({
 					<Input
 						id="mcp-url"
 						value={url}
-						onChange={(e) => setUrl(e.target.value)}
+						onChange={(e) => {
+							setUrl(e.target.value);
+							if (urlError) setUrlError("");
+						}}
 						placeholder="https://mcp.example.com/sse"
-						className="text-xs"
+						className={`text-xs ${urlError ? "border-red-500" : ""}`}
 					/>
+					{urlError && (
+						<p className="mt-1 text-[11px] text-red-500">{urlError}</p>
+					)}
 				</div>
 			</div>
 

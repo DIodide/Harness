@@ -9,6 +9,7 @@ import {
 	redirect,
 	useNavigate,
 } from "@tanstack/react-router";
+import { usePaginatedQuery } from "convex/react"; // any downsides to mixing convex/react with tanstack/react-query?
 import {
 	AlertTriangle,
 	ArrowUp,
@@ -23,7 +24,9 @@ import {
 	PanelLeftClose,
 	PanelLeftOpen,
 	Plus,
+	Search, // Icon for search
 	Settings,
+	SlidersHorizontal,
 	Sparkles,
 	Square,
 	Trash2,
@@ -74,6 +77,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
+import { Input } from "../../components/ui/input"; // reuse input from components
 import { ScrollArea } from "../../components/ui/scroll-area";
 import {
 	Select,
@@ -696,6 +700,17 @@ function ChatPage() {
 		[userSettings, conversations, harnesses],
 	);
 
+	// State handlers for searching
+	const [scrollToMessageId, setScrollToMessageId] =
+		useState<Id<"messages"> | null>(null);
+	const handleSelectMessage = useCallback(
+		(convoId: Id<"conversations">, messageId: Id<"messages">) => {
+			handleSelectConversation(convoId);
+			setScrollToMessageId(messageId);
+		},
+		[handleSelectConversation],
+	);
+
 	const removeMessage = useMutation({
 		mutationFn: useConvexMutation(api.messages.remove),
 	});
@@ -850,6 +865,7 @@ function ChatPage() {
 							)}
 							activeConvoId={activeConvoId}
 							onSelect={handleSelectConversation}
+							onSelectMessage={handleSelectMessage}
 							harnessId={activeHarnessId}
 							onClose={() => setSidebarOpen(false)}
 							streamingConvoIds={chatStream.streamingConvoIds}
@@ -917,6 +933,8 @@ function ChatPage() {
 						forkedAtMessageCount={activeConversation?.forkedAtMessageCount}
 						onNavigateToConversation={handleSelectConversation}
 						isStreaming={isActiveConvoStreaming}
+						scrollToMessageId={scrollToMessageId}
+						onClearScrollTarget={() => setScrollToMessageId(null)}
 					/>
 				) : (
 					<EmptyChat
@@ -945,10 +963,43 @@ function ChatPage() {
 	);
 }
 
+function HighlightText({ text, query }: { text: string; query: string }) {
+	if (!query) return <>{text}</>;
+
+	const lowerText = text.toLowerCase();
+	const lowerQuery = query.toLowerCase();
+	const parts: React.ReactNode[] = [];
+	let lastIndex = 0;
+
+	let index = lowerText.indexOf(lowerQuery, lastIndex);
+	while (index !== -1) {
+		if (index > lastIndex) {
+			parts.push(text.slice(lastIndex, index));
+		}
+		parts.push(
+			<mark
+				key={index}
+				className="bg-yellow-200 dark:bg-yellow-800 text-inherit rounded-sm"
+			>
+				{text.slice(index, index + query.length)}
+			</mark>,
+		);
+		lastIndex = index + query.length;
+		index = lowerText.indexOf(lowerQuery, lastIndex);
+	}
+
+	if (lastIndex < text.length) {
+		parts.push(text.slice(lastIndex));
+	}
+
+	return <>{parts}</>;
+}
+
 function ChatSidebar({
 	conversations,
 	activeConvoId,
 	onSelect,
+	onSelectMessage, // called when user clicks a content match
 	harnessId,
 	onClose,
 	streamingConvoIds,
@@ -962,6 +1013,10 @@ function ChatSidebar({
 	}>;
 	activeConvoId: Id<"conversations"> | null;
 	onSelect: (id: Id<"conversations"> | null) => void;
+	onSelectMessage: (
+		convoId: Id<"conversations">,
+		messageId: Id<"messages">,
+	) => void;
 	harnessId: Id<"harnesses"> | null;
 	onClose: () => void;
 	streamingConvoIds: Set<string>;
@@ -978,6 +1033,44 @@ function ChatSidebar({
 		if (!harnessId) return;
 		onSelect(null);
 	};
+
+	const [searchQuery, setSearchQuery] = useState("");
+	const [titlesExpanded, setTitlesExpanded] = useState(false);
+	const [contentExpanded, setContentExpanded] = useState(false);
+
+	// consts to set initial amounts for how many search hits we show
+	// as well as max amounts for how many results we show after
+	// show more is pressed
+	const INITIAL_TITLE_COUNT = 10;
+	const INITIAL_CONTENT_COUNT = 15;
+	const LOAD_MORE_TITLE_COUNT = 100;
+	const LOAD_MORE_CONTENT_COUNT = 250;
+
+	const titleSearch = usePaginatedQuery(
+		api.conversations.searchTitles,
+		searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		{ initialNumItems: INITIAL_TITLE_COUNT },
+	);
+
+	const contentSearch = usePaginatedQuery(
+		api.conversations.searchContent,
+		searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		{ initialNumItems: INITIAL_CONTENT_COUNT },
+	);
+
+	const { data: titleCount } = useQuery({
+		...convexQuery(
+			api.conversations.searchTitlesCount,
+			searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		),
+	});
+
+	const { data: contentCount } = useQuery({
+		...convexQuery(
+			api.conversations.searchContentCount,
+			searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		),
+	});
 
 	const grouped = groupByDate(conversations);
 
@@ -1014,8 +1107,160 @@ function ChatSidebar({
 
 			<Separator />
 
+			{/* Add input component connected to searchQuery state */}
+			<div className="px-2 py-2">
+				<div className="relative">
+					<Search
+						size={14}
+						className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+					/>
+					<Input
+						placeholder="Search chats..."
+						value={searchQuery}
+						onChange={(e) => {
+							setSearchQuery(e.target.value);
+							setTitlesExpanded(false);
+							setContentExpanded(false);
+						}}
+						className="h-8 pl-8 text-xs"
+					/>
+				</div>
+			</div>
+
 			<ScrollArea className="min-h-0 flex-1 px-2 py-2">
-				{conversations.length === 0 ? (
+				{/* BRANCH 1: Active search — show search results */}
+				{searchQuery &&
+				titleSearch.status !== "LoadingFirstPage" &&
+				contentSearch.status !== "LoadingFirstPage" ? (
+					<div className="flex flex-col gap-4 h-full">
+						{/* --- TITLE MATCHES SECTION --- */}
+						{titleSearch.results.length > 0 && (
+							<div className="flex flex-col shrink-0">
+								<div className="sticky top-0 z-10 mb-1 flex items-center gap-2 bg-background px-2 py-1">
+									<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+										Conversations
+									</p>
+									{titlesExpanded ? (
+										<button
+											type="button"
+											onClick={() => setTitlesExpanded(false)}
+											className="text-[11px] text-blue-500 hover:text-blue-600"
+										>
+											Show Less
+										</button>
+									) : (titleCount ?? 0) > INITIAL_TITLE_COUNT ? (
+										<button
+											type="button"
+											onClick={() => {
+												if (titleSearch.status === "CanLoadMore") {
+													titleSearch.loadMore(LOAD_MORE_TITLE_COUNT);
+												}
+												setTitlesExpanded(true);
+											}}
+											className="text-[11px] text-blue-500 hover:text-blue-600"
+										>
+											Show More
+										</button>
+									) : null}
+								</div>
+								{(titlesExpanded
+									? titleSearch.results
+									: titleSearch.results.slice(0, INITIAL_TITLE_COUNT)
+								).map((convo) => (
+									<button
+										key={convo._id}
+										type="button"
+										onClick={() => onSelect(convo._id)}
+										className={cn(
+											"flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+											activeConvoId === convo._id
+												? "bg-muted text-foreground"
+												: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+										)}
+									>
+										<MessageSquare size={12} className="shrink-0" />
+										<span className="truncate">
+											<HighlightText text={convo.title} query={searchQuery} />
+										</span>
+									</button>
+								))}
+							</div>
+						)}
+
+						{/* --- CONTENT MATCHES SECTION --- */}
+						{contentSearch.results.length > 0 && (
+							<div className="flex flex-col flex-1 min-h-0">
+								<div className="sticky top-0 z-10 mb-1 flex items-center gap-2 bg-background px-2 py-1">
+									<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+										Messages
+									</p>
+									{contentExpanded ? (
+										<button
+											type="button"
+											onClick={() => setContentExpanded(false)}
+											className="text-[11px] text-blue-500 hover:text-blue-600"
+										>
+											Show Less
+										</button>
+									) : (contentCount ?? 0) > INITIAL_CONTENT_COUNT ? (
+										<button
+											type="button"
+											onClick={() => {
+												if (contentSearch.status === "CanLoadMore") {
+													contentSearch.loadMore(LOAD_MORE_CONTENT_COUNT);
+												}
+												setContentExpanded(true);
+											}}
+											className="text-[11px] text-blue-500 hover:text-blue-600"
+										>
+											Show More
+										</button>
+									) : null}
+								</div>
+								<div
+									className={cn(
+										"overflow-y-auto",
+										contentExpanded && "flex-1 min-h-0",
+									)}
+								>
+									{(contentExpanded
+										? contentSearch.results
+										: contentSearch.results.slice(0, INITIAL_CONTENT_COUNT)
+									).map((match) => (
+										<button
+											key={match.messageId}
+											type="button"
+											onClick={() =>
+												onSelectMessage(match.conversationId, match.messageId)
+											}
+											className="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors
+												text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+										>
+											<span className="text-[11px] font-medium text-foreground truncate">
+												{match.conversationTitle}
+											</span>
+											<span className="text-[11px] leading-snug">
+												<HighlightText
+													text={match.snippet}
+													query={searchQuery}
+												/>
+											</span>
+										</button>
+									))}
+								</div>
+							</div>
+						)}
+
+						{/* --- NO RESULTS --- */}
+						{titleSearch.results.length === 0 &&
+							contentSearch.results.length === 0 && (
+								<p className="px-2 py-8 text-center text-xs text-muted-foreground">
+									No results found
+								</p>
+							)}
+					</div>
+				) : /* BRANCH 2 & 3: Normal mode */
+				conversations.length === 0 ? (
 					<p className="px-2 py-8 text-center text-xs text-muted-foreground">
 						No conversations yet
 					</p>
@@ -1109,7 +1354,7 @@ function ChatSidebar({
 					asChild
 				>
 					<Link to="/harnesses">
-						<Settings size={12} />
+						<SlidersHorizontal size={12} />
 						Manage Harnesses
 					</Link>
 				</Button>
@@ -1478,6 +1723,8 @@ function ChatMessages({
 	forkedAtMessageCount,
 	onNavigateToConversation,
 	isStreaming,
+	scrollToMessageId,
+	onClearScrollTarget,
 }: {
 	conversationId: Id<"conversations">;
 	messages: Array<{
@@ -1546,10 +1793,13 @@ function ChatMessages({
 	forkedAtMessageCount?: number;
 	onNavigateToConversation: (convoId: Id<"conversations"> | null) => void;
 	isStreaming: boolean;
+	scrollToMessageId: Id<"messages"> | null;
+	onClearScrollTarget: () => void;
 }) {
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const userHasScrolledUp = useRef(false);
 	const isAutoScrolling = useRef(false);
+	const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null);
 
 	// Track user scroll position to avoid hijacking scroll during streaming
 	useEffect(() => {
@@ -1663,6 +1913,39 @@ function ChatMessages({
 		}
 	}, [messages, streamingContent, streamingReasoning]);
 
+	useEffect(() => {
+		if (!scrollToMessageId || !messages?.length) return;
+
+		const el = document.querySelector(
+			`[data-message-id="${scrollToMessageId}"]`,
+		);
+		if (!el) return;
+
+		// Clear any previous highlight timeout
+		if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+
+		el.scrollIntoView({ behavior: "smooth", block: "center" });
+		// Add ring + yellow highlight
+		el.classList.add(
+			"ring-2",
+			"ring-primary",
+			"ring-offset-2",
+			"highlight-fade",
+		);
+
+		highlightTimeoutRef.current = setTimeout(() => {
+			el.classList.remove(
+				"ring-2",
+				"ring-primary",
+				"ring-offset-2",
+				"highlight-fade",
+			);
+			highlightTimeoutRef.current = null;
+		}, 3000);
+
+		onClearScrollTarget();
+	}, [scrollToMessageId, messages, onClearScrollTarget]);
+
 	if (messages.length === 0 && !isActivelyStreaming) {
 		return (
 			<div className="flex flex-1 items-center justify-center">
@@ -1711,6 +1994,7 @@ function ChatMessages({
 					return (
 						<React.Fragment key={msg._id}>
 							<motion.div
+								data-message-id={msg._id}
 								initial={isJustSynced ? false : { opacity: 0, y: 8 }}
 								animate={{ opacity: 1, y: 0 }}
 								transition={

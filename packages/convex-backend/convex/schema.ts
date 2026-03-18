@@ -35,10 +35,15 @@ export default defineSchema({
 		editParentMessageCount: v.optional(v.number()),
 	})
 		.index("by_user", ["userId"])
-		.index("by_user_last_message", ["userId", "lastMessageAt"]),
+		.index("by_user_last_message", ["userId", "lastMessageAt"])
+		.searchIndex("search_title", {
+			searchField: "title",
+			filterFields: ["userId"],
+		}),
 
 	messages: defineTable({
 		conversationId: v.id("conversations"),
+		userId: v.optional(v.string()),
 		role: v.union(v.literal("user"), v.literal("assistant")),
 		content: v.string(),
 		reasoning: v.optional(v.string()),
@@ -78,7 +83,13 @@ export default defineSchema({
 		),
 		model: v.optional(v.string()),
 		interrupted: v.optional(v.boolean()),
-	}).index("by_conversation", ["conversationId"]),
+	})
+		.index("by_conversation", ["conversationId"])
+		.searchIndex("search_content", {
+			searchField: "content",
+			filterFields: ["conversationId", "userId"]
+		}),
+
 
 	mcpOAuthTokens: defineTable({
 		userId: v.string(),

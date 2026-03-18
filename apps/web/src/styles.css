@@ -254,3 +254,14 @@ code {
   background: transparent;
   padding: 0;
 }
+
+/* Search result highlight animation */
+@keyframes highlight-fade {
+  0% { background-color: rgba(250, 204, 21, 0.4); }
+  50% { background-color: rgba(250, 204, 21, 0.35); }
+  100% { background-color: transparent; }
+}
+
+.highlight-fade {
+  animation: highlight-fade 3s ease-out forwards;
+}
