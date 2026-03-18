@@ -29,6 +29,10 @@ export default defineSchema({
 		lastHarnessId: v.optional(v.id("harnesses")),
 		userId: v.string(),
 		lastMessageAt: v.number(),
+		forkedFromConversationId: v.optional(v.id("conversations")),
+		forkedAtMessageCount: v.optional(v.number()),
+		editParentConversationId: v.optional(v.id("conversations")),
+		editParentMessageCount: v.optional(v.number()),
 	})
 		.index("by_user", ["userId"])
 		.index("by_user_last_message", ["userId", "lastMessageAt"]),

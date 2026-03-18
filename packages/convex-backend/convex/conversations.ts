@@ -62,6 +62,126 @@ export const updateTitle = mutation({
 	},
 });
 
+export const fork = mutation({
+	args: {
+		conversationId: v.id("conversations"),
+		upToMessageId: v.id("messages"),
+	},
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+
+		const convo = await ctx.db.get(args.conversationId);
+		if (!convo || convo.userId !== identity.subject) throw new Error("Not found");
+
+		const allMessages = await ctx.db
+			.query("messages")
+			.withIndex("by_conversation", (q) =>
+				q.eq("conversationId", args.conversationId),
+			)
+			.collect();
+
+		const targetIdx = allMessages.findIndex((m) => m._id === args.upToMessageId);
+		if (targetIdx === -1) throw new Error("Message not found");
+		const messagesToCopy = allMessages.slice(0, targetIdx + 1);
+
+		const newConvoId = await ctx.db.insert("conversations", {
+			title: `Fork of ${convo.title}`,
+			lastHarnessId: convo.lastHarnessId,
+			userId: identity.subject,
+			lastMessageAt: Date.now(),
+			forkedFromConversationId: args.conversationId,
+			forkedAtMessageCount: messagesToCopy.length,
+		});
+
+		for (const msg of messagesToCopy) {
+			const { _id, _creationTime, conversationId, ...rest } = msg;
+			await ctx.db.insert("messages", {
+				...rest,
+				conversationId: newConvoId,
+			});
+		}
+
+		return newConvoId;
+	},
+});
+
+export const editFork = mutation({
+	args: {
+		conversationId: v.id("conversations"),
+		upToMessageCount: v.number(),
+	},
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+
+		const convo = await ctx.db.get(args.conversationId);
+		if (!convo || convo.userId !== identity.subject) throw new Error("Not found");
+
+		const allMessages = await ctx.db
+			.query("messages")
+			.withIndex("by_conversation", (q) =>
+				q.eq("conversationId", args.conversationId),
+			)
+			.collect();
+
+		const messagesToCopy = allMessages.slice(0, args.upToMessageCount);
+
+		// Walk the ancestor chain to find the true group parent for this edit
+		// position. All edits at the same message position within the same lineage
+		// must share a common parent so pagination stays consistent across branches.
+		//
+		// Rules while walking up:
+		//   - ancestor forked at SAME position  → its parent is the group root
+		//   - ancestor forked at LATER position  → content at pos came from its
+		//                                          parent; keep walking up
+		//   - ancestor forked at EARLIER position (or no parent) → ancestor is the
+		//                                          local root for this position
+		let parentId: typeof args.conversationId = args.conversationId;
+		let current = convo;
+		for (;;) {
+			if (!current.editParentConversationId) {
+				parentId = current._id;
+				break;
+			}
+			if (current.editParentMessageCount === args.upToMessageCount) {
+				parentId = current.editParentConversationId;
+				break;
+			}
+			if ((current.editParentMessageCount ?? 0) > args.upToMessageCount) {
+				const parent = await ctx.db.get(current.editParentConversationId);
+				if (!parent || parent.userId !== identity.subject) {
+					parentId = current._id;
+					break;
+				}
+				current = parent;
+			} else {
+				parentId = current._id;
+				break;
+			}
+		}
+
+		const newConvoId = await ctx.db.insert("conversations", {
+			title: convo.title,
+			lastHarnessId: convo.lastHarnessId,
+			userId: identity.subject,
+			lastMessageAt: Date.now(),
+			editParentConversationId: parentId,
+			editParentMessageCount: args.upToMessageCount,
+		});
+
+		for (const msg of messagesToCopy) {
+			const { _id, _creationTime, conversationId, ...rest } = msg;
+			await ctx.db.insert("messages", {
+				...rest,
+				conversationId: newConvoId,
+			});
+		}
+
+		return newConvoId;
+	},
+});
+
 export const remove = mutation({
 	args: { id: v.id("conversations") },
 	handler: async (ctx, args) => {
