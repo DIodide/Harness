@@ -426,10 +426,28 @@ function AddMcpServerForm({
 		setAuthType("none");
 		setAuthToken("");
 		setShowToken(false);
+		setUrlError("");
 	};
+
+	const [urlError, setUrlError] = useState("");
 
 	const handleSubmit = () => {
 		if (!name.trim() || !url.trim()) return;
+		if (/\s/.test(url.trim())) {
+			setUrlError("URL must not contain spaces");
+			return;
+		}
+		try {
+			const parsed = new URL(url.trim());
+			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+				setUrlError("URL must start with http:// or https://");
+				return;
+			}
+		} catch {
+			setUrlError("Please enter a valid URL");
+			return;
+		}
+		setUrlError("");
 		onAdd({
 			name: name.trim(),
 			url: url.trim(),
@@ -500,10 +518,16 @@ function AddMcpServerForm({
 					<Input
 						id="mcp-url"
 						value={url}
-						onChange={(e) => setUrl(e.target.value)}
+						onChange={(e) => {
+							setUrl(e.target.value);
+							if (urlError) setUrlError("");
+						}}
 						placeholder="https://mcp.example.com/sse"
-						className="text-xs"
+						className={`text-xs ${urlError ? "border-red-500" : ""}`}
 					/>
+					{urlError && (
+						<p className="mt-1 text-[11px] text-red-500">{urlError}</p>
+					)}
 				</div>
 			</div>
 
