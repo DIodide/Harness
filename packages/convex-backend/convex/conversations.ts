@@ -90,6 +90,8 @@ export const fork = mutation({
 			lastHarnessId: convo.lastHarnessId,
 			userId: identity.subject,
 			lastMessageAt: Date.now(),
+			forkedFromConversationId: args.conversationId,
+			forkedAtMessageCount: messagesToCopy.length,
 		});
 
 		for (const msg of messagesToCopy) {

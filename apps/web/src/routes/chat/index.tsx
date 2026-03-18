@@ -32,7 +32,7 @@ import {
 	X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import {
+import React, {
 	type KeyboardEvent,
 	useCallback,
 	useEffect,
@@ -761,6 +761,9 @@ function ChatPage() {
 	if (harnessesLoading || !harnesses || harnesses.length === 0) {
 		return <ChatSkeleton />;
 	}
+	const activeConversation = conversations?.find(
+		(c) => c._id === activeConvoId,
+	);
 	const activeStreamState = activeConvoId
 		? (streamStates[activeConvoId] ?? EMPTY_STREAM_STATE)
 		: EMPTY_STREAM_STATE;
@@ -829,6 +832,19 @@ function ChatPage() {
 						onRegenerate={handleRegenerate}
 						onFork={handleFork}
 						onEditPrompt={handleEditPrompt}
+						forkedFromConversationId={
+							activeConversation?.forkedFromConversationId
+						}
+						forkedFromConversationTitle={
+							activeConversation?.forkedFromConversationId
+								? (conversations?.find(
+										(c) =>
+											c._id === activeConversation.forkedFromConversationId,
+									)?.title ?? "Original conversation")
+								: undefined
+						}
+						forkedAtMessageCount={activeConversation?.forkedAtMessageCount}
+						onNavigateToConversation={handleSelectConversation}
 						isStreaming={isActiveConvoStreaming}
 					/>
 				) : (
@@ -1379,6 +1395,10 @@ function ChatMessages({
 	onRegenerate,
 	onFork,
 	onEditPrompt,
+	forkedFromConversationId,
+	forkedFromConversationTitle,
+	forkedAtMessageCount,
+	onNavigateToConversation,
 	isStreaming,
 }: {
 	conversationId: Id<"conversations">;
@@ -1425,6 +1445,10 @@ function ChatMessages({
 	) => void;
 	onFork: (messageId: Id<"messages">) => void;
 	onEditPrompt: (messageId: Id<"messages">, content: string) => void;
+	forkedFromConversationId?: Id<"conversations">;
+	forkedFromConversationTitle?: string;
+	forkedAtMessageCount?: number;
+	onNavigateToConversation: (convoId: Id<"conversations"> | null) => void;
 	isStreaming: boolean;
 }) {
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -1511,168 +1535,197 @@ function ChatMessages({
 				{messages?.map((msg, i) => {
 					// Skip entrance animation for the message that just replaced the streaming bubble
 					const isJustSynced = convexHasMessage && msg._id === lastMsg?._id;
+					const showForkBanner =
+						forkedFromConversationId !== undefined &&
+						forkedAtMessageCount !== undefined &&
+						i === forkedAtMessageCount - 1;
 					return (
-						<motion.div
-							key={msg._id}
-							initial={isJustSynced ? false : { opacity: 0, y: 8 }}
-							animate={{ opacity: 1, y: 0 }}
-							transition={isJustSynced ? { duration: 0 } : { delay: i * 0.03 }}
-							className={cn(
-								"group mb-6 flex gap-3",
-								msg.role === "user" && "justify-end",
-							)}
-						>
-							{msg.role === "assistant" && (
-								<Avatar className="h-7 w-7 shrink-0">
-									<AvatarFallback className="bg-foreground text-background text-[10px]">
-										<Sparkles size={12} />
-									</AvatarFallback>
-								</Avatar>
-							)}
-							<div className="max-w-[80%]">
-								<div
-									className={cn(
-										"text-sm leading-relaxed",
-										msg.role === "user"
-											? "bg-foreground px-3.5 py-2.5 text-background"
-											: "text-foreground",
-									)}
-								>
-									{msg.role === "assistant" &&
-									(msg as Record<string, unknown>).parts ? (
-										(
-											(msg as Record<string, unknown>).parts as Array<{
-												type: "text" | "reasoning" | "tool_call";
-												content?: string;
-												tool?: string;
-												arguments?: Record<string, unknown>;
-												call_id?: string;
-												result?: string;
-											}>
-										).map((part) => {
-											const key =
-												part.type === "tool_call"
-													? (part.call_id ?? part.tool)
-													: `${part.type}-${part.content?.slice(0, 32)}`;
-											if (part.type === "reasoning" && part.content) {
-												return (
-													<ThinkingBlock
-														key={key}
-														content={part.content}
-														isStreaming={false}
-													/>
-												);
-											}
-											if (part.type === "text" && part.content) {
-												return (
-													<MarkdownMessage key={key} content={part.content} />
-												);
-											}
-											if (part.type === "tool_call" && part.tool) {
-												return (
-													<ToolCallBlock
-														key={key}
-														tool={part.tool}
-														arguments={part.arguments ?? {}}
-														result={part.result}
-														isStreaming={false}
-													/>
-												);
-											}
-											return null;
-										})
-									) : (
-										<>
-											{msg.role === "assistant" && msg.reasoning && (
-												<ThinkingBlock
-													content={msg.reasoning}
-													isStreaming={false}
-												/>
-											)}
-											{msg.role === "assistant" ? (
-												<MarkdownMessage content={msg.content} />
-											) : (
-												<p className="whitespace-pre-wrap">{msg.content}</p>
-											)}
-											{msg.role === "assistant" &&
-												msg.toolCalls &&
-												msg.toolCalls.length > 0 && (
-													<div className="mt-2 space-y-1">
-														{(
-															msg.toolCalls as Array<{
-																tool: string;
-																arguments: Record<string, unknown>;
-																call_id: string;
-																result: string;
-															}>
-														).map((tc) => (
-															<ToolCallBlock
-																key={tc.call_id}
-																tool={tc.tool}
-																arguments={tc.arguments}
-																result={tc.result}
-																isStreaming={false}
-															/>
-														))}
-													</div>
-												)}
-										</>
-									)}
-								</div>
-								{msg.role === "assistant" && msg.interrupted && (
-									<div className="mt-1 flex items-center gap-1.5 text-xs text-amber-500">
-										<span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
-										Response interrupted
-									</div>
+						<React.Fragment key={msg._id}>
+							<motion.div
+								initial={isJustSynced ? false : { opacity: 0, y: 8 }}
+								animate={{ opacity: 1, y: 0 }}
+								transition={
+									isJustSynced ? { duration: 0 } : { delay: i * 0.03 }
+								}
+								className={cn(
+									"group mb-6 flex gap-3",
+									msg.role === "user" && "justify-end",
 								)}
-								<MessageActions
-									content={msg.content}
-									role={msg.role}
-									displayMode={displayMode}
-									isStreaming={isStreaming}
-									usage={
-										msg.role === "assistant" && msg.usage
-											? (msg.usage as UsageData)
-											: undefined
-									}
-									model={
-										msg.role === "assistant"
-											? (msg.model ?? undefined)
-											: undefined
-									}
-									onRegenerate={
-										msg.role === "assistant"
-											? () => {
-													if (!messages) return;
-													const idx = messages.findIndex(
-														(m) => m._id === msg._id,
+							>
+								{msg.role === "assistant" && (
+									<Avatar className="h-7 w-7 shrink-0">
+										<AvatarFallback className="bg-foreground text-background text-[10px]">
+											<Sparkles size={12} />
+										</AvatarFallback>
+									</Avatar>
+								)}
+								<div className="max-w-[80%]">
+									<div
+										className={cn(
+											"text-sm leading-relaxed",
+											msg.role === "user"
+												? "bg-foreground px-3.5 py-2.5 text-background"
+												: "text-foreground",
+										)}
+									>
+										{msg.role === "assistant" &&
+										(msg as Record<string, unknown>).parts ? (
+											(
+												(msg as Record<string, unknown>).parts as Array<{
+													type: "text" | "reasoning" | "tool_call";
+													content?: string;
+													tool?: string;
+													arguments?: Record<string, unknown>;
+													call_id?: string;
+													result?: string;
+												}>
+											).map((part) => {
+												const key =
+													part.type === "tool_call"
+														? (part.call_id ?? part.tool)
+														: `${part.type}-${part.content?.slice(0, 32)}`;
+												if (part.type === "reasoning" && part.content) {
+													return (
+														<ThinkingBlock
+															key={key}
+															content={part.content}
+															isStreaming={false}
+														/>
 													);
-													const history = messages.slice(0, idx).map((m) => ({
-														role: m.role,
-														content: m.content,
-													}));
-													onRegenerate(msg._id, history);
 												}
-											: undefined
-									}
-									onFork={
-										msg.role === "assistant" ? () => onFork(msg._id) : undefined
-									}
-									onEditPrompt={
-										msg.role === "user" && msg._id === lastUserMessageId
-											? () => onEditPrompt(msg._id, msg.content)
-											: undefined
-									}
-								/>
-							</div>
-							{msg.role === "user" && (
-								<Avatar className="h-7 w-7 shrink-0">
-									<AvatarFallback className="bg-muted text-foreground text-[10px]">
-										U
-									</AvatarFallback>
-								</Avatar>
+												if (part.type === "text" && part.content) {
+													return (
+														<MarkdownMessage key={key} content={part.content} />
+													);
+												}
+												if (part.type === "tool_call" && part.tool) {
+													return (
+														<ToolCallBlock
+															key={key}
+															tool={part.tool}
+															arguments={part.arguments ?? {}}
+															result={part.result}
+															isStreaming={false}
+														/>
+													);
+												}
+												return null;
+											})
+										) : (
+											<>
+												{msg.role === "assistant" && msg.reasoning && (
+													<ThinkingBlock
+														content={msg.reasoning}
+														isStreaming={false}
+													/>
+												)}
+												{msg.role === "assistant" ? (
+													<MarkdownMessage content={msg.content} />
+												) : (
+													<p className="whitespace-pre-wrap">{msg.content}</p>
+												)}
+												{msg.role === "assistant" &&
+													msg.toolCalls &&
+													msg.toolCalls.length > 0 && (
+														<div className="mt-2 space-y-1">
+															{(
+																msg.toolCalls as Array<{
+																	tool: string;
+																	arguments: Record<string, unknown>;
+																	call_id: string;
+																	result: string;
+																}>
+															).map((tc) => (
+																<ToolCallBlock
+																	key={tc.call_id}
+																	tool={tc.tool}
+																	arguments={tc.arguments}
+																	result={tc.result}
+																	isStreaming={false}
+																/>
+															))}
+														</div>
+													)}
+											</>
+										)}
+									</div>
+									{msg.role === "assistant" && msg.interrupted && (
+										<div className="mt-1 flex items-center gap-1.5 text-xs text-amber-500">
+											<span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
+											Response interrupted
+										</div>
+									)}
+									<MessageActions
+										content={msg.content}
+										role={msg.role}
+										displayMode={displayMode}
+										isStreaming={isStreaming}
+										usage={
+											msg.role === "assistant" && msg.usage
+												? (msg.usage as UsageData)
+												: undefined
+										}
+										model={
+											msg.role === "assistant"
+												? (msg.model ?? undefined)
+												: undefined
+										}
+										onRegenerate={
+											msg.role === "assistant"
+												? () => {
+														if (!messages) return;
+														const idx = messages.findIndex(
+															(m) => m._id === msg._id,
+														);
+														const history = messages.slice(0, idx).map((m) => ({
+															role: m.role,
+															content: m.content,
+														}));
+														onRegenerate(msg._id, history);
+													}
+												: undefined
+										}
+										onFork={
+											msg.role === "assistant"
+												? () => onFork(msg._id)
+												: undefined
+										}
+										onEditPrompt={
+											msg.role === "user" && msg._id === lastUserMessageId
+												? () => onEditPrompt(msg._id, msg.content)
+												: undefined
+										}
+									/>
+								</div>
+								{msg.role === "user" && (
+									<Avatar className="h-7 w-7 shrink-0">
+										<AvatarFallback className="bg-muted text-foreground text-[10px]">
+											U
+										</AvatarFallback>
+									</Avatar>
+								)}
+							</motion.div>
+							{showForkBanner && forkedFromConversationId && (
+								<div className="my-4 flex items-center gap-3 text-xs text-muted-foreground">
+									<div className="h-px flex-1 bg-border" />
+									<span>
+										Branched from{" "}
+										<button
+											type="button"
+											onClick={() =>
+												onNavigateToConversation(
+													forkedFromConversationId ?? null,
+												)
+											}
+											className="font-medium text-foreground underline underline-offset-2 hover:text-foreground/80"
+										>
+											{forkedFromConversationTitle}
+										</button>
+									</span>
+									<div className="h-px flex-1 bg-border" />
+								</div>
 							)}
-						</motion.div>
+						</React.Fragment>
 					);
 				})}
 
