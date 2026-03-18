@@ -389,13 +389,18 @@ function McpServerRow({
 							<Input
 								ref={inputRef}
 								value={urlDraft}
-								onChange={(e) => { setUrlDraft(e.target.value); setUrlError(""); }}
+								onChange={(e) => {
+									setUrlDraft(e.target.value);
+									setUrlError("");
+								}}
 								onBlur={commitUrl}
 								onKeyDown={handleKeyDown}
 								className="h-6 text-[11px]"
 							/>
 						</div>
-						{urlError && <p className="text-[10px] text-destructive">{urlError}</p>}
+						{urlError && (
+							<p className="text-[10px] text-destructive">{urlError}</p>
+						)}
 					</div>
 				) : (
 					<button
