@@ -1,0 +1,68 @@
+---
+description: Use Convex branded Id types instead of plain strings for document IDs. Applies when working with Convex state, props, or mutations.
+globs: apps/web/src/**/*.tsx,apps/web/src/**/*.ts,packages/convex-backend/convex/**/*.ts
+alwaysApply: false
+---
+
+# Convex Branded ID Types
+
+## Rule
+
+NEVER use `string` for Convex document IDs. NEVER use `as never` or `as Id<"...">` casts to silence type mismatches. Instead, use the generated `Id<"tablename">` type from `@harness/convex-backend/convex/_generated/dataModel` throughout the entire type chain — state, props, callbacks, and function parameters.
+
+## Why
+
+Convex generates branded types like `Id<"harnesses">` that are distinct from `string` at the type level. This prevents accidentally passing an `Id<"harnesses">` where an `Id<"conversations">` is expected. Using `as never` completely defeats this safety.
+
+## Import
+
+```tsx
+import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
+```
+
+## Pattern: State
+
+```tsx
+// GOOD — proper branded type
+const [activeId, setActiveId] = useState<Id<"harnesses"> | null>(null);
+
+// BAD — plain string loses type safety
+const [activeId, setActiveId] = useState<string | null>(null);
+```
+
+## Pattern: Component Props
+
+```tsx
+// GOOD — types flow from Convex queries to mutations without casts
+function HarnessCard({
+  harness,
+  onDelete,
+}: {
+  harness: { _id: Id<"harnesses">; name: string };
+  onDelete: (id: Id<"harnesses">) => void;
+}) {
+  return <button onClick={() => onDelete(harness._id)}>Delete</button>;
+}
+```
+
+## Pattern: Mutations
+
+```tsx
+// GOOD — types match, no casts needed
+const removeHarness = useMutation({
+  mutationFn: useConvexMutation(api.harnesses.remove),
+});
+removeHarness.mutate({ id: harness._id }); // Id<"harnesses"> flows naturally
+
+// BAD — as never bypasses ALL type checking
+removeHarness.mutate({ id: someString as never });
+```
+
+## How It Works
+
+1. Convex query results already return `_id` as `Id<"tablename">`
+2. Store these in state with `useState<Id<"tablename"> | null>`
+3. Pass through props with `Id<"tablename">` (not `string`)
+4. When the value reaches a mutation call, types match — zero casts needed
+
+The key is to never widen `Id<"tablename">` to `string` at any point in the chain.
