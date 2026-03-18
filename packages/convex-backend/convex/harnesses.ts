@@ -127,6 +127,27 @@ export const update = mutation({
 	},
 });
 
+export const duplicate = mutation({
+	args: { id: v.id("harnesses") },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+		const harness = await ctx.db.get(args.id);
+		if (!harness || harness.userId !== identity.subject) {
+			throw new Error("Not found");
+		}
+		return await ctx.db.insert("harnesses", {
+			name: `Copy of ${harness.name}`,
+			model: harness.model,
+			status: harness.status,
+			mcpServers: harness.mcpServers,
+			skills: harness.skills,
+			userId: identity.subject,
+			lastUsedAt: Date.now(),
+		});
+	},
+});
+
 export const remove = mutation({
 	args: { id: v.id("harnesses") },
 	handler: async (ctx, args) => {

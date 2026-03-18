@@ -9,6 +9,7 @@ import {
 	redirect,
 	useNavigate,
 } from "@tanstack/react-router";
+import { usePaginatedQuery } from "convex/react"; // any downsides to mixing convex/react with tanstack/react-query?
 import {
 	AlertTriangle,
 	ArrowUp,
@@ -23,7 +24,9 @@ import {
 	PanelLeftClose,
 	PanelLeftOpen,
 	Plus,
+	Search, // Icon for search
 	Settings,
+	SlidersHorizontal,
 	Sparkles,
 	Square,
 	Trash2,
@@ -32,7 +35,7 @@ import {
 	X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import {
+import React, {
 	type KeyboardEvent,
 	useCallback,
 	useEffect,
@@ -76,6 +79,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
+import { Input } from "../../components/ui/input"; // reuse input from components
 import { ScrollArea } from "../../components/ui/scroll-area";
 import {
 	Select,
@@ -157,6 +161,9 @@ function ChatPage() {
 		useState<Id<"conversations"> | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
 	const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+	const [editingMessageId, setEditingMessageId] =
+		useState<Id<"messages"> | null>(null);
+	const [editingContent, setEditingContent] = useState("");
 
 	// Per-conversation streaming state
 	const [streamStates, setStreamStates] = useState<
@@ -712,6 +719,17 @@ function ChatPage() {
 		[userSettings, conversations, harnesses],
 	);
 
+	// State handlers for searching
+	const [scrollToMessageId, setScrollToMessageId] =
+		useState<Id<"messages"> | null>(null);
+	const handleSelectMessage = useCallback(
+		(convoId: Id<"conversations">, messageId: Id<"messages">) => {
+			handleSelectConversation(convoId);
+			setScrollToMessageId(messageId);
+		},
+		[handleSelectConversation],
+	);
+
 	const removeMessage = useMutation({
 		mutationFn: useConvexMutation(api.messages.remove),
 	});
@@ -757,9 +775,103 @@ function ChatPage() {
 		[activeHarness, activeConvoId, chatStream, removeMessage],
 	);
 
+	const forkConversation = useMutation({
+		mutationFn: useConvexMutation(api.conversations.fork),
+	});
+
+	const handleFork = useCallback(
+		async (messageId: Id<"messages">) => {
+			if (!activeConvoId) return;
+			const newConvoId = await forkConversation.mutateAsync({
+				conversationId: activeConvoId,
+				upToMessageId: messageId,
+			});
+			handleSelectConversation(newConvoId);
+		},
+		[activeConvoId, forkConversation, handleSelectConversation],
+	);
+
+	const editForkConversation = useMutation({
+		mutationFn: useConvexMutation(api.conversations.editFork),
+	});
+	const sendMessageMutation = useMutation({
+		mutationFn: useConvexMutation(api.messages.send),
+	});
+
+	const handleStartEditPrompt = useCallback(
+		(messageId: Id<"messages">, content: string) => {
+			setEditingMessageId(messageId);
+			setEditingContent(content);
+		},
+		[],
+	);
+
+	const handleCancelEditPrompt = useCallback(() => {
+		setEditingMessageId(null);
+		setEditingContent("");
+	}, []);
+
+	const handleSaveEditPrompt = useCallback(
+		async (messageId: Id<"messages">, newContent: string) => {
+			if (!activeConvoId || !activeHarness || !activeMessages) return;
+			const idx = activeMessages.findIndex((m) => m._id === messageId);
+			if (idx === -1) return;
+
+			const newConvoId = await editForkConversation.mutateAsync({
+				conversationId: activeConvoId,
+				upToMessageCount: idx,
+			});
+
+			handleSelectConversation(newConvoId);
+
+			await sendMessageMutation.mutateAsync({
+				conversationId: newConvoId,
+				role: "user",
+				content: newContent,
+				harnessId: activeHarness._id,
+			});
+
+			const history = activeMessages.slice(0, idx).map((m) => ({
+				role: m.role,
+				content: m.content,
+			}));
+			history.push({ role: "user", content: newContent });
+
+			chatStream.stream({
+				messages: history,
+				harness: {
+					model: activeHarness.model,
+					mcp_servers: activeHarness.mcpServers.map((s) => ({
+						name: s.name,
+						url: s.url,
+						auth_type: s.authType as "none" | "bearer" | "oauth",
+						auth_token: s.authToken,
+					})),
+					name: activeHarness.name,
+				},
+				conversation_id: newConvoId,
+			});
+
+			setEditingMessageId(null);
+			setEditingContent("");
+		},
+		[
+			activeConvoId,
+			activeHarness,
+			activeMessages,
+			editForkConversation,
+			handleSelectConversation,
+			sendMessageMutation,
+			chatStream,
+		],
+	);
+
 	if (harnessesLoading || !harnesses || harnesses.length === 0) {
 		return <ChatSkeleton />;
 	}
+	const activeConversation = conversations?.find(
+		(c) => c._id === activeConvoId,
+	);
 	const activeStreamState = activeConvoId
 		? (streamStates[activeConvoId] ?? EMPTY_STREAM_STATE)
 		: EMPTY_STREAM_STATE;
@@ -783,9 +895,13 @@ function ChatPage() {
 							className="flex h-full flex-col overflow-hidden border-r border-border"
 						>
 							<ChatSidebar
-								conversations={conversations ?? []}
+								conversations={(conversations ?? []).filter(
+									(c) =>
+										!(c as Record<string, unknown>).editParentConversationId,
+								)}
 								activeConvoId={activeConvoId}
 								onSelect={handleSelectConversation}
+								onSelectMessage={handleSelectMessage}
 								harnessId={activeHarnessId}
 								onClose={() => setSidebarOpen(false)}
 								streamingConvoIds={chatStream.streamingConvoIds}
@@ -830,7 +946,31 @@ function ChatPage() {
 								(userSettings?.displayMode as DisplayMode) ?? "standard"
 							}
 							onRegenerate={handleRegenerate}
+							onFork={handleFork}
+							onStartEditPrompt={handleStartEditPrompt}
+							onCancelEditPrompt={handleCancelEditPrompt}
+							onSaveEditPrompt={handleSaveEditPrompt}
+							editingMessageId={editingMessageId}
+							editingContent={editingContent}
+							onEditContentChange={setEditingContent}
+							allConversations={conversations ?? []}
+							activeConversation={activeConversation}
+							forkedFromConversationId={
+								activeConversation?.forkedFromConversationId
+							}
+							forkedFromConversationTitle={
+								activeConversation?.forkedFromConversationId
+									? (conversations?.find(
+											(c) =>
+												c._id === activeConversation.forkedFromConversationId,
+										)?.title ?? "Original conversation")
+									: undefined
+							}
+							forkedAtMessageCount={activeConversation?.forkedAtMessageCount}
+							onNavigateToConversation={handleSelectConversation}
 							isStreaming={isActiveConvoStreaming}
+							scrollToMessageId={scrollToMessageId}
+							onClearScrollTarget={() => setScrollToMessageId(null)}
 						/>
 					) : (
 						<EmptyChat
@@ -864,10 +1004,43 @@ function ChatPage() {
 	);
 }
 
+function HighlightText({ text, query }: { text: string; query: string }) {
+	if (!query) return <>{text}</>;
+
+	const lowerText = text.toLowerCase();
+	const lowerQuery = query.toLowerCase();
+	const parts: React.ReactNode[] = [];
+	let lastIndex = 0;
+
+	let index = lowerText.indexOf(lowerQuery, lastIndex);
+	while (index !== -1) {
+		if (index > lastIndex) {
+			parts.push(text.slice(lastIndex, index));
+		}
+		parts.push(
+			<mark
+				key={index}
+				className="bg-yellow-200 dark:bg-yellow-800 text-inherit rounded-sm"
+			>
+				{text.slice(index, index + query.length)}
+			</mark>,
+		);
+		lastIndex = index + query.length;
+		index = lowerText.indexOf(lowerQuery, lastIndex);
+	}
+
+	if (lastIndex < text.length) {
+		parts.push(text.slice(lastIndex));
+	}
+
+	return <>{parts}</>;
+}
+
 function ChatSidebar({
 	conversations,
 	activeConvoId,
 	onSelect,
+	onSelectMessage, // called when user clicks a content match
 	harnessId,
 	onClose,
 	streamingConvoIds,
@@ -881,6 +1054,10 @@ function ChatSidebar({
 	}>;
 	activeConvoId: Id<"conversations"> | null;
 	onSelect: (id: Id<"conversations"> | null) => void;
+	onSelectMessage: (
+		convoId: Id<"conversations">,
+		messageId: Id<"messages">,
+	) => void;
 	harnessId: Id<"harnesses"> | null;
 	onClose: () => void;
 	streamingConvoIds: Set<string>;
@@ -897,6 +1074,44 @@ function ChatSidebar({
 		if (!harnessId) return;
 		onSelect(null);
 	};
+
+	const [searchQuery, setSearchQuery] = useState("");
+	const [titlesExpanded, setTitlesExpanded] = useState(false);
+	const [contentExpanded, setContentExpanded] = useState(false);
+
+	// consts to set initial amounts for how many search hits we show
+	// as well as max amounts for how many results we show after
+	// show more is pressed
+	const INITIAL_TITLE_COUNT = 10;
+	const INITIAL_CONTENT_COUNT = 15;
+	const LOAD_MORE_TITLE_COUNT = 100;
+	const LOAD_MORE_CONTENT_COUNT = 250;
+
+	const titleSearch = usePaginatedQuery(
+		api.conversations.searchTitles,
+		searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		{ initialNumItems: INITIAL_TITLE_COUNT },
+	);
+
+	const contentSearch = usePaginatedQuery(
+		api.conversations.searchContent,
+		searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		{ initialNumItems: INITIAL_CONTENT_COUNT },
+	);
+
+	const { data: titleCount } = useQuery({
+		...convexQuery(
+			api.conversations.searchTitlesCount,
+			searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		),
+	});
+
+	const { data: contentCount } = useQuery({
+		...convexQuery(
+			api.conversations.searchContentCount,
+			searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		),
+	});
 
 	const grouped = groupByDate(conversations);
 
@@ -933,8 +1148,160 @@ function ChatSidebar({
 
 			<Separator />
 
+			{/* Add input component connected to searchQuery state */}
+			<div className="px-2 py-2">
+				<div className="relative">
+					<Search
+						size={14}
+						className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+					/>
+					<Input
+						placeholder="Search chats..."
+						value={searchQuery}
+						onChange={(e) => {
+							setSearchQuery(e.target.value);
+							setTitlesExpanded(false);
+							setContentExpanded(false);
+						}}
+						className="h-8 pl-8 text-xs"
+					/>
+				</div>
+			</div>
+
 			<ScrollArea className="min-h-0 flex-1 px-2 py-2">
-				{conversations.length === 0 ? (
+				{/* BRANCH 1: Active search — show search results */}
+				{searchQuery &&
+				titleSearch.status !== "LoadingFirstPage" &&
+				contentSearch.status !== "LoadingFirstPage" ? (
+					<div className="flex flex-col gap-4 h-full">
+						{/* --- TITLE MATCHES SECTION --- */}
+						{titleSearch.results.length > 0 && (
+							<div className="flex flex-col shrink-0">
+								<div className="sticky top-0 z-10 mb-1 flex items-center gap-2 bg-background px-2 py-1">
+									<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+										Conversations
+									</p>
+									{titlesExpanded ? (
+										<button
+											type="button"
+											onClick={() => setTitlesExpanded(false)}
+											className="text-[11px] text-blue-500 hover:text-blue-600"
+										>
+											Show Less
+										</button>
+									) : (titleCount ?? 0) > INITIAL_TITLE_COUNT ? (
+										<button
+											type="button"
+											onClick={() => {
+												if (titleSearch.status === "CanLoadMore") {
+													titleSearch.loadMore(LOAD_MORE_TITLE_COUNT);
+												}
+												setTitlesExpanded(true);
+											}}
+											className="text-[11px] text-blue-500 hover:text-blue-600"
+										>
+											Show More
+										</button>
+									) : null}
+								</div>
+								{(titlesExpanded
+									? titleSearch.results
+									: titleSearch.results.slice(0, INITIAL_TITLE_COUNT)
+								).map((convo) => (
+									<button
+										key={convo._id}
+										type="button"
+										onClick={() => onSelect(convo._id)}
+										className={cn(
+											"flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+											activeConvoId === convo._id
+												? "bg-muted text-foreground"
+												: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+										)}
+									>
+										<MessageSquare size={12} className="shrink-0" />
+										<span className="truncate">
+											<HighlightText text={convo.title} query={searchQuery} />
+										</span>
+									</button>
+								))}
+							</div>
+						)}
+
+						{/* --- CONTENT MATCHES SECTION --- */}
+						{contentSearch.results.length > 0 && (
+							<div className="flex flex-col flex-1 min-h-0">
+								<div className="sticky top-0 z-10 mb-1 flex items-center gap-2 bg-background px-2 py-1">
+									<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+										Messages
+									</p>
+									{contentExpanded ? (
+										<button
+											type="button"
+											onClick={() => setContentExpanded(false)}
+											className="text-[11px] text-blue-500 hover:text-blue-600"
+										>
+											Show Less
+										</button>
+									) : (contentCount ?? 0) > INITIAL_CONTENT_COUNT ? (
+										<button
+											type="button"
+											onClick={() => {
+												if (contentSearch.status === "CanLoadMore") {
+													contentSearch.loadMore(LOAD_MORE_CONTENT_COUNT);
+												}
+												setContentExpanded(true);
+											}}
+											className="text-[11px] text-blue-500 hover:text-blue-600"
+										>
+											Show More
+										</button>
+									) : null}
+								</div>
+								<div
+									className={cn(
+										"overflow-y-auto",
+										contentExpanded && "flex-1 min-h-0",
+									)}
+								>
+									{(contentExpanded
+										? contentSearch.results
+										: contentSearch.results.slice(0, INITIAL_CONTENT_COUNT)
+									).map((match) => (
+										<button
+											key={match.messageId}
+											type="button"
+											onClick={() =>
+												onSelectMessage(match.conversationId, match.messageId)
+											}
+											className="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors
+												text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+										>
+											<span className="text-[11px] font-medium text-foreground truncate">
+												{match.conversationTitle}
+											</span>
+											<span className="text-[11px] leading-snug">
+												<HighlightText
+													text={match.snippet}
+													query={searchQuery}
+												/>
+											</span>
+										</button>
+									))}
+								</div>
+							</div>
+						)}
+
+						{/* --- NO RESULTS --- */}
+						{titleSearch.results.length === 0 &&
+							contentSearch.results.length === 0 && (
+								<p className="px-2 py-8 text-center text-xs text-muted-foreground">
+									No results found
+								</p>
+							)}
+					</div>
+				) : /* BRANCH 2 & 3: Normal mode */
+				conversations.length === 0 ? (
 					<p className="px-2 py-8 text-center text-xs text-muted-foreground">
 						No conversations yet
 					</p>
@@ -1028,7 +1395,7 @@ function ChatSidebar({
 					asChild
 				>
 					<Link to="/harnesses">
-						<Settings size={12} />
+						<SlidersHorizontal size={12} />
 						Manage Harnesses
 					</Link>
 				</Button>
@@ -1423,7 +1790,22 @@ function ChatMessages({
 	onStreamSynced,
 	displayMode,
 	onRegenerate,
+	onFork,
+	onStartEditPrompt,
+	onCancelEditPrompt,
+	onSaveEditPrompt,
+	editingMessageId,
+	editingContent,
+	onEditContentChange,
+	allConversations,
+	activeConversation,
+	forkedFromConversationId,
+	forkedFromConversationTitle,
+	forkedAtMessageCount,
+	onNavigateToConversation,
 	isStreaming,
+	scrollToMessageId,
+	onClearScrollTarget,
 }: {
 	conversationId: Id<"conversations">;
 	messages: Array<{
@@ -1467,11 +1849,38 @@ function ChatMessages({
 		messageId: Id<"messages">,
 		history: Array<{ role: string; content: string }>,
 	) => void;
+	onFork: (messageId: Id<"messages">) => void;
+	onStartEditPrompt: (messageId: Id<"messages">, content: string) => void;
+	onCancelEditPrompt: () => void;
+	onSaveEditPrompt: (messageId: Id<"messages">, newContent: string) => void;
+	editingMessageId: Id<"messages"> | null;
+	editingContent: string;
+	onEditContentChange: (content: string) => void;
+	allConversations: Array<{
+		_id: Id<"conversations">;
+		_creationTime: number;
+		editParentConversationId?: Id<"conversations">;
+		editParentMessageCount?: number;
+	}>;
+	activeConversation:
+		| {
+				_id: Id<"conversations">;
+				editParentConversationId?: Id<"conversations">;
+				editParentMessageCount?: number;
+		  }
+		| undefined;
+	forkedFromConversationId?: Id<"conversations">;
+	forkedFromConversationTitle?: string;
+	forkedAtMessageCount?: number;
+	onNavigateToConversation: (convoId: Id<"conversations"> | null) => void;
 	isStreaming: boolean;
+	scrollToMessageId: Id<"messages"> | null;
+	onClearScrollTarget: () => void;
 }) {
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const userHasScrolledUp = useRef(false);
 	const isAutoScrolling = useRef(false);
+	const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null);
 
 	// Track user scroll position to avoid hijacking scroll during streaming
 	useEffect(() => {
@@ -1487,6 +1896,59 @@ function ChatMessages({
 		el.addEventListener("scroll", handleScroll, { passive: true });
 		return () => el.removeEventListener("scroll", handleScroll);
 	}, []);
+
+	// Build a lookup map for O(1) ancestor traversal
+	const convoMap = useMemo(() => {
+		const map = new Map<
+			Id<"conversations">,
+			{
+				_id: Id<"conversations">;
+				_creationTime: number;
+				editParentConversationId?: Id<"conversations">;
+				editParentMessageCount?: number;
+			}
+		>();
+		for (const c of allConversations) {
+			map.set(c._id, c);
+		}
+		return map;
+	}, [allConversations]);
+
+	// Walk the ancestor chain to find, for a given message position i,
+	// the root conversation (base of the edit tree at that position) and
+	// the "version conversation" (which copy of message i the active
+	// conversation is showing — used to determine current page index).
+	const findEditAncestor = useCallback(
+		(
+			convId: Id<"conversations">,
+			pos: number,
+		): { rootId: Id<"conversations">; versionId: Id<"conversations"> } => {
+			let currentId = convId;
+			for (;;) {
+				const c = convoMap.get(currentId);
+				if (!c?.editParentConversationId) {
+					// No parent — this conversation is the root at this position
+					return { rootId: currentId, versionId: currentId };
+				}
+				if (c.editParentMessageCount === pos) {
+					// Fork is exactly at this position — parent is the root
+					return {
+						rootId: c.editParentConversationId,
+						versionId: currentId,
+					};
+				}
+				if ((c.editParentMessageCount ?? 0) > pos) {
+					// Fork is at a later position — content at pos came from parent
+					currentId = c.editParentConversationId;
+				} else {
+					// Fork is at an earlier position — content at pos is
+					// original to this conversation, so it is the root here
+					return { rootId: currentId, versionId: currentId };
+				}
+			}
+		},
+		[convoMap],
+	);
 
 	// Detect whether Convex has synced the assistant message (computed during render)
 	const lastMsg = messages?.[messages.length - 1];
@@ -1532,6 +1994,39 @@ function ChatMessages({
 		}
 	}, [messages, streamingContent, streamingReasoning]);
 
+	useEffect(() => {
+		if (!scrollToMessageId || !messages?.length) return;
+
+		const el = document.querySelector(
+			`[data-message-id="${scrollToMessageId}"]`,
+		);
+		if (!el) return;
+
+		// Clear any previous highlight timeout
+		if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+
+		el.scrollIntoView({ behavior: "smooth", block: "center" });
+		// Add ring + yellow highlight
+		el.classList.add(
+			"ring-2",
+			"ring-primary",
+			"ring-offset-2",
+			"highlight-fade",
+		);
+
+		highlightTimeoutRef.current = setTimeout(() => {
+			el.classList.remove(
+				"ring-2",
+				"ring-primary",
+				"ring-offset-2",
+				"highlight-fade",
+			);
+			highlightTimeoutRef.current = null;
+		}, 3000);
+
+		onClearScrollTarget();
+	}, [scrollToMessageId, messages, onClearScrollTarget]);
+
 	if (messages.length === 0 && !isActivelyStreaming) {
 		return (
 			<div className="flex flex-1 items-center justify-center">
@@ -1548,160 +2043,297 @@ function ChatMessages({
 				{messages?.map((msg, i) => {
 					// Skip entrance animation for the message that just replaced the streaming bubble
 					const isJustSynced = convexHasMessage && msg._id === lastMsg?._id;
+					const showForkBanner =
+						forkedFromConversationId !== undefined &&
+						forkedAtMessageCount !== undefined &&
+						i === forkedAtMessageCount - 1;
+					const { rootId: editRootId, versionId: editVersionId } =
+						msg.role === "user" && activeConversation
+							? findEditAncestor(activeConversation._id, i)
+							: { rootId: undefined, versionId: undefined };
+					const editSiblings =
+						editRootId !== undefined
+							? allConversations.filter(
+									(c) =>
+										c.editParentConversationId === editRootId &&
+										c.editParentMessageCount === i,
+								)
+							: [];
+					const editAllVersionIds =
+						editSiblings.length > 0
+							? [
+									editRootId as Id<"conversations">,
+									...[...editSiblings]
+										.sort((a, b) => a._creationTime - b._creationTime)
+										.map((c) => c._id),
+								]
+							: [];
+					const editVersionIdx =
+						editAllVersionIds.length === 0
+							? -1
+							: editAllVersionIds.indexOf(editVersionId);
 					return (
-						<motion.div
-							key={msg._id}
-							initial={isJustSynced ? false : { opacity: 0, y: 8 }}
-							animate={{ opacity: 1, y: 0 }}
-							transition={isJustSynced ? { duration: 0 } : { delay: i * 0.03 }}
-							className={cn(
-								"group mb-6 flex gap-3",
-								msg.role === "user" && "justify-end",
-							)}
-						>
-							{msg.role === "assistant" && (
-								<Avatar className="h-7 w-7 shrink-0">
-									<AvatarFallback className="bg-foreground text-background text-[10px]">
-										<Sparkles size={12} />
-									</AvatarFallback>
-								</Avatar>
-							)}
-							<div className="max-w-[80%]">
-								<div
-									className={cn(
-										"text-sm leading-relaxed",
-										msg.role === "user"
-											? "bg-foreground px-3.5 py-2.5 text-background"
-											: "text-foreground",
-									)}
-								>
-									{msg.role === "assistant" &&
-									(msg as Record<string, unknown>).parts ? (
-										(
-											(msg as Record<string, unknown>).parts as Array<{
-												type: "text" | "reasoning" | "tool_call";
-												content?: string;
-												tool?: string;
-												arguments?: Record<string, unknown>;
-												call_id?: string;
-												result?: string;
-											}>
-										).map((part) => {
-											const key =
-												part.type === "tool_call"
-													? (part.call_id ?? part.tool)
-													: `${part.type}-${part.content?.slice(0, 32)}`;
-											if (part.type === "reasoning" && part.content) {
-												return (
+						<React.Fragment key={msg._id}>
+							<motion.div
+								data-message-id={msg._id}
+								initial={isJustSynced ? false : { opacity: 0, y: 8 }}
+								animate={{ opacity: 1, y: 0 }}
+								transition={
+									isJustSynced ? { duration: 0 } : { delay: i * 0.03 }
+								}
+								className={cn(
+									"group mb-6 flex gap-3",
+									msg.role === "user" && "justify-end",
+								)}
+							>
+								{msg.role === "assistant" && (
+									<Avatar className="h-7 w-7 shrink-0">
+										<AvatarFallback className="bg-foreground text-background text-[10px]">
+											<Sparkles size={12} />
+										</AvatarFallback>
+									</Avatar>
+								)}
+								<div className="max-w-[80%]">
+									<div
+										className={cn(
+											"text-sm leading-relaxed",
+											msg.role === "user" && editingMessageId !== msg._id
+												? "bg-foreground px-3.5 py-2.5 text-background"
+												: "text-foreground",
+										)}
+									>
+										{msg.role === "assistant" &&
+										(msg as Record<string, unknown>).parts ? (
+											(
+												(msg as Record<string, unknown>).parts as Array<{
+													type: "text" | "reasoning" | "tool_call";
+													content?: string;
+													tool?: string;
+													arguments?: Record<string, unknown>;
+													call_id?: string;
+													result?: string;
+												}>
+											).map((part) => {
+												const key =
+													part.type === "tool_call"
+														? (part.call_id ?? part.tool)
+														: `${part.type}-${part.content?.slice(0, 32)}`;
+												if (part.type === "reasoning" && part.content) {
+													return (
+														<ThinkingBlock
+															key={key}
+															content={part.content}
+															isStreaming={false}
+														/>
+													);
+												}
+												if (part.type === "text" && part.content) {
+													return (
+														<MarkdownMessage key={key} content={part.content} />
+													);
+												}
+												if (part.type === "tool_call" && part.tool) {
+													return (
+														<ToolCallBlock
+															key={key}
+															tool={part.tool}
+															arguments={part.arguments ?? {}}
+															result={part.result}
+															isStreaming={false}
+														/>
+													);
+												}
+												return null;
+											})
+										) : (
+											<>
+												{msg.role === "assistant" && msg.reasoning && (
 													<ThinkingBlock
-														key={key}
-														content={part.content}
+														content={msg.reasoning}
 														isStreaming={false}
 													/>
-												);
-											}
-											if (part.type === "text" && part.content) {
-												return (
-													<MarkdownMessage key={key} content={part.content} />
-												);
-											}
-											if (part.type === "tool_call" && part.tool) {
-												return (
-													<ToolCallBlock
-														key={key}
-														tool={part.tool}
-														arguments={part.arguments ?? {}}
-														result={part.result}
-														isStreaming={false}
-													/>
-												);
-											}
-											return null;
-										})
-									) : (
-										<>
-											{msg.role === "assistant" && msg.reasoning && (
-												<ThinkingBlock
-													content={msg.reasoning}
-													isStreaming={false}
-												/>
-											)}
-											{msg.role === "assistant" ? (
-												<MarkdownMessage content={msg.content} />
-											) : (
-												<p className="whitespace-pre-wrap">{msg.content}</p>
-											)}
-											{msg.role === "assistant" &&
-												msg.toolCalls &&
-												msg.toolCalls.length > 0 && (
-													<div className="mt-2 space-y-1">
-														{(
-															msg.toolCalls as Array<{
-																tool: string;
-																arguments: Record<string, unknown>;
-																call_id: string;
-																result: string;
-															}>
-														).map((tc) => (
-															<ToolCallBlock
-																key={tc.call_id}
-																tool={tc.tool}
-																arguments={tc.arguments}
-																result={tc.result}
-																isStreaming={false}
-															/>
-														))}
-													</div>
 												)}
-										</>
+												{msg.role === "assistant" ? (
+													<MarkdownMessage content={msg.content} />
+												) : editingMessageId === msg._id ? (
+													<div className="flex flex-col gap-2">
+														<textarea
+															ref={(el) => {
+																if (el) {
+																	el.focus();
+																	el.setSelectionRange(
+																		el.value.length,
+																		el.value.length,
+																	);
+																}
+															}}
+															className="min-h-[80px] w-full resize-none rounded border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+															value={editingContent}
+															onChange={(e) =>
+																onEditContentChange(e.target.value)
+															}
+														/>
+														<div className="flex gap-2">
+															<button
+																type="button"
+																onClick={() =>
+																	onSaveEditPrompt(msg._id, editingContent)
+																}
+																className="rounded bg-foreground px-3 py-1 text-xs text-background hover:bg-foreground/90"
+															>
+																Save
+															</button>
+															<button
+																type="button"
+																onClick={onCancelEditPrompt}
+																className="rounded border border-border px-3 py-1 text-xs text-foreground hover:bg-muted"
+															>
+																Cancel
+															</button>
+														</div>
+													</div>
+												) : (
+													<p className="whitespace-pre-wrap">{msg.content}</p>
+												)}
+												{msg.role === "assistant" &&
+													msg.toolCalls &&
+													msg.toolCalls.length > 0 && (
+														<div className="mt-2 space-y-1">
+															{(
+																msg.toolCalls as Array<{
+																	tool: string;
+																	arguments: Record<string, unknown>;
+																	call_id: string;
+																	result: string;
+																}>
+															).map((tc) => (
+																<ToolCallBlock
+																	key={tc.call_id}
+																	tool={tc.tool}
+																	arguments={tc.arguments}
+																	result={tc.result}
+																	isStreaming={false}
+																/>
+															))}
+														</div>
+													)}
+											</>
+										)}
+									</div>
+									{msg.role === "assistant" && msg.interrupted && (
+										<div className="mt-1 flex items-center gap-1.5 text-xs text-amber-500">
+											<span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
+											Response interrupted
+										</div>
+									)}
+									<MessageActions
+										content={msg.content}
+										role={msg.role}
+										displayMode={displayMode}
+										isStreaming={isStreaming}
+										usage={
+											msg.role === "assistant" && msg.usage
+												? (msg.usage as UsageData)
+												: undefined
+										}
+										model={
+											msg.role === "assistant"
+												? (msg.model ?? undefined)
+												: undefined
+										}
+										onRegenerate={
+											msg.role === "assistant"
+												? () => {
+														if (!messages) return;
+														const idx = messages.findIndex(
+															(m) => m._id === msg._id,
+														);
+														const history = messages.slice(0, idx).map((m) => ({
+															role: m.role,
+															content: m.content,
+														}));
+														onRegenerate(msg._id, history);
+													}
+												: undefined
+										}
+										onFork={
+											msg.role === "assistant"
+												? () => onFork(msg._id)
+												: undefined
+										}
+										onEditPrompt={
+											msg.role === "user"
+												? () => onStartEditPrompt(msg._id, msg.content)
+												: undefined
+										}
+									/>
+									{editVersionIdx !== -1 && editAllVersionIds.length > 1 && (
+										<div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+											<button
+												type="button"
+												disabled={editVersionIdx === 0}
+												onClick={() =>
+													onNavigateToConversation(
+														editAllVersionIds[
+															editVersionIdx - 1
+														] as Id<"conversations">,
+													)
+												}
+												className="disabled:opacity-30 hover:text-foreground"
+											>
+												←
+											</button>
+											<span>
+												{editVersionIdx + 1}/{editAllVersionIds.length}
+											</span>
+											<button
+												type="button"
+												disabled={
+													editVersionIdx === editAllVersionIds.length - 1
+												}
+												onClick={() =>
+													onNavigateToConversation(
+														editAllVersionIds[
+															editVersionIdx + 1
+														] as Id<"conversations">,
+													)
+												}
+												className="disabled:opacity-30 hover:text-foreground"
+											>
+												→
+											</button>
+										</div>
 									)}
 								</div>
-								{msg.role === "assistant" && msg.interrupted && (
-									<div className="mt-1 flex items-center gap-1.5 text-xs text-amber-500">
-										<span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
-										Response interrupted
-									</div>
+								{msg.role === "user" && (
+									<Avatar className="h-7 w-7 shrink-0">
+										<AvatarFallback className="bg-muted text-foreground text-[10px]">
+											U
+										</AvatarFallback>
+									</Avatar>
 								)}
-								<MessageActions
-									content={msg.content}
-									role={msg.role}
-									displayMode={displayMode}
-									isStreaming={isStreaming}
-									usage={
-										msg.role === "assistant" && msg.usage
-											? (msg.usage as UsageData)
-											: undefined
-									}
-									model={
-										msg.role === "assistant"
-											? (msg.model ?? undefined)
-											: undefined
-									}
-									onRegenerate={
-										msg.role === "assistant"
-											? () => {
-													if (!messages) return;
-													const idx = messages.findIndex(
-														(m) => m._id === msg._id,
-													);
-													const history = messages.slice(0, idx).map((m) => ({
-														role: m.role,
-														content: m.content,
-													}));
-													onRegenerate(msg._id, history);
-												}
-											: undefined
-									}
-								/>
-							</div>
-							{msg.role === "user" && (
-								<Avatar className="h-7 w-7 shrink-0">
-									<AvatarFallback className="bg-muted text-foreground text-[10px]">
-										U
-									</AvatarFallback>
-								</Avatar>
+							</motion.div>
+							{showForkBanner && forkedFromConversationId && (
+								<div className="my-4 flex items-center gap-3 text-xs text-muted-foreground">
+									<div className="h-px flex-1 bg-border" />
+									<span>
+										Branched from{" "}
+										<button
+											type="button"
+											onClick={() =>
+												onNavigateToConversation(
+													forkedFromConversationId ?? null,
+												)
+											}
+											className="font-medium text-foreground underline underline-offset-2 hover:text-foreground/80"
+										>
+											{forkedFromConversationTitle}
+										</button>
+									</span>
+									<div className="h-px flex-1 bg-border" />
+								</div>
 							)}
-						</motion.div>
+						</React.Fragment>
 					);
 				})}
 

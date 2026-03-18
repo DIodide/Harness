@@ -33,6 +33,7 @@ export const send = mutation({
 		}
 		const id = await ctx.db.insert("messages", {
 			conversationId: args.conversationId,
+			userId: identity.subject,
 			role: args.role,
 			content: args.content,
 		});
@@ -120,6 +121,7 @@ export const saveInterruptedMessage = mutation({
 
 		await ctx.db.insert("messages", {
 			conversationId: args.conversationId,
+			userId: identity.subject,
 			role: "assistant",
 			content: args.content,
 			interrupted: true,
@@ -191,6 +193,7 @@ export const saveAssistantMessage = internalMutation({
 
 		await ctx.db.insert("messages", {
 			conversationId: args.conversationId,
+			userId: convo.userId,
 			role: "assistant",
 			content: args.content,
 			...(args.reasoning ? { reasoning: args.reasoning } : {}),

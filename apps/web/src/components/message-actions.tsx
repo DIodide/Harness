@@ -1,4 +1,4 @@
-import { Check, Copy, RefreshCw } from "lucide-react";
+import { Check, Copy, GitFork, Pencil, RefreshCw } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import type { UsageData } from "../lib/use-chat-stream";
 
@@ -9,6 +9,8 @@ interface MessageActionsProps {
 	role: "user" | "assistant";
 	displayMode: DisplayMode;
 	onRegenerate?: () => void;
+	onFork?: () => void;
+	onEditPrompt?: () => void;
 	isStreaming?: boolean;
 	usage?: UsageData;
 	model?: string;
@@ -19,6 +21,8 @@ export function MessageActions({
 	role,
 	displayMode,
 	onRegenerate,
+	onFork,
+	onEditPrompt,
 	isStreaming,
 	usage,
 	model,
@@ -26,6 +30,14 @@ export function MessageActions({
 	if (displayMode === "zen" || isStreaming) return null;
 
 	const showCopy = displayMode === "standard" || displayMode === "developer";
+	const showEditPrompt =
+		(displayMode === "standard" || displayMode === "developer") &&
+		role === "user" &&
+		onEditPrompt;
+	const showFork =
+		(displayMode === "standard" || displayMode === "developer") &&
+		role === "assistant" &&
+		onFork;
 	const showRegenerate =
 		displayMode === "developer" && role === "assistant" && onRegenerate;
 	const showInfo =
@@ -34,6 +46,8 @@ export function MessageActions({
 	return (
 		<div className="flex items-center gap-3 pt-1 opacity-0 transition-opacity group-hover:opacity-100">
 			{showCopy && <CopyMessageButton text={content} />}
+			{showEditPrompt && <EditPromptButton onClick={onEditPrompt} />}
+			{showFork && <ForkButton onClick={onFork} />}
 			{showRegenerate && <RegenerateButton onClick={onRegenerate} />}
 			{showInfo && <UsageInfo usage={usage} model={model} />}
 		</div>
@@ -68,6 +82,32 @@ function CopyMessageButton({ text }: { text: string }) {
 					Copy
 				</>
 			)}
+		</button>
+	);
+}
+
+function EditPromptButton({ onClick }: { onClick: () => void }) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			className="flex items-center gap-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+		>
+			<Pencil size={12} />
+			Edit
+		</button>
+	);
+}
+
+function ForkButton({ onClick }: { onClick: () => void }) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			className="flex items-center gap-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+		>
+			<GitFork size={12} />
+			Fork
 		</button>
 	);
 }
