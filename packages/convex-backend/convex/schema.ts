@@ -39,6 +39,7 @@ export default defineSchema({
 
 	messages: defineTable({
 		conversationId: v.id("conversations"),
+		userId: v.optional(v.string()),
 		role: v.union(v.literal("user"), v.literal("assistant")),
 		content: v.string(),
 		reasoning: v.optional(v.string()),
@@ -82,7 +83,7 @@ export default defineSchema({
 		.index("by_conversation", ["conversationId"])
 		.searchIndex("search_content", {
 			searchField: "content",
-			filterFields: ["conversationId"]
+			filterFields: ["conversationId", "userId"]
 		}),
 
 

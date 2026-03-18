@@ -112,10 +112,17 @@ export const searchContent = query({
 		const result = await ctx.db
 			.query("messages")
 			.withSearchIndex("search_content", (q) =>
-				q.search("content", args.query)
+				q.search("content", args.query).eq("userId", identity.subject)
 			)
 			.paginate(args.paginationOpts);
 		
+		// Pre-fetch all referenced conversations in parallel to avoid N+1
+		const uniqueConvoIds = [...new Set(result.page.map((m) => m.conversationId))];
+		const convos = await Promise.all(uniqueConvoIds.map((id) => ctx.db.get(id)));
+		const convoMap = new Map(
+			convos.filter((c): c is NonNullable<typeof c> => c !== null).map((c) => [c._id, c]),
+		);
+
 		// Enrich each message with snippet + convo title
 		// make sure it has an annotated type so convex doesn't infer the paginate type
 		const enrichedPage: {
@@ -126,7 +133,7 @@ export const searchContent = query({
 			snippet: string;
 		}[] = [];
 		for (const msg of result.page) {
-			const convo = await ctx.db.get(msg.conversationId);
+			const convo = convoMap.get(msg.conversationId);
 			if (!convo || convo.userId !== identity.subject) continue
 
 			const lowerContent = msg.content.toLowerCase();
@@ -182,24 +189,14 @@ export const searchContentCount = query({
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return 0;
 
-		// Fetch user's conversation IDs in one query for fast ownership check
-		const userConvos = await ctx.db
-			.query("conversations")
-			.filter((q) => q.eq(q.field("userId"), identity.subject))
-			.collect();
-		const userConvoIds = new Set(userConvos.map((c) => c._id));
-
+		// Filter at the index level using userId, cap to avoid read limits
 		const results = await ctx.db
 			.query("messages")
 			.withSearchIndex("search_content", (q) =>
-				q.search("content", args.query)
+				q.search("content", args.query).eq("userId", identity.subject)
 			)
-			.collect();
+			.take(1000);
 
-		let count = 0;
-		for (const msg of results) {
-			if (userConvoIds.has(msg.conversationId)) count++;
-		}
-		return count;
+		return results.length;
 	},
 });

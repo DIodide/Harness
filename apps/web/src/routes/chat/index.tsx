@@ -1009,8 +1009,8 @@ function ChatSidebar({
 			<ScrollArea className="min-h-0 flex-1 px-2 py-2">
 				{/* BRANCH 1: Active search — show search results */}
 				{searchQuery &&
-				(titleSearch.status !== "LoadingFirstPage" ||
-					contentSearch.status !== "LoadingFirstPage") ? (
+				titleSearch.status !== "LoadingFirstPage" &&
+				contentSearch.status !== "LoadingFirstPage" ? (
 					<div className="flex flex-col gap-4 h-full">
 						{/* --- TITLE MATCHES SECTION --- */}
 						{titleSearch.results.length > 0 && (
@@ -1641,6 +1641,7 @@ function ChatMessages({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const userHasScrolledUp = useRef(false);
 	const isAutoScrolling = useRef(false);
+	const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null);
 
 	// Track user scroll position to avoid hijacking scroll during streaming
 	useEffect(() => {
@@ -1707,27 +1708,31 @@ function ChatMessages({
 		const el = document.querySelector(
 			`[data-message-id="${scrollToMessageId}"]`,
 		);
-		if (el) {
-			el.scrollIntoView({ behavior: "smooth", block: "center" });
-			// Add ring + yellow highlight
-			el.classList.add(
+		if (!el) return;
+
+		// Clear any previous highlight timeout
+		if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+
+		el.scrollIntoView({ behavior: "smooth", block: "center" });
+		// Add ring + yellow highlight
+		el.classList.add(
+			"ring-2",
+			"ring-primary",
+			"ring-offset-2",
+			"highlight-fade",
+		);
+
+		highlightTimeoutRef.current = setTimeout(() => {
+			el.classList.remove(
 				"ring-2",
 				"ring-primary",
 				"ring-offset-2",
 				"highlight-fade",
 			);
+			highlightTimeoutRef.current = null;
+		}, 3000);
 
-			setTimeout(() => {
-				el.classList.remove(
-					"ring-2",
-					"ring-primary",
-					"ring-offset-2",
-					"highlight-fade",
-				);
-			}, 3000);
-
-			onClearScrollTarget();
-		}
+		onClearScrollTarget();
 	}, [scrollToMessageId, messages, onClearScrollTarget]);
 
 	if (messages.length === 0 && !isActivelyStreaming) {
