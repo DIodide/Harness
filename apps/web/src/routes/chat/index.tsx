@@ -791,12 +791,10 @@ function ChatPage() {
 		[activeConvoId, forkConversation, handleSelectConversation],
 	);
 
-	const editForkConversation = useMutation({
-		mutationFn: useConvexMutation(api.conversations.editFork),
+	const editForkAndSend = useMutation({
+		mutationFn: useConvexMutation(api.conversations.editForkAndSend),
 	});
-	const sendMessageMutation = useMutation({
-		mutationFn: useConvexMutation(api.messages.send),
-	});
+	const isEditSaving = useRef(false);
 
 	const handleStartEditPrompt = useCallback(
 		(messageId: Id<"messages">, content: string) => {
@@ -814,54 +812,56 @@ function ChatPage() {
 	const handleSaveEditPrompt = useCallback(
 		async (messageId: Id<"messages">, newContent: string) => {
 			if (!activeConvoId || !activeHarness || !activeMessages) return;
-			const idx = activeMessages.findIndex((m) => m._id === messageId);
-			if (idx === -1) return;
+			if (isEditSaving.current) return;
+			isEditSaving.current = true;
 
-			const newConvoId = await editForkConversation.mutateAsync({
-				conversationId: activeConvoId,
-				upToMessageCount: idx,
-			});
+			try {
+				const idx = activeMessages.findIndex((m) => m._id === messageId);
+				if (idx === -1) return;
 
-			handleSelectConversation(newConvoId);
+				// Atomic fork + message insert — no flicker
+				const newConvoId = await editForkAndSend.mutateAsync({
+					conversationId: activeConvoId,
+					upToMessageCount: idx,
+					newContent,
+					harnessId: activeHarness._id,
+				});
 
-			await sendMessageMutation.mutateAsync({
-				conversationId: newConvoId,
-				role: "user",
-				content: newContent,
-				harnessId: activeHarness._id,
-			});
+				handleSelectConversation(newConvoId);
 
-			const history = activeMessages.slice(0, idx).map((m) => ({
-				role: m.role,
-				content: m.content,
-			}));
-			history.push({ role: "user", content: newContent });
+				const history = activeMessages.slice(0, idx).map((m) => ({
+					role: m.role,
+					content: m.content,
+				}));
+				history.push({ role: "user", content: newContent });
 
-			chatStream.stream({
-				messages: history,
-				harness: {
-					model: activeHarness.model,
-					mcp_servers: activeHarness.mcpServers.map((s) => ({
-						name: s.name,
-						url: s.url,
-						auth_type: s.authType as "none" | "bearer" | "oauth",
-						auth_token: s.authToken,
-					})),
-					name: activeHarness.name,
-				},
-				conversation_id: newConvoId,
-			});
+				chatStream.stream({
+					messages: history,
+					harness: {
+						model: activeHarness.model,
+						mcp_servers: activeHarness.mcpServers.map((s) => ({
+							name: s.name,
+							url: s.url,
+							auth_type: s.authType as "none" | "bearer" | "oauth",
+							auth_token: s.authToken,
+						})),
+						name: activeHarness.name,
+					},
+					conversation_id: newConvoId,
+				});
 
-			setEditingMessageId(null);
-			setEditingContent("");
+				setEditingMessageId(null);
+				setEditingContent("");
+			} finally {
+				isEditSaving.current = false;
+			}
 		},
 		[
 			activeConvoId,
 			activeHarness,
 			activeMessages,
-			editForkConversation,
+			editForkAndSend,
 			handleSelectConversation,
-			sendMessageMutation,
 			chatStream,
 		],
 	);

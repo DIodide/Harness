@@ -81,10 +81,10 @@ export const fork = mutation({
 			.withIndex("by_conversation", (q) =>
 				q.eq("conversationId", args.conversationId),
 			)
-			.collect();
+			.take(8192);
 
 		const targetIdx = allMessages.findIndex((m) => m._id === args.upToMessageId);
-		if (targetIdx === -1) throw new Error("Message not found");
+		if (targetIdx === -1) throw new Error("Message not found in this conversation");
 		const messagesToCopy = allMessages.slice(0, targetIdx + 1);
 
 		const newConvoId = await ctx.db.insert("conversations", {
@@ -108,10 +108,17 @@ export const fork = mutation({
 	},
 });
 
-export const editFork = mutation({
+/**
+ * Atomically fork a conversation at a given message position and insert the
+ * edited user message in a single transaction. This eliminates the flicker
+ * where the forked conversation would briefly appear without the new message.
+ */
+export const editForkAndSend = mutation({
 	args: {
 		conversationId: v.id("conversations"),
 		upToMessageCount: v.number(),
+		newContent: v.string(),
+		harnessId: v.optional(v.id("harnesses")),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -125,7 +132,11 @@ export const editFork = mutation({
 			.withIndex("by_conversation", (q) =>
 				q.eq("conversationId", args.conversationId),
 			)
-			.collect();
+			.take(8192);
+
+		if (args.upToMessageCount <= 0 || args.upToMessageCount > allMessages.length) {
+			throw new Error("Invalid message count");
+		}
 
 		const messagesToCopy = allMessages.slice(0, args.upToMessageCount);
 
@@ -139,9 +150,10 @@ export const editFork = mutation({
 		//                                          parent; keep walking up
 		//   - ancestor forked at EARLIER position (or no parent) → ancestor is the
 		//                                          local root for this position
+		const MAX_DEPTH = 100;
 		let parentId: typeof args.conversationId = args.conversationId;
 		let current = convo;
-		for (;;) {
+		for (let depth = 0; depth < MAX_DEPTH; depth++) {
 			if (!current.editParentConversationId) {
 				parentId = current._id;
 				break;
@@ -163,11 +175,12 @@ export const editFork = mutation({
 			}
 		}
 
+		const now = Date.now();
 		const newConvoId = await ctx.db.insert("conversations", {
 			title: convo.title,
-			lastHarnessId: convo.lastHarnessId,
+			lastHarnessId: args.harnessId ?? convo.lastHarnessId,
 			userId: identity.subject,
-			lastMessageAt: Date.now(),
+			lastMessageAt: now,
 			editParentConversationId: parentId,
 			editParentMessageCount: args.upToMessageCount,
 		});
@@ -179,6 +192,14 @@ export const editFork = mutation({
 				conversationId: newConvoId,
 			});
 		}
+
+		// Insert the edited user message in the same transaction
+		await ctx.db.insert("messages", {
+			conversationId: newConvoId,
+			userId: identity.subject,
+			role: "user",
+			content: args.newContent,
+		});
 
 		return newConvoId;
 	},
