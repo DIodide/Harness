@@ -144,7 +144,7 @@ function HarnessEditPage() {
 		const preset = PRESET_MCPS.find((p) => p.id === id);
 		if (!preset) return;
 		const isSelected = currentMcpServers.some(
-			(s) => s.name === preset.server.name,
+			(s) => s.name === preset.server.name && s.url === preset.server.url,
 		);
 		setMcpServers(
 			isSelected

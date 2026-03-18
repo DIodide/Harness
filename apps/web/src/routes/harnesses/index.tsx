@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { motion } from "motion/react";
 import { useState } from "react";
+import toast from "react-hot-toast";
 import { HarnessMark } from "../../components/harness-mark";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -79,7 +80,10 @@ function HarnessesPage() {
 	}
 
 	const handleDuplicate = (id: Id<"harnesses">) => {
-		duplicateHarness.mutate({ id });
+		duplicateHarness.mutate(
+			{ id },
+			{ onSuccess: () => toast.success("Harness duplicated") },
+		);
 	};
 
 	const active = harnesses?.filter((h) => h.status === "started") ?? [];
@@ -279,7 +283,7 @@ function HarnessCard({
 		mcpServers: Array<{
 			name: string;
 			url: string;
-			authType: "none" | "bearer";
+			authType: "none" | "bearer" | "oauth";
 			authToken?: string;
 		}>;
 		skills: string[];
