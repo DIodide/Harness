@@ -159,3 +159,47 @@ export const searchContent = query({
 		};
 	},
 });
+
+export const searchTitlesCount = query({
+	args: { query: v.string() },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return 0;
+
+		const results = await ctx.db
+			.query("conversations")
+			.withSearchIndex("search_title", (q) =>
+				q.search("title", args.query).eq("userId", identity.subject)
+			)
+			.collect();
+		return results.length;
+	},
+});
+
+export const searchContentCount = query({
+	args: { query: v.string() },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return 0;
+
+		// Fetch user's conversation IDs in one query for fast ownership check
+		const userConvos = await ctx.db
+			.query("conversations")
+			.filter((q) => q.eq(q.field("userId"), identity.subject))
+			.collect();
+		const userConvoIds = new Set(userConvos.map((c) => c._id));
+
+		const results = await ctx.db
+			.query("messages")
+			.withSearchIndex("search_content", (q) =>
+				q.search("content", args.query)
+			)
+			.collect();
+
+		let count = 0;
+		for (const msg of results) {
+			if (userConvoIds.has(msg.conversationId)) count++;
+		}
+		return count;
+	},
+});

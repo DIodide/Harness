@@ -917,10 +917,13 @@ function ChatSidebar({
 	const [titlesExpanded, setTitlesExpanded] = useState(false);
 	const [contentExpanded, setContentExpanded] = useState(false);
 
-	const INITIAL_TITLE_COUNT = 5;
+	// consts to set initial amounts for how many search hits we show
+	// as well as max amounts for how many results we show after
+	// show more is pressed
+	const INITIAL_TITLE_COUNT = 10;
 	const INITIAL_CONTENT_COUNT = 15;
-	const LOAD_MORE_TITLE_COUNT = 50;
-	const LOAD_MORE_CONTENT_COUNT = 100;
+	const LOAD_MORE_TITLE_COUNT = 100;
+	const LOAD_MORE_CONTENT_COUNT = 250;
 
 	const titleSearch = usePaginatedQuery(
 		api.conversations.searchTitles,
@@ -933,6 +936,20 @@ function ChatSidebar({
 		searchQuery.length > 0 ? { query: searchQuery } : "skip",
 		{ initialNumItems: INITIAL_CONTENT_COUNT },
 	);
+
+	const { data: titleCount } = useQuery({
+		...convexQuery(
+			api.conversations.searchTitlesCount,
+			searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		),
+	});
+
+	const { data: contentCount } = useQuery({
+		...convexQuery(
+			api.conversations.searchContentCount,
+			searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		),
+	});
 
 	const grouped = groupByDate(conversations);
 
@@ -1010,8 +1027,7 @@ function ChatSidebar({
 										>
 											Show Less
 										</button>
-									) : titleSearch.results.length > INITIAL_TITLE_COUNT ||
-										titleSearch.status === "CanLoadMore" ? (
+									) : (titleCount ?? 0) > INITIAL_TITLE_COUNT ? (
 										<button
 											type="button"
 											onClick={() => {
@@ -1065,8 +1081,7 @@ function ChatSidebar({
 										>
 											Show Less
 										</button>
-									) : contentSearch.results.length > INITIAL_CONTENT_COUNT ||
-										contentSearch.status === "CanLoadMore" ? (
+									) : (contentCount ?? 0) > INITIAL_CONTENT_COUNT ? (
 										<button
 											type="button"
 											onClick={() => {
