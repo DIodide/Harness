@@ -134,7 +134,7 @@ export const editForkAndSend = mutation({
 			)
 			.take(8192);
 
-		if (args.upToMessageCount <= 0 || args.upToMessageCount > allMessages.length) {
+		if (args.upToMessageCount < 0 || args.upToMessageCount > allMessages.length) {
 			throw new Error("Invalid message count");
 		}
 
