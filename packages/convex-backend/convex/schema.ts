@@ -134,6 +134,16 @@ export default defineSchema({
 		),
 		model: v.optional(v.string()),
 		interrupted: v.optional(v.boolean()),
+		attachments: v.optional(
+			v.array(
+				v.object({
+					storageId: v.id("_storage"),
+					mimeType: v.string(),
+					fileName: v.string(),
+					fileSize: v.number(),
+				}),
+			),
+		),
 	})
 		.index("by_conversation", ["conversationId"])
 		.searchIndex("search_content", {

@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -32,7 +32,7 @@ class HarnessConfig(BaseModel):
 
 class MessagePayload(BaseModel):
     role: str
-    content: str
+    content: Any  # str for text-only, list[dict] for multimodal
 
 
 class ChatRequest(BaseModel):

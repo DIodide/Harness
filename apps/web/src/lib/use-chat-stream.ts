@@ -63,8 +63,10 @@ interface UseChatStreamCallbacks {
 	onAbort?: (conversationId: string) => void;
 }
 
+export type MessageContent = string | Array<Record<string, unknown>>;
+
 export interface ChatStreamRequest {
-	messages: Array<{ role: string; content: string }>;
+	messages: Array<{ role: string; content: MessageContent }>;
 	harness: {
 		model: string;
 		mcp_servers: Array<{
