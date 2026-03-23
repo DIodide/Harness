@@ -4,20 +4,26 @@ import { useConvex } from "convex/react";
 import { useCallback, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
-const ACCEPTED_TYPES = new Set([
-	"image/png",
-	"image/jpeg",
-	"image/gif",
-	"image/webp",
-	"application/pdf",
-]);
-
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
 const MAX_PDF_BYTES = 20 * 1024 * 1024; // 20 MB
+const MAX_AUDIO_BYTES = 25 * 1024 * 1024; // 25 MB
+const MAX_ATTACHMENTS = 5;
+
+function getMaxBytes(mimeType: string): number {
+	if (mimeType === "application/pdf") return MAX_PDF_BYTES;
+	if (mimeType.startsWith("audio/")) return MAX_AUDIO_BYTES;
+	return MAX_IMAGE_BYTES;
+}
+
+function getSizeLabel(mimeType: string): string {
+	if (mimeType === "application/pdf") return "20 MB";
+	if (mimeType.startsWith("audio/")) return "25 MB";
+	return "10 MB";
+}
 
 export interface PendingAttachment {
 	localId: string;
-	previewUrl: string | null; // object URL for images, null for PDFs
+	previewUrl: string | null; // object URL for images, null for PDFs/audio
 	mimeType: string;
 	status: "uploading" | "ready" | "error";
 	storageId?: string;
@@ -25,7 +31,11 @@ export interface PendingAttachment {
 	fileSize: number;
 }
 
-export function useFileAttachments() {
+/**
+ * @param allowedMimes – the set of MIME types the current model accepts.
+ *   Passed in from the caller so validation stays in sync with model capabilities.
+ */
+export function useFileAttachments(allowedMimes: Set<string>) {
 	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
 	const convex = useConvex();
 	const localIdCounter = useRef(0);
@@ -63,16 +73,19 @@ export function useFileAttachments() {
 
 	const addFiles = useCallback(
 		(files: File[]) => {
+			let current = attachments.length;
 			for (const file of files) {
-				if (!ACCEPTED_TYPES.has(file.type)) {
-					toast.error(`${file.name}: only images (PNG, JPG, GIF, WebP) and PDFs are supported`);
+				if (current >= MAX_ATTACHMENTS) {
+					toast.error(`Maximum ${MAX_ATTACHMENTS} attachments per message`);
+					break;
+				}
+				if (!allowedMimes.has(file.type)) {
+					toast.error(`${file.name}: not supported by this model`);
 					continue;
 				}
-				const maxBytes =
-					file.type === "application/pdf" ? MAX_PDF_BYTES : MAX_IMAGE_BYTES;
+				const maxBytes = getMaxBytes(file.type);
 				if (file.size > maxBytes) {
-					const limit = file.type === "application/pdf" ? "20 MB" : "10 MB";
-					toast.error(`${file.name}: exceeds ${limit} limit`);
+					toast.error(`${file.name}: exceeds ${getSizeLabel(file.type)} limit`);
 					continue;
 				}
 
@@ -95,9 +108,10 @@ export function useFileAttachments() {
 
 				// Fire and forget — state updates happen inside uploadOne
 				uploadOne(file, localId);
+				current++;
 			}
 		},
-		[uploadOne],
+		[attachments.length, uploadOne, allowedMimes],
 	);
 
 	const removeAttachment = useCallback((localId: string) => {

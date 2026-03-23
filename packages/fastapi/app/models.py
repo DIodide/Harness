@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -16,19 +16,12 @@ class HarnessConfig(BaseModel):
     name: str
 
 
-class AttachmentPayload(BaseModel):
-    url: str
-    mime_type: str
-    file_name: str
-
-
 class MessagePayload(BaseModel):
     role: str
-    content: str
+    content: Any  # str for text-only, list[dict] for multimodal
 
 
 class ChatRequest(BaseModel):
     messages: list[MessagePayload]
     harness: HarnessConfig
     conversation_id: str
-    attachments: list[AttachmentPayload] | None = None

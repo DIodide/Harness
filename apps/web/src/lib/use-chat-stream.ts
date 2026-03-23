@@ -59,8 +59,10 @@ interface UseChatStreamCallbacks {
 	onAbort?: (conversationId: string) => void;
 }
 
+export type MessageContent = string | Array<Record<string, unknown>>;
+
 export interface ChatStreamRequest {
-	messages: Array<{ role: string; content: string }>;
+	messages: Array<{ role: string; content: MessageContent }>;
 	harness: {
 		model: string;
 		mcp_servers: Array<{
@@ -72,7 +74,6 @@ export interface ChatStreamRequest {
 		name: string;
 	};
 	conversation_id: string;
-	attachments?: Array<{ url: string; mime_type: string; file_name: string }>;
 }
 
 export function useChatStream(callbacks: UseChatStreamCallbacks) {

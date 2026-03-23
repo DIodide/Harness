@@ -57,28 +57,6 @@ async def chat_stream(
 
         messages = [m.model_dump() for m in body.messages]
 
-        # If the last user message has attachments, convert it to multimodal content
-        if body.attachments and messages and messages[-1]["role"] == "user":
-            text_content = messages[-1]["content"]
-            content_parts: list[dict] = []
-            for att in body.attachments:
-                if att.mime_type.startswith("image/"):
-                    content_parts.append({
-                        "type": "image_url",
-                        "image_url": {"url": att.url},
-                    })
-                elif att.mime_type == "application/pdf":
-                    content_parts.append({
-                        "type": "file",
-                        "file": {
-                            "url": att.url,
-                            "mime_type": "application/pdf",
-                        },
-                    })
-            if text_content:
-                content_parts.append({"type": "text", "text": text_content})
-            messages[-1] = {"role": "user", "content": content_parts}
-
         # Accumulate across all iterations so reasoning/tool history isn't lost
         all_reasoning = ""
         all_tool_calls_history: list[dict] = []  # [{tool, arguments, call_id, result}]

@@ -1,4 +1,4 @@
-import { FileText, Loader2, X } from "lucide-react";
+import { FileText, Loader2, Music, X } from "lucide-react";
 import type { PendingAttachment } from "../hooks/use-file-attachments";
 
 export function AttachmentChip({
@@ -10,6 +10,9 @@ export function AttachmentChip({
 }) {
 	const isImage = attachment.mimeType.startsWith("image/");
 	const isPdf = attachment.mimeType === "application/pdf";
+	const isAudio = attachment.mimeType.startsWith("audio/");
+
+	const Icon = isAudio ? Music : FileText;
 
 	return (
 		<div className="group relative flex h-8 shrink-0 items-center overflow-hidden border border-border bg-muted">
@@ -19,9 +22,9 @@ export function AttachmentChip({
 					alt={attachment.fileName}
 					className="h-full w-auto object-cover"
 				/>
-			) : isPdf ? (
+			) : (isPdf || isAudio) ? (
 				<div className="flex items-center gap-1.5 px-2">
-					<FileText size={12} className="shrink-0 text-muted-foreground" />
+					<Icon size={12} className="shrink-0 text-muted-foreground" />
 					<span className="max-w-[120px] truncate text-[11px] text-muted-foreground">
 						{attachment.fileName}
 					</span>
