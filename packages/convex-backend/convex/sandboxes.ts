@@ -1,5 +1,10 @@
 import { v } from "convex/values";
-import { internalMutation, mutation, query } from "./_generated/server";
+import {
+	internalMutation,
+	internalQuery,
+	mutation,
+	query,
+} from "./_generated/server";
 
 export const list = query({
 	handler: async (ctx) => {
@@ -145,7 +150,7 @@ export const remove = mutation({
 export const createInternal = internalMutation({
 	args: {
 		userId: v.string(),
-		harnessId: v.optional(v.string()),
+		harnessId: v.optional(v.id("harnesses")),
 		daytonaSandboxId: v.string(),
 		name: v.string(),
 		status: v.union(
@@ -166,18 +171,16 @@ export const createInternal = internalMutation({
 		}),
 	},
 	handler: async (ctx, args) => {
-		const { harnessId: harnessIdStr, ...rest } = args;
+		const { harnessId, ...rest } = args;
 		const id = await ctx.db.insert("sandboxes", {
 			...rest,
-			harnessId: harnessIdStr
-				? (harnessIdStr as any)
-				: undefined,
+			harnessId,
 			createdAt: Date.now(),
 			lastAccessedAt: Date.now(),
 		});
 		// Link to harness if provided
-		if (harnessIdStr) {
-			const harness = await ctx.db.get(harnessIdStr as any);
+		if (harnessId) {
+			const harness = await ctx.db.get(harnessId);
 			if (harness) {
 				await ctx.db.patch(harness._id, {
 					sandboxId: id,
@@ -193,6 +196,25 @@ export const createInternal = internalMutation({
  * Internal mutation called by the FastAPI backend to update sandbox status.
  * Uses deploy key auth — not callable from the frontend.
  */
+/**
+ * Internal query used by FastAPI to verify sandbox ownership.
+ * Returns the userId of the sandbox owner, or null if not found.
+ */
+export const getOwnerByDaytonaId = internalQuery({
+	args: { daytonaSandboxId: v.string() },
+	handler: async (ctx, args) => {
+		const sandboxes = await ctx.db
+			.query("sandboxes")
+			.withIndex("by_daytona_id", (q) =>
+				q.eq("daytonaSandboxId", args.daytonaSandboxId),
+			)
+			.collect();
+		const sandbox = sandboxes[0];
+		if (!sandbox) return null;
+		return sandbox.userId;
+	},
+});
+
 export const updateStatus = internalMutation({
 	args: {
 		daytonaSandboxId: v.string(),

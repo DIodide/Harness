@@ -6,6 +6,7 @@ sandboxEnabled=true. They are handled internally by the backend (not
 routed through MCP).
 """
 
+import base64
 import json
 import logging
 import traceback
@@ -441,7 +442,6 @@ def execute_sandbox_tool(
             image_exts = {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"}
             if ext in image_exts:
                 # Return image as base64 for inline display
-                import base64
                 sandbox = service._ensure_running(sandbox_id)
                 raw = sandbox.fs.download_file(file_path)
                 if raw is None:
@@ -540,22 +540,26 @@ def execute_sandbox_tool(
         elif action == "git_clone":
             creds = git_credentials or {}
             url = arguments["url"]
-            needs_auth = "github.com" in url and not creds
-            if needs_auth:
-                return json.dumps({
-                    "type": "error",
-                    "error_code": "github_auth_required",
-                    "message": "GitHub authentication required to clone private repositories. "
-                               "Connect your GitHub account in the harness sandbox settings.",
-                })
-            path = service.git_clone(
-                sandbox_id,
-                url,
-                arguments.get("path"),
-                arguments.get("branch"),
-                username=creds.get("username"),
-                password=creds.get("password"),
-            )
+            # Try cloning with credentials if available; fall back to
+            # unauthenticated clone so public repos work without OAuth.
+            try:
+                path = service.git_clone(
+                    sandbox_id,
+                    url,
+                    arguments.get("path"),
+                    arguments.get("branch"),
+                    username=creds.get("username"),
+                    password=creds.get("password"),
+                )
+            except Exception:
+                if "github.com" in url and not creds:
+                    return json.dumps({
+                        "type": "error",
+                        "error_code": "github_auth_required",
+                        "message": "Failed to clone repository. If this is a private repo, "
+                                   "connect your GitHub account in the harness sandbox settings.",
+                    })
+                raise
             return json.dumps({
                 "type": "success",
                 "message": f"Cloned {arguments['url']} to {path}",

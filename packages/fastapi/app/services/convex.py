@@ -115,6 +115,48 @@ async def patch_message_usage(
         )
 
 
+async def verify_sandbox_owner(
+    daytona_sandbox_id: str,
+    user_id: str,
+) -> bool:
+    """Check that the sandbox belongs to the given user via Convex.
+
+    Returns True if the user owns the sandbox, False otherwise.
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        logger.warning("Convex not configured — skipping ownership check")
+        return True  # fail open in dev without Convex
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{settings.convex_url}/api/query",
+                headers={
+                    "Authorization": f"Convex {settings.convex_deploy_key}",
+                },
+                json={
+                    "path": "sandboxes:getOwnerByDaytonaId",
+                    "args": {"daytonaSandboxId": daytona_sandbox_id},
+                    "format": "json",
+                },
+                timeout=5.0,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            owner_id = result.get("value")
+            if owner_id is None:
+                logger.warning(
+                    "Sandbox '%s' not found in Convex", daytona_sandbox_id
+                )
+                return False
+            return owner_id == user_id
+    except Exception:
+        logger.exception(
+            "Failed to verify sandbox ownership for '%s'", daytona_sandbox_id
+        )
+        return False
+
+
 async def create_sandbox_record(
     http_client: httpx.AsyncClient,
     user_id: str,

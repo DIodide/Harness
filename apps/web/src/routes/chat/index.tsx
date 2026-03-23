@@ -9,7 +9,7 @@ import {
 	redirect,
 	useNavigate,
 } from "@tanstack/react-router";
-import { usePaginatedQuery } from "convex/react"; // any downsides to mixing convex/react with tanstack/react-query?
+import { usePaginatedQuery } from "convex/react";
 import {
 	AlertTriangle,
 	ArrowUp,

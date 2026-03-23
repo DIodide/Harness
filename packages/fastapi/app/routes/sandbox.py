@@ -24,6 +24,7 @@ from app.models import (
     GitAddRequest,
     GitCommitRequest,
 )
+from app.services.convex import verify_sandbox_owner
 from app.services.daytona_service import get_daytona_service, DaytonaService
 
 router = APIRouter()
@@ -32,6 +33,15 @@ logger = logging.getLogger(__name__)
 
 def _get_service() -> DaytonaService:
     return get_daytona_service()
+
+
+async def _assert_sandbox_owner(sandbox_id: str, user: dict) -> None:
+    """Raise 403 if the authenticated user does not own the sandbox."""
+    user_id = user.get("sub")
+    if not await verify_sandbox_owner(sandbox_id, user_id):
+        raise HTTPException(
+            status_code=403, detail="You do not have access to this sandbox"
+        )
 
 
 @router.post("")
@@ -68,6 +78,7 @@ async def get_sandbox(
     user: dict = Depends(get_current_user),
 ):
     """Get sandbox details and status."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         sandbox = service.get_sandbox(sandbox_id)
@@ -86,6 +97,7 @@ async def delete_sandbox(
     user: dict = Depends(get_current_user),
 ):
     """Delete a sandbox."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         service.delete_sandbox(sandbox_id)
@@ -101,6 +113,7 @@ async def start_sandbox(
     user: dict = Depends(get_current_user),
 ):
     """Start a stopped sandbox."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         service.start_sandbox(sandbox_id)
@@ -116,6 +129,7 @@ async def stop_sandbox(
     user: dict = Depends(get_current_user),
 ):
     """Stop a running sandbox."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         service.stop_sandbox(sandbox_id)
@@ -132,6 +146,7 @@ async def execute_code(
     user: dict = Depends(get_current_user),
 ):
     """Execute code in a sandbox."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         result = service.execute_code(
@@ -155,6 +170,7 @@ async def run_command(
     user: dict = Depends(get_current_user),
 ):
     """Run a shell command in a sandbox."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         result = service.run_command(
@@ -177,6 +193,7 @@ async def list_files(
     user: dict = Depends(get_current_user),
 ):
     """List files in a sandbox directory."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         files = service.list_files(sandbox_id, path)
@@ -199,6 +216,7 @@ async def read_file(
     user: dict = Depends(get_current_user),
 ):
     """Read a file from a sandbox."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         content = service.read_file(sandbox_id, path)
@@ -215,6 +233,7 @@ async def write_file(
     user: dict = Depends(get_current_user),
 ):
     """Write a file in a sandbox."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         service.write_file(sandbox_id, body.path, body.content)
@@ -231,6 +250,7 @@ async def download_file(
     user: dict = Depends(get_current_user),
 ):
     """Download a raw file from a sandbox (images, binaries, etc.)."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         sandbox = service._ensure_running(sandbox_id)
@@ -258,6 +278,7 @@ async def delete_file(
     user: dict = Depends(get_current_user),
 ):
     """Delete a file or directory in a sandbox."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         service.delete_file(sandbox_id, path, recursive=recursive)
@@ -274,6 +295,7 @@ async def move_file(
     user: dict = Depends(get_current_user),
 ):
     """Move/rename a file or directory in a sandbox."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         service.move_file(sandbox_id, body.source, body.destination)
@@ -290,6 +312,7 @@ async def create_directory(
     user: dict = Depends(get_current_user),
 ):
     """Create a directory in a sandbox."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         service.create_directory(sandbox_id, body.path)
@@ -307,6 +330,7 @@ async def search_files(
     user: dict = Depends(get_current_user),
 ):
     """Search file contents in a sandbox (grep-like)."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         matches = service.search_file_contents(sandbox_id, path, pattern)
@@ -316,7 +340,6 @@ async def search_files(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
 @router.get("/{sandbox_id}/git/status")
 async def git_status(
     sandbox_id: str,
@@ -324,6 +347,7 @@ async def git_status(
     user: dict = Depends(get_current_user),
 ):
     """Get git status for a repo in a sandbox."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     # First check if this is a git repo via a simple command
     try:
@@ -360,6 +384,7 @@ async def git_add(
     user: dict = Depends(get_current_user),
 ):
     """Stage files for commit."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         service.git_add(sandbox_id, body.path, body.files)
@@ -376,6 +401,7 @@ async def git_commit(
     user: dict = Depends(get_current_user),
 ):
     """Commit staged changes."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         sha = service.git_commit(sandbox_id, body.path, body.message)
@@ -393,6 +419,7 @@ async def git_diff(
     user: dict = Depends(get_current_user),
 ):
     """Get git diff."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         diff = service.git_diff(sandbox_id, path, staged=staged)
@@ -410,6 +437,7 @@ async def git_log(
     user: dict = Depends(get_current_user),
 ):
     """Get git log."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         commits = service.git_log(sandbox_id, path, count=count)
@@ -426,6 +454,7 @@ async def git_branches(
     user: dict = Depends(get_current_user),
 ):
     """List git branches."""
+    await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
         result = service.git_branches(sandbox_id, path)

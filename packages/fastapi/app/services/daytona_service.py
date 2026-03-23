@@ -28,6 +28,13 @@ RESOURCE_TIERS = {
     "performance": {"cpu": 4, "memory": 8, "disk": 10},
 }
 
+# Map resource tiers to Daytona snapshot names
+TIER_SNAPSHOTS = {
+    "basic": "daytona-small",
+    "standard": "daytona-medium",
+    "performance": "daytona-large",
+}
+
 
 @dataclass
 class CodeExecutionResult:
@@ -65,8 +72,12 @@ class GitStatus:
 class DaytonaService:
     """Manages Daytona sandbox lifecycle and operations."""
 
+    _RUNNING_CACHE_TTL = 30  # seconds
+
     def __init__(self):
         self._client: Daytona | None = None
+        # Cache of sandbox_id -> (sandbox, timestamp) for _ensure_running
+        self._running_cache: dict[str, tuple[Any, float]] = {}
 
     def _get_client(self) -> Daytona:
         if self._client is None:
@@ -93,13 +104,17 @@ class DaytonaService:
         """Create a new Daytona sandbox."""
         client = self._get_client()
 
+        snapshot = TIER_SNAPSHOTS.get(resource_tier, TIER_SNAPSHOTS["basic"])
+
         sandbox_labels = {
             "harness_user_id": user_id,
+            "harness_resource_tier": resource_tier,
             **({"harness_id": harness_id} if harness_id else {}),
             **(labels or {}),
         }
 
         params = CreateSandboxFromSnapshotParams(
+            snapshot=snapshot,
             language=language,
             auto_stop_interval=15,
             labels=sandbox_labels,
@@ -108,8 +123,8 @@ class DaytonaService:
 
         logger.info(
             "Creating Daytona sandbox for user '%s' "
-            "(tier=%s, language=%s, ephemeral=%s)",
-            user_id, resource_tier, language, ephemeral,
+            "(tier=%s, snapshot=%s, language=%s, ephemeral=%s)",
+            user_id, resource_tier, snapshot, language, ephemeral,
         )
 
         sandbox = client.create(params)
@@ -125,7 +140,17 @@ class DaytonaService:
         return client.get(sandbox_id)
 
     def _ensure_running(self, sandbox_id: str) -> Any:
-        """Get a sandbox, auto-starting it if stopped/archived."""
+        """Get a sandbox, auto-starting it if stopped/archived.
+
+        Uses a short-lived TTL cache to avoid a Daytona API round-trip on
+        every filesystem/git/command operation.
+        """
+        cached = self._running_cache.get(sandbox_id)
+        if cached is not None:
+            sandbox, ts = cached
+            if time.time() - ts < self._RUNNING_CACHE_TTL:
+                return sandbox
+
         client = self._get_client()
         sandbox = client.get(sandbox_id)
         raw = getattr(sandbox, "status", None)
@@ -146,13 +171,19 @@ class DaytonaService:
             logger.info(
                 "Auto-started sandbox '%s', now %s", sandbox_id, new_status,
             )
+
+        self._running_cache[sandbox_id] = (sandbox, time.time())
         return sandbox
+
+    def _invalidate_running_cache(self, sandbox_id: str) -> None:
+        self._running_cache.pop(sandbox_id, None)
 
     def start_sandbox(self, sandbox_id: str) -> None:
         """Start a stopped sandbox."""
         client = self._get_client()
         sandbox = client.get(sandbox_id)
         client.start(sandbox)
+        self._invalidate_running_cache(sandbox_id)
         logger.info("Started sandbox '%s'", sandbox_id)
 
     def stop_sandbox(self, sandbox_id: str) -> None:
@@ -160,6 +191,7 @@ class DaytonaService:
         client = self._get_client()
         sandbox = client.get(sandbox_id)
         client.stop(sandbox)
+        self._invalidate_running_cache(sandbox_id)
         logger.info("Stopped sandbox '%s'", sandbox_id)
 
     def delete_sandbox(self, sandbox_id: str) -> None:
@@ -167,6 +199,7 @@ class DaytonaService:
         client = self._get_client()
         sandbox = client.get(sandbox_id)
         client.delete(sandbox)
+        self._invalidate_running_cache(sandbox_id)
         logger.info("Deleted sandbox '%s'", sandbox_id)
 
     # ── Code Execution ─────────────────────────────────────

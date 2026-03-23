@@ -14,6 +14,7 @@ import jwt
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.auth import _get_jwks
+from app.services.convex import verify_sandbox_owner
 from app.services.daytona_service import get_daytona_service
 
 router = APIRouter()
@@ -80,6 +81,12 @@ async def terminal_websocket(
     user = await _verify_ws_token(websocket, token)
     if not user:
         await websocket.close(code=4001, reason="Unauthorized")
+        return
+
+    # Verify ownership
+    user_id = user.get("sub")
+    if not await verify_sandbox_owner(sandbox_id, user_id):
+        await websocket.close(code=4003, reason="Forbidden")
         return
 
     await websocket.accept()
