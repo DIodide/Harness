@@ -21,8 +21,10 @@ import {
 	Loader2,
 	LogOut,
 	MessageSquare,
+	Mic,
 	PanelLeftClose,
 	PanelLeftOpen,
+	Paperclip,
 	Plus,
 	Search, // Icon for search
 	Settings,
@@ -94,6 +96,9 @@ import {
 	TooltipTrigger,
 } from "../../components/ui/tooltip";
 import { env } from "../../env";
+import { acceptString, allowedMimeTypes, modelSupportsAudio, modelSupportsMedia } from "../../lib/models";
+import { buildMultimodalContent } from "../../lib/multimodal";
+import { useFileAttachments } from "../../hooks/use-file-attachments";
 import {
 	type ConvoStreamState,
 	type StreamPart,
@@ -102,6 +107,8 @@ import {
 	useChatStream,
 } from "../../lib/use-chat-stream";
 import { cn } from "../../lib/utils";
+import { AttachmentChip } from "../../components/attachment-chip";
+import { MessageAttachments } from "../../components/message-attachments";
 
 export const Route = createFileRoute("/chat/")({
 	validateSearch: (search: Record<string, unknown>) => ({
@@ -1754,6 +1761,12 @@ function ChatMessages({
 		};
 		model?: string;
 		interrupted?: boolean;
+		attachments?: Array<{
+			storageId: Id<"_storage">;
+			mimeType: string;
+			fileName: string;
+			fileSize: number;
+		}>;
 	}>;
 	streamingContent: string | null;
 	streamingReasoning: string | null;
@@ -2012,7 +2025,13 @@ function ChatMessages({
 										</AvatarFallback>
 									</Avatar>
 								)}
-								<div className="max-w-[80%]">
+								<div className={cn(
+									"max-w-[80%]",
+									msg.role === "user" && "flex flex-col items-end",
+								)}>
+									{msg.role === "user" && msg.attachments && msg.attachments.length > 0 && (
+										<MessageAttachments attachments={msg.attachments} />
+									)}
 									<div
 										className={cn(
 											"text-sm leading-relaxed",
@@ -2571,7 +2590,7 @@ function ChatInput({
 	onConvoCreated: (id: Id<"conversations">) => void;
 	isStreaming: boolean;
 	onStream: (body: {
-		messages: Array<{ role: string; content: string }>;
+		messages: Array<{ role: string; content: string | Array<Record<string, unknown>> }>;
 		harness: {
 			model: string;
 			mcp_servers: Array<{
@@ -2586,7 +2605,16 @@ function ChatInput({
 	}) => Promise<void>;
 	onInterrupt: (convoId: string) => void;
 	onEnqueue: (content: string) => void;
-	messages?: Array<{ role: string; content: string }>;
+	messages?: Array<{
+		role: string;
+		content: string;
+		attachments?: Array<{
+			storageId: Id<"_storage">;
+			mimeType: string;
+			fileName: string;
+			fileSize: number;
+		}>;
+	}>;
 	messageQueue: { id: number; content: string }[];
 	onDequeue: (index: number) => void;
 	onSendNow: (index: number) => void;
@@ -2595,6 +2623,55 @@ function ChatInput({
 }) {
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const fileInputRef = useRef<HTMLInputElement>(null);
+	const [isDragOver, setIsDragOver] = useState(false);
+
+	const supportsMedia = modelSupportsMedia(activeHarness?.model);
+	const supportsAudio = modelSupportsAudio(activeHarness?.model);
+	const supportsAnyAttachment = supportsMedia || supportsAudio;
+	const modelAccept = acceptString(activeHarness?.model);
+	const modelAllowedMimes = useMemo(() => allowedMimeTypes(activeHarness?.model), [activeHarness?.model]);
+
+	const { attachments, addFiles, removeAttachment, clearAttachments, hasUploading, resolveSignedUrls } =
+		useFileAttachments(modelAllowedMimes);
+
+	// Clear attachments if the active model switches to one that doesn't support media
+	useEffect(() => {
+		if (!supportsAnyAttachment) clearAttachments();
+	}, [supportsAnyAttachment, clearAttachments]);
+
+	// ── Voice recording ──────────────────────────────────────────────
+	const [isRecording, setIsRecording] = useState(false);
+	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+	const chunksRef = useRef<Blob[]>([]);
+
+	const startRecording = useCallback(async () => {
+		try {
+			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+			chunksRef.current = [];
+			recorder.ondataavailable = (e) => {
+				if (e.data.size > 0) chunksRef.current.push(e.data);
+			};
+			recorder.onstop = () => {
+				const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+				const file = new File([blob], `recording-${Date.now()}.webm`, { type: "audio/webm" });
+				addFiles([file]);
+				stream.getTracks().forEach((t) => t.stop());
+			};
+			mediaRecorderRef.current = recorder;
+			recorder.start();
+			setIsRecording(true);
+		} catch {
+			toast.error("Microphone access denied");
+		}
+	}, [addFiles]);
+
+	const stopRecording = useCallback(() => {
+		mediaRecorderRef.current?.stop();
+		mediaRecorderRef.current = null;
+		setIsRecording(false);
+	}, []);
 
 	// Fill input from suggested prompt click
 	useEffect(() => {
@@ -2648,6 +2725,7 @@ function ChatInput({
 		setText("");
 		setHistoryIndex(-1);
 		setDraft("");
+		clearAttachments();
 
 		// If streaming, just enqueue — don't interrupt
 		if (isStreaming && conversationId) {
@@ -2677,21 +2755,41 @@ function ChatInput({
 			onConvoCreated(newId);
 		}
 
+		// Snapshot ready attachments from the current render's state (clearAttachments above is async)
+		const readyAttachments = attachments
+			.filter((a) => a.status === "ready" && a.storageId)
+			.map((a) => ({
+				storageId: a.storageId as Id<"_storage">,
+				mimeType: a.mimeType,
+				fileName: a.fileName,
+				fileSize: a.fileSize,
+			}));
+
 		// Save user message to Convex
 		await sendMessage.mutateAsync({
 			conversationId: convoId,
 			role: "user",
 			content,
 			harnessId: activeHarness._id,
+			...(readyAttachments.length > 0 ? { attachments: readyAttachments } : {}),
 		});
 
-		// Build message history for the LLM
-		const history: Array<{ role: string; content: string }> =
-			existingMessages?.map((m) => ({
-				role: m.role,
-				content: m.content,
-			})) ?? [];
-		history.push({ role: "user", content });
+		// Build message history for the LLM (with multimodal content where applicable)
+		const history: Array<{ role: string; content: string | Array<Record<string, unknown>> }> = [];
+		for (const m of existingMessages ?? []) {
+			if (m.role === "user" && m.attachments && m.attachments.length > 0) {
+				history.push({ role: m.role, content: await buildMultimodalContent(m.content, m.attachments, resolveSignedUrls) });
+			} else {
+				history.push({ role: m.role, content: m.content });
+			}
+		}
+
+		// Add the new user message (with any current attachments)
+		if (readyAttachments.length > 0) {
+			history.push({ role: "user", content: await buildMultimodalContent(content, readyAttachments, resolveSignedUrls) });
+		} else {
+			history.push({ role: "user", content });
+		}
 
 		// Start streaming from FastAPI
 		onStream({
@@ -2742,11 +2840,75 @@ function ChatInput({
 		}
 	};
 
+	const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+		if (!supportsAnyAttachment) return;
+		const files = Array.from(e.clipboardData.files).filter(
+			(f) => f.type.startsWith("image/") || f.type === "application/pdf" || f.type.startsWith("audio/"),
+		);
+		if (files.length > 0) {
+			e.preventDefault();
+			addFiles(files);
+		}
+	};
+
+	const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+		e.preventDefault();
+		if (supportsAnyAttachment && e.dataTransfer.types.includes("Files")) {
+			setIsDragOver(true);
+		}
+	};
+
+	const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+		// Only clear if leaving the container entirely (not moving to a child)
+		if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+			setIsDragOver(false);
+		}
+	};
+
+	const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+		e.preventDefault();
+		setIsDragOver(false);
+		if (!supportsAnyAttachment) return;
+		const files = Array.from(e.dataTransfer.files);
+		if (files.length > 0) addFiles(files);
+	};
+
 	const showStopButton = isStreaming && !text.trim();
 
 	return (
-		<div className="border-t border-border px-4 py-3">
-			<div className="mx-auto max-w-3xl">
+		<div
+			className={cn(
+				"relative border-t border-border px-4 py-2 transition-colors",
+				isDragOver && "bg-primary/5",
+			)}
+			onDragOver={handleDragOver}
+			onDragLeave={handleDragLeave}
+			onDrop={handleDrop}
+		>
+			{/* Drop overlay */}
+			{isDragOver && (
+				<div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-primary/50 bg-primary/5">
+					<div className="flex items-center gap-2 text-sm font-medium text-primary">
+						<Paperclip size={16} />
+						Drop files to attach
+					</div>
+				</div>
+			)}
+
+			{/* Hidden file input */}
+			<input
+				ref={fileInputRef}
+				type="file"
+				accept={modelAccept}
+				multiple
+				className="hidden"
+				onChange={(e) => {
+					if (e.target.files) addFiles(Array.from(e.target.files));
+					e.target.value = "";
+				}}
+			/>
+
+			<div className="mx-auto max-w-xl">
 				{/* Queued messages as chips above the input */}
 				<AnimatePresence>
 					{messageQueue.length > 0 && (
@@ -2799,7 +2961,63 @@ function ChatInput({
 					)}
 				</AnimatePresence>
 
-				<div className="flex items-end gap-2 border border-border bg-background px-3 py-2 focus-within:border-foreground/30">
+				{/* Attachment preview strip */}
+				<AnimatePresence>
+					{attachments.length > 0 && (
+						<motion.div
+							initial={{ opacity: 0, height: 0 }}
+							animate={{ opacity: 1, height: "auto" }}
+							exit={{ opacity: 0, height: 0 }}
+							className="mb-2 flex flex-wrap gap-2 overflow-hidden"
+						>
+							{attachments.map((attachment) => (
+								<AttachmentChip
+									key={attachment.localId}
+									attachment={attachment}
+									onRemove={() => removeAttachment(attachment.localId)}
+								/>
+							))}
+						</motion.div>
+					)}
+				</AnimatePresence>
+
+				<div className="flex items-center gap-2 border border-border bg-background px-3 py-2 focus-within:border-foreground/30">
+					{/* Attach button — hidden for models that don't support media */}
+					{supportsAnyAttachment && (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<button
+									type="button"
+									onClick={() => fileInputRef.current?.click()}
+									className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+								>
+									<Paperclip size={15} />
+								</button>
+							</TooltipTrigger>
+							<TooltipContent>Attach files</TooltipContent>
+						</Tooltip>
+					)}
+
+					{supportsAudio && (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<button
+									type="button"
+									onClick={isRecording ? stopRecording : startRecording}
+									className={cn(
+										"shrink-0 transition-colors",
+										isRecording
+											? "animate-pulse text-destructive"
+											: "text-muted-foreground hover:text-foreground",
+									)}
+								>
+									{isRecording ? <Square size={15} /> : <Mic size={15} />}
+								</button>
+							</TooltipTrigger>
+							<TooltipContent>{isRecording ? "Stop recording" : "Record audio"}</TooltipContent>
+						</Tooltip>
+					)}
+
 					<textarea
 						ref={textareaRef}
 						value={text}
@@ -2811,6 +3029,7 @@ function ChatInput({
 							}
 						}}
 						onKeyDown={handleKeyDown}
+						onPaste={handlePaste}
 						placeholder="Send a message..."
 						rows={1}
 						className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
@@ -2829,6 +3048,7 @@ function ChatInput({
 								disabled={
 									!showStopButton &&
 									(!text.trim() ||
+										hasUploading ||
 										sendMessage.isPending ||
 										createConvo.isPending)
 								}
