@@ -1,0 +1,95 @@
+---
+description: Use TanStack Router beforeLoad guards for authentication instead of navigating during render. Applies when creating or modifying protected routes in this project.
+globs: apps/web/src/routes/**/*.tsx
+alwaysApply: false
+---
+
+# TanStack Router + Clerk Auth Guards
+
+## Rule
+
+NEVER call `navigate()` during the render phase for authentication redirects. This is a React anti-pattern that causes unpredictable behavior, especially with SSR (TanStack Start).
+
+Instead, use TanStack Router's `beforeLoad` option to check authentication and `throw redirect()` before the component ever mounts.
+
+## How it works in this project
+
+The root route (`__root.tsx`) already fetches Clerk auth state server-side and injects `userId` into the route context:
+
+```tsx
+// __root.tsx — beforeLoad returns { userId, token } into context
+beforeLoad: async (ctx) => {
+  const { userId, token } = await fetchClerkAuth();
+  if (token) {
+    ctx.context.convexQueryClient.serverHttpClient?.setAuth(token);
+  }
+  return { userId, token };
+},
+```
+
+Child routes access `context.userId` in their own `beforeLoad`.
+
+## Pattern: Protected Route
+
+```tsx
+import { createFileRoute, redirect } from "@tanstack/react-router";
+
+export const Route = createFileRoute("/my-protected-route")({
+  beforeLoad: ({ context }) => {
+    if (!context.userId) {
+      throw redirect({ to: "/sign-in" });
+    }
+  },
+  component: MyProtectedPage,
+});
+
+function MyProtectedPage() {
+  // No need for useUser() auth checks here — the user is guaranteed
+  // to be authenticated by the time this component renders.
+}
+```
+
+## Anti-pattern (DO NOT use)
+
+```tsx
+// BAD — navigating during render
+function MyPage() {
+  const { user } = useUser();
+  const navigate = useNavigate();
+
+  if (!user) {
+    navigate({ to: "/sign-in" }); // Side effect during render!
+    return null;
+  }
+}
+```
+
+## Data-dependent redirects
+
+For redirects that depend on client-side data (e.g., Convex queries), use `useEffect` — not a bare call during render:
+
+```tsx
+function ChatPage() {
+  const navigate = useNavigate();
+  const { data: harnesses, isLoading } = useQuery(convexQuery(api.harnesses.list, {}));
+
+  useEffect(() => {
+    if (harnesses && harnesses.length === 0) {
+      navigate({ to: "/onboarding" });
+    }
+  }, [harnesses, navigate]);
+
+  if (isLoading || !harnesses || harnesses.length === 0) {
+    return <LoadingSkeleton />;
+  }
+
+  // ... rest of component
+}
+```
+
+## Key points
+
+- `beforeLoad` runs top-down through the route tree, before any child `beforeLoad` or component.
+- `throw redirect()` accepts the same options as `navigate()` (e.g., `replace: true`, `search: {}`).
+- If `beforeLoad` throws, child routes will not load at all.
+- Do NOT import `useUser` from Clerk just for auth checks in route components — use `context.userId` in `beforeLoad` instead.
