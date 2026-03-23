@@ -23,6 +23,16 @@ export const send = mutation({
 		role: v.union(v.literal("user"), v.literal("assistant")),
 		content: v.string(),
 		harnessId: v.optional(v.id("harnesses")),
+		attachments: v.optional(
+			v.array(
+				v.object({
+					storageId: v.id("_storage"),
+					mimeType: v.string(),
+					fileName: v.string(),
+					fileSize: v.number(),
+				}),
+			),
+		),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -36,6 +46,9 @@ export const send = mutation({
 			userId: identity.subject,
 			role: args.role,
 			content: args.content,
+			...(args.attachments && args.attachments.length > 0
+				? { attachments: args.attachments }
+				: {}),
 		});
 
 		const patch: { lastMessageAt: number; lastHarnessId?: typeof args.harnessId } = {
