@@ -3,11 +3,7 @@ import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useQuery } from "@tanstack/react-query";
 import { FileText, Music } from "lucide-react";
-import {
-	Dialog,
-	DialogContent,
-	DialogTrigger,
-} from "./ui/dialog";
+import { Dialog, DialogContent, DialogTrigger } from "./ui/dialog";
 
 interface Attachment {
 	storageId: Id<"_storage">;
@@ -23,7 +19,8 @@ function AttachmentItem({ attachment }: { attachment: Attachment }) {
 
 	if (!url) return null;
 
-	const square = "h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-border";
+	const square =
+		"h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-border";
 
 	if (attachment.mimeType.startsWith("image/")) {
 		return (
@@ -76,7 +73,7 @@ function AttachmentItem({ attachment }: { attachment: Attachment }) {
 						{attachment.fileName}
 					</span>
 				</div>
-				{/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+				{/* biome-ignore lint/a11y/useMediaCaption: audio recordings have no caption track */}
 				<audio controls src={url} className="h-8 w-full" preload="metadata" />
 			</div>
 		);

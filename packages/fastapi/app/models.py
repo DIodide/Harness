@@ -10,9 +10,15 @@ class McpServer(BaseModel):
     auth_token: str | None = None
 
 
+class SkillRef(BaseModel):
+    name: str
+    description: str = ""
+
+
 class HarnessConfig(BaseModel):
     model: str
     mcp_servers: list[McpServer] = []
+    skills: list[SkillRef] = []
     name: str
 
 

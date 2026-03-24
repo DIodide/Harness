@@ -71,6 +71,7 @@ export interface ChatStreamRequest {
 			auth_type: "none" | "bearer" | "oauth";
 			auth_token?: string;
 		}>;
+		skills: Array<{ name: string; description: string }>;
 		name: string;
 	};
 	conversation_id: string;
