@@ -17,12 +17,15 @@ class Settings(BaseSettings):
     # Create one at https://github.com/settings/applications/new
     github_oauth_client_id: str = ""
     github_oauth_client_secret: str = ""
- 
+    # Daytona sandbox configuration
+    daytona_api_key: str = ""
+    daytona_api_url: str = "https://app.daytona.io/api"
+    daytona_target: str = "us"
+
     # Pre-registered Slack OAuth App credentials (for Slack MCP server).
     # Create one at https://api.slack.com/apps
     slack_oauth_client_id: str = ""
     slack_oauth_client_secret: str = ""
- 
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

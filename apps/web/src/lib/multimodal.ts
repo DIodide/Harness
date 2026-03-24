@@ -39,7 +39,10 @@ export async function buildMultimodalContent(
 		if (a.mime_type.startsWith("image/")) {
 			parts.push({ type: "image_url", image_url: { url: a.url } });
 		} else if (a.mime_type === "application/pdf") {
-			parts.push({ type: "file", file: { filename: a.file_name, file_data: a.url } });
+			parts.push({
+				type: "file",
+				file: { filename: a.file_name, file_data: a.url },
+			});
 		} else if (a.mime_type.startsWith("audio/")) {
 			try {
 				const res = await fetch(a.url);

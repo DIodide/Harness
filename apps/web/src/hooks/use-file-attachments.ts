@@ -140,13 +140,17 @@ export function useFileAttachments(allowedMimes: Set<string>) {
 				mimeType: string;
 				fileName: string;
 			}>,
-		): Promise<Array<{ url: string; mime_type: string; file_name: string }>> => {
+		): Promise<
+			Array<{ url: string; mime_type: string; file_name: string }>
+		> => {
 			const results = await Promise.all(
 				readyAttachments.map(async (a) => {
 					const url = await convex.query(api.files.getFileUrl, {
 						storageId: a.storageId as Id<"_storage">,
 					});
-					return url ? { url, mime_type: a.mimeType, file_name: a.fileName } : null;
+					return url
+						? { url, mime_type: a.mimeType, file_name: a.fileName }
+						: null;
 				}),
 			);
 			return results.filter((r): r is NonNullable<typeof r> => r !== null);

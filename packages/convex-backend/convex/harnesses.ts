@@ -41,6 +41,22 @@ export const create = mutation({
 			}),
 		),
 		skills: v.array(v.string()),
+		sandboxEnabled: v.optional(v.boolean()),
+		sandboxConfig: v.optional(
+			v.object({
+				persistent: v.boolean(),
+				autoStart: v.boolean(),
+				defaultLanguage: v.string(),
+				resourceTier: v.union(
+					v.literal("basic"),
+					v.literal("standard"),
+					v.literal("performance"),
+				),
+				snapshotId: v.optional(v.string()),
+				gitRepo: v.optional(v.string()),
+				networkRestricted: v.optional(v.boolean()),
+			}),
+		),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -77,6 +93,24 @@ export const update = mutation({
 		),
 		skills: v.optional(v.array(v.string())),
 		suggestedPrompts: v.optional(v.array(v.string())),
+		sandboxEnabled: v.optional(v.boolean()),
+		sandboxId: v.optional(v.id("sandboxes")),
+		daytonaSandboxId: v.optional(v.string()),
+		sandboxConfig: v.optional(
+			v.object({
+				persistent: v.boolean(),
+				autoStart: v.boolean(),
+				defaultLanguage: v.string(),
+				resourceTier: v.union(
+					v.literal("basic"),
+					v.literal("standard"),
+					v.literal("performance"),
+				),
+				snapshotId: v.optional(v.string()),
+				gitRepo: v.optional(v.string()),
+				networkRestricted: v.optional(v.boolean()),
+			}),
+		),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
