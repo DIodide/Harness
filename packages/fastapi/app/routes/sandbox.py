@@ -253,13 +253,12 @@ async def download_file(
     await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
     try:
-        sandbox = service._ensure_running(sandbox_id)
-        data = sandbox.fs.download_file(path)
+        data = service.download_file_bytes(sandbox_id, path)
         if data is None:
             raise HTTPException(status_code=404, detail="File not found")
         content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
         return Response(
-            content=data if isinstance(data, bytes) else data.encode(),
+            content=data,
             media_type=content_type,
             headers={"Cache-Control": "public, max-age=300"},
         )

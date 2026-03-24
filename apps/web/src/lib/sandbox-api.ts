@@ -164,8 +164,19 @@ export function createSandboxApi(getToken: () => Promise<string | null>) {
 			);
 		},
 
-		downloadUrl(sandboxId: string, path: string) {
-			return `${API_URL}/api/sandbox/${sandboxId}/files/download?path=${encodeURIComponent(path)}`;
+		async downloadUrl(sandboxId: string, path: string): Promise<string> {
+			const token = await getToken();
+			const res = await fetch(
+				`${API_URL}/api/sandbox/${sandboxId}/files/download?path=${encodeURIComponent(path)}`,
+				{
+					headers: token ? { Authorization: `Bearer ${token}` } : {},
+				},
+			);
+			if (!res.ok) {
+				throw new Error(`Download failed: ${res.status}`);
+			}
+			const blob = await res.blob();
+			return URL.createObjectURL(blob);
 		},
 
 		// ── Git ──────────────────────────────────────────────

@@ -94,7 +94,7 @@ async def chat_stream(
                     language = sandbox_config.default_language if sandbox_config else "python"
                     ephemeral = not (sandbox_config and sandbox_config.persistent)
 
-                    sandbox = await asyncio.get_event_loop().run_in_executor(
+                    sandbox = await asyncio.get_running_loop().run_in_executor(
                         None,
                         lambda: daytona_service.create_sandbox(
                             user_id=user_id,
@@ -181,7 +181,7 @@ async def chat_stream(
                 # so raw `git push` via run_command also works
                 try:
                     _tok = gh_token
-                    await asyncio.get_event_loop().run_in_executor(
+                    await asyncio.get_running_loop().run_in_executor(
                         None,
                         lambda: daytona_service.setup_git_credentials(
                             sandbox_id, "x-access-token", _tok,
@@ -469,7 +469,7 @@ async def chat_stream(
                         json.dumps(tool_info["args"])[:200],
                     )
                     _creds = git_credentials
-                    result = await asyncio.get_event_loop().run_in_executor(
+                    result = await asyncio.get_running_loop().run_in_executor(
                         None,
                         lambda: execute_sandbox_tool(
                             daytona_service,

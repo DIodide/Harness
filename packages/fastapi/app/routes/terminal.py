@@ -93,7 +93,7 @@ async def terminal_websocket(
 
     service = get_daytona_service()
     session_id = f"term-{uuid.uuid4().hex[:8]}"
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     pty_handle = None
     stop_event = asyncio.Event()
 

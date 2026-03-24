@@ -609,18 +609,22 @@ def execute_sandbox_tool(
             return json.dumps({"type": "success", "message": "Pushed to remote"})
 
         elif action == "git_pull":
-            if not git_credentials:
-                return json.dumps({
-                    "type": "error",
-                    "error_code": "github_auth_required",
-                    "message": "GitHub authentication required to pull from private repos. "
-                               "Connect your GitHub account in the harness sandbox settings.",
-                })
-            service.git_pull(
-                sandbox_id, arguments["path"],
-                username=git_credentials["username"],
-                password=git_credentials["password"],
-            )
+            creds = git_credentials or {}
+            try:
+                service.git_pull(
+                    sandbox_id, arguments["path"],
+                    username=creds.get("username"),
+                    password=creds.get("password"),
+                )
+            except Exception:
+                if not creds:
+                    return json.dumps({
+                        "type": "error",
+                        "error_code": "github_auth_required",
+                        "message": "Failed to pull. If this is a private repo, "
+                                   "connect your GitHub account in the harness sandbox settings.",
+                    })
+                raise
             return json.dumps({"type": "success", "message": "Pulled from remote"})
 
         elif action == "git_branches":
@@ -658,9 +662,8 @@ def execute_sandbox_tool(
             return json.dumps({"type": "error", "message": f"Unknown sandbox tool: {tool_name}"})
 
     except Exception as e:
-        logger.error("Sandbox tool '%s' failed: %s", tool_name, e)
+        logger.error("Sandbox tool '%s' failed: %s\n%s", tool_name, e, traceback.format_exc())
         return json.dumps({
             "type": "error",
             "message": str(e),
-            "traceback": traceback.format_exc(),
         })

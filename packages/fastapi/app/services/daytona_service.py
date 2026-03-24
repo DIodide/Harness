@@ -295,6 +295,14 @@ class DaytonaService:
             return content.decode("utf-8", errors="replace")
         return str(content) if content else ""
 
+    def download_file_bytes(self, sandbox_id: str, path: str) -> bytes | None:
+        """Download raw file bytes from a sandbox."""
+        sandbox = self._ensure_running(sandbox_id)
+        data = sandbox.fs.download_file(path)
+        if data is None:
+            return None
+        return data if isinstance(data, bytes) else data.encode()
+
     def write_file(
         self, sandbox_id: str, path: str, content: str,
     ) -> None:

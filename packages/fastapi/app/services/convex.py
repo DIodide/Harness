@@ -124,8 +124,15 @@ async def verify_sandbox_owner(
     Returns True if the user owns the sandbox, False otherwise.
     """
     if not settings.convex_url or not settings.convex_deploy_key:
-        logger.warning("Convex not configured — skipping ownership check")
-        return True  # fail open in dev without Convex
+        if settings.convex_url or settings.convex_deploy_key:
+            # Partially configured — likely a misconfiguration, deny access
+            logger.error(
+                "Convex partially configured (url=%s, key=%s) — denying ownership check",
+                bool(settings.convex_url), bool(settings.convex_deploy_key),
+            )
+            return False
+        logger.warning("Convex not configured — skipping ownership check (dev only)")
+        return True
 
     try:
         async with httpx.AsyncClient() as client:
