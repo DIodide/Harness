@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, internalMutation, internalQuery, query } from "./_generated/server";
+import { action, internalMutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 const HF_DATASET = "tickleliu/all-skills-from-skills-sh";
@@ -30,7 +30,7 @@ export const getByNames = query({
 	},
 });
 
-export const insertSkillDetail = internalMutation({
+export const upsertSkillDetail = internalMutation({
 	args: {
 		name: v.string(),
 		skillName: v.string(),
@@ -43,26 +43,24 @@ export const insertSkillDetail = internalMutation({
 			.query("skillDetails")
 			.withIndex("by_name", (q) => q.eq("name", args.name))
 			.first();
-		if (existing) return existing._id;
+		if (existing) {
+			await ctx.db.patch(existing._id, {
+				skillName: args.skillName,
+				description: args.description,
+				detail: args.detail,
+				code: args.code,
+			});
+			return existing._id;
+		}
 		return await ctx.db.insert("skillDetails", args);
-	},
-});
-
-export const checkExists = internalQuery({
-	args: { name: v.string() },
-	handler: async (ctx, args) => {
-		const row = await ctx.db
-			.query("skillDetails")
-			.withIndex("by_name", (q) => q.eq("name", args.name))
-			.first();
-		return row !== null;
 	},
 });
 
 /**
  * Background action called after saving a harness.
- * Fetches and stores skill details from HuggingFace for any skills
- * that don't already have a detail record in the database.
+ * Fetches skill details from HuggingFace and upserts them into the database.
+ * Skips skills whose detail can't be resolved (no insert with empty detail,
+ * and existing records are left unchanged when HF returns nothing).
  */
 export const ensureSkillDetails = action({
 	args: { names: v.array(v.string()) },
@@ -71,9 +69,6 @@ export const ensureSkillDetails = action({
 		if (!identity) throw new Error("Unauthenticated");
 
 		for (const name of args.names) {
-			const exists = await ctx.runQuery(internal.skills.checkExists, { name });
-			if (exists) continue;
-
 			let detail = "";
 			let skillName = name.split("/").pop() ?? name;
 			let description = "";
@@ -97,10 +92,12 @@ export const ensureSkillDetails = action({
 					}
 				}
 			} catch {
-				// Non-blocking: store with whatever we have
+				// Non-blocking: if fetch fails, detail stays empty → skip below
 			}
 
-			await ctx.runMutation(internal.skills.insertSkillDetail, {
+			if (!detail) continue;
+
+			await ctx.runMutation(internal.skills.upsertSkillDetail, {
 				name,
 				skillName,
 				description,
