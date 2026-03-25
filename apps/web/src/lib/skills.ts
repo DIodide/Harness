@@ -1,4 +1,18 @@
-import type { SkillRow } from "../components/skills-browser";
+/** A skill row as returned by the HuggingFace catalog. */
+export interface SkillRow {
+	name: string;
+	skill_name: string;
+	description: string;
+	code: string;
+}
+
+/** Paginated response shape for skill list/search queries. */
+export interface SkillsResponse {
+	rows: SkillRow[];
+	total: number;
+	offset: number;
+	limit: number;
+}
 
 /** A skill entry as stored on a harness — name + description. */
 export interface SkillEntry {

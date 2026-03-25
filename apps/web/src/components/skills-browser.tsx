@@ -1,29 +1,14 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, Loader2, Search, X, Zap } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { env } from "../env";
-import type { SkillEntry } from "../lib/skills";
+import type { SkillEntry, SkillsResponse } from "../lib/skills";
+import { fetchSkills, searchSkills } from "../lib/skills-api";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 
-const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 const PAGE_SIZE = 20;
-
-export interface SkillRow {
-	name: string;
-	skill_name: string;
-	description: string;
-	code: string;
-}
-
-interface SkillsResponse {
-	rows: SkillRow[];
-	total: number;
-	offset: number;
-	limit: number;
-}
 
 export function SkillsBrowser({
 	currentSkills,
@@ -35,7 +20,7 @@ export function SkillsBrowser({
 	const [search, setSearch] = useState("");
 	const [debouncedSearch, setDebouncedSearch] = useState("");
 	const [page, setPage] = useState(0);
-	const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+	const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
 	useEffect(() => {
 		clearTimeout(debounceRef.current);
@@ -54,14 +39,12 @@ export function SkillsBrowser({
 			"browse",
 			{ offset, limit: PAGE_SIZE, search: debouncedSearch },
 		],
-		queryFn: async () => {
-			const endpoint = debouncedSearch
-				? `${API_URL}/api/skills/search?q=${encodeURIComponent(debouncedSearch)}&offset=${offset}&limit=${PAGE_SIZE}`
-				: `${API_URL}/api/skills?offset=${offset}&limit=${PAGE_SIZE}`;
-			const res = await fetch(endpoint);
-			if (!res.ok) throw new Error("Failed to fetch skills");
-			return res.json();
-		},
+		queryFn: () =>
+			debouncedSearch
+				? searchSkills({
+						data: { q: debouncedSearch, offset, limit: PAGE_SIZE },
+					})
+				: fetchSkills({ data: { offset, limit: PAGE_SIZE } }),
 		placeholderData: keepPreviousData,
 	});
 

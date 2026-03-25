@@ -1,26 +1,5 @@
 import { v } from "convex/values";
-import { internalMutation, mutation, query } from "./_generated/server";
-
-export const migrateSkillsToObjects = internalMutation({
-	handler: async (ctx) => {
-		const all = await ctx.db.query("harnesses").collect();
-		let patched = 0;
-		for (const h of all) {
-			const raw = h.skills as unknown;
-			if (!Array.isArray(raw)) continue;
-			const needsMigration = raw.some((s) => typeof s === "string");
-			if (!needsMigration) continue;
-			const migrated = raw.map((s: unknown) =>
-				typeof s === "string"
-					? { name: s, description: "" }
-					: (s as { name: string; description: string }),
-			);
-			await ctx.db.patch(h._id, { skills: migrated });
-			patched++;
-		}
-		return { patched, total: all.length };
-	},
-});
+import { mutation, query } from "./_generated/server";
 
 export const list = query({
 	handler: async (ctx) => {
