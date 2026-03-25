@@ -35,6 +35,7 @@ import {
 	User,
 	Wrench,
 	X,
+	Zap,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import React, {
@@ -46,6 +47,7 @@ import React, {
 	useState,
 } from "react";
 import toast from "react-hot-toast";
+import { AttachmentChip } from "../../components/attachment-chip";
 import { HarnessMark } from "../../components/harness-mark";
 import { MarkdownMessage } from "../../components/markdown-message";
 import {
@@ -58,6 +60,7 @@ import {
 	type DisplayMode,
 	MessageActions,
 } from "../../components/message-actions";
+import { MessageAttachments } from "../../components/message-attachments";
 import {
 	Avatar,
 	AvatarFallback,
@@ -96,9 +99,14 @@ import {
 	TooltipTrigger,
 } from "../../components/ui/tooltip";
 import { env } from "../../env";
-import { acceptString, allowedMimeTypes, modelSupportsAudio, modelSupportsMedia } from "../../lib/models";
-import { buildMultimodalContent } from "../../lib/multimodal";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
+import {
+	acceptString,
+	allowedMimeTypes,
+	modelSupportsAudio,
+	modelSupportsMedia,
+} from "../../lib/models";
+import { buildMultimodalContent } from "../../lib/multimodal";
 import {
 	type ConvoStreamState,
 	type StreamPart,
@@ -107,8 +115,6 @@ import {
 	useChatStream,
 } from "../../lib/use-chat-stream";
 import { cn } from "../../lib/utils";
-import { AttachmentChip } from "../../components/attachment-chip";
-import { MessageAttachments } from "../../components/message-attachments";
 
 export const Route = createFileRoute("/chat/")({
 	validateSearch: (search: Record<string, unknown>) => ({
@@ -671,6 +677,7 @@ function ChatPage() {
 						auth_type: s.authType as "none" | "bearer" | "oauth",
 						auth_token: s.authToken,
 					})),
+					skills: activeHarness.skills ?? [],
 					name: activeHarness.name,
 				},
 				conversation_id: convoId,
@@ -739,6 +746,7 @@ function ChatPage() {
 					auth_type: s.authType as "none" | "bearer" | "oauth",
 					auth_token: s.authToken,
 				})),
+				skills: activeHarness.skills ?? [],
 				name: activeHarness.name,
 			};
 
@@ -823,6 +831,7 @@ function ChatPage() {
 						auth_type: s.authType as "none" | "bearer" | "oauth",
 						auth_token: s.authToken,
 					})),
+					skills: activeHarness.skills ?? [],
 					name: activeHarness.name,
 				},
 				conversation_id: newConvoId,
@@ -1605,6 +1614,78 @@ function McpFailureBanner({
 	);
 }
 
+function SkillsStatus({
+	skills,
+}: {
+	skills: Array<{ name: string; description: string }>;
+}) {
+	const [open, setOpen] = useState(false);
+	const ref = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		if (!open) return;
+		const handler = (e: MouseEvent) => {
+			if (ref.current && !ref.current.contains(e.target as Node)) {
+				setOpen(false);
+			}
+		};
+		document.addEventListener("mousedown", handler);
+		return () => document.removeEventListener("mousedown", handler);
+	}, [open]);
+
+	if (skills.length === 0) return null;
+
+	return (
+		<div ref={ref} className="relative">
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<button
+						type="button"
+						onClick={() => setOpen((prev) => !prev)}
+						className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+					>
+						<Zap size={10} />
+						{skills.length} Skill{skills.length !== 1 && "s"}
+					</button>
+				</TooltipTrigger>
+				<TooltipContent>Active skills</TooltipContent>
+			</Tooltip>
+
+			<AnimatePresence>
+				{open && (
+					<motion.div
+						initial={{ opacity: 0, y: -4, scale: 0.97 }}
+						animate={{ opacity: 1, y: 0, scale: 1 }}
+						exit={{ opacity: 0, y: -4, scale: 0.97 }}
+						transition={{ duration: 0.15 }}
+						className="absolute left-0 top-full z-50 mt-1 w-72 border border-border bg-background shadow-lg"
+					>
+						<div className="border-b border-border px-3 py-2">
+							<span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+								Skills
+							</span>
+						</div>
+						<div className="max-h-48 overflow-y-auto py-1">
+							{skills.map((skill) => (
+								<div key={skill.name} className="px-3 py-1.5">
+									<div className="truncate text-xs font-medium">
+										{skill.name.split("/").pop() ?? skill.name}
+									</div>
+									{skill.description && (
+										<div className="truncate text-[10px] text-muted-foreground">
+											{skill.description}
+										</div>
+									)}
+								</div>
+							))}
+						</div>
+					</motion.div>
+				)}
+			</AnimatePresence>
+		</div>
+	);
+}
+
 function ChatHeader({
 	harness,
 	harnesses,
@@ -1625,6 +1706,7 @@ function ChatHeader({
 			authType: "none" | "bearer" | "oauth";
 			authToken?: string;
 		}>;
+		skills: Array<{ name: string; description: string }>;
 	};
 	harnesses: Array<{
 		_id: Id<"harnesses">;
@@ -1697,6 +1779,10 @@ function ChatHeader({
 						servers={harness.mcpServers}
 						healthStatuses={mcpHealthStatuses}
 					/>
+				)}
+
+				{harness && harness.skills.length > 0 && (
+					<SkillsStatus skills={harness.skills} />
 				)}
 			</div>
 		</header>
@@ -2025,13 +2111,17 @@ function ChatMessages({
 										</AvatarFallback>
 									</Avatar>
 								)}
-								<div className={cn(
-									"max-w-[80%]",
-									msg.role === "user" && "flex flex-col items-end",
-								)}>
-									{msg.role === "user" && msg.attachments && msg.attachments.length > 0 && (
-										<MessageAttachments attachments={msg.attachments} />
+								<div
+									className={cn(
+										"max-w-[80%]",
+										msg.role === "user" && "flex flex-col items-end",
 									)}
+								>
+									{msg.role === "user" &&
+										msg.attachments &&
+										msg.attachments.length > 0 && (
+											<MessageAttachments attachments={msg.attachments} />
+										)}
 									<div
 										className={cn(
 											"text-sm leading-relaxed",
@@ -2586,11 +2676,15 @@ function ChatInput({
 			authType: "none" | "bearer" | "oauth";
 			authToken?: string;
 		}>;
+		skills: Array<{ name: string; description: string }>;
 	};
 	onConvoCreated: (id: Id<"conversations">) => void;
 	isStreaming: boolean;
 	onStream: (body: {
-		messages: Array<{ role: string; content: string | Array<Record<string, unknown>> }>;
+		messages: Array<{
+			role: string;
+			content: string | Array<Record<string, unknown>>;
+		}>;
 		harness: {
 			model: string;
 			mcp_servers: Array<{
@@ -2599,6 +2693,7 @@ function ChatInput({
 				auth_type: "none" | "bearer" | "oauth";
 				auth_token?: string;
 			}>;
+			skills: Array<{ name: string; description: string }>;
 			name: string;
 		};
 		conversation_id: string;
@@ -2630,10 +2725,19 @@ function ChatInput({
 	const supportsAudio = modelSupportsAudio(activeHarness?.model);
 	const supportsAnyAttachment = supportsMedia || supportsAudio;
 	const modelAccept = acceptString(activeHarness?.model);
-	const modelAllowedMimes = useMemo(() => allowedMimeTypes(activeHarness?.model), [activeHarness?.model]);
+	const modelAllowedMimes = useMemo(
+		() => allowedMimeTypes(activeHarness?.model),
+		[activeHarness?.model],
+	);
 
-	const { attachments, addFiles, removeAttachment, clearAttachments, hasUploading, resolveSignedUrls } =
-		useFileAttachments(modelAllowedMimes);
+	const {
+		attachments,
+		addFiles,
+		removeAttachment,
+		clearAttachments,
+		hasUploading,
+		resolveSignedUrls,
+	} = useFileAttachments(modelAllowedMimes);
 
 	// Clear attachments if the active model switches to one that doesn't support media
 	useEffect(() => {
@@ -2655,9 +2759,11 @@ function ChatInput({
 			};
 			recorder.onstop = () => {
 				const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-				const file = new File([blob], `recording-${Date.now()}.webm`, { type: "audio/webm" });
+				const file = new File([blob], `recording-${Date.now()}.webm`, {
+					type: "audio/webm",
+				});
 				addFiles([file]);
-				stream.getTracks().forEach((t) => t.stop());
+				for (const t of stream.getTracks()) t.stop();
 			};
 			mediaRecorderRef.current = recorder;
 			recorder.start();
@@ -2742,6 +2848,7 @@ function ChatInput({
 				auth_type: s.authType as "none" | "bearer" | "oauth",
 				auth_token: s.authToken,
 			})),
+			skills: activeHarness.skills ?? [],
 			name: activeHarness.name,
 		};
 
@@ -2775,10 +2882,20 @@ function ChatInput({
 		});
 
 		// Build message history for the LLM (with multimodal content where applicable)
-		const history: Array<{ role: string; content: string | Array<Record<string, unknown>> }> = [];
+		const history: Array<{
+			role: string;
+			content: string | Array<Record<string, unknown>>;
+		}> = [];
 		for (const m of existingMessages ?? []) {
 			if (m.role === "user" && m.attachments && m.attachments.length > 0) {
-				history.push({ role: m.role, content: await buildMultimodalContent(m.content, m.attachments, resolveSignedUrls) });
+				history.push({
+					role: m.role,
+					content: await buildMultimodalContent(
+						m.content,
+						m.attachments,
+						resolveSignedUrls,
+					),
+				});
 			} else {
 				history.push({ role: m.role, content: m.content });
 			}
@@ -2786,7 +2903,14 @@ function ChatInput({
 
 		// Add the new user message (with any current attachments)
 		if (readyAttachments.length > 0) {
-			history.push({ role: "user", content: await buildMultimodalContent(content, readyAttachments, resolveSignedUrls) });
+			history.push({
+				role: "user",
+				content: await buildMultimodalContent(
+					content,
+					readyAttachments,
+					resolveSignedUrls,
+				),
+			});
 		} else {
 			history.push({ role: "user", content });
 		}
@@ -2843,7 +2967,10 @@ function ChatInput({
 	const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
 		if (!supportsAnyAttachment) return;
 		const files = Array.from(e.clipboardData.files).filter(
-			(f) => f.type.startsWith("image/") || f.type === "application/pdf" || f.type.startsWith("audio/"),
+			(f) =>
+				f.type.startsWith("image/") ||
+				f.type === "application/pdf" ||
+				f.type.startsWith("audio/"),
 		);
 		if (files.length > 0) {
 			e.preventDefault();
@@ -2876,6 +3003,7 @@ function ChatInput({
 	const showStopButton = isStreaming && !text.trim();
 
 	return (
+		// biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop drop zone
 		<div
 			className={cn(
 				"relative border-t border-border px-4 py-2 transition-colors",
@@ -3014,7 +3142,9 @@ function ChatInput({
 									{isRecording ? <Square size={15} /> : <Mic size={15} />}
 								</button>
 							</TooltipTrigger>
-							<TooltipContent>{isRecording ? "Stop recording" : "Record audio"}</TooltipContent>
+							<TooltipContent>
+								{isRecording ? "Stop recording" : "Record audio"}
+							</TooltipContent>
 						</Tooltip>
 					)}
 

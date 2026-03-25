@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Request
 from sse_starlette.sse import EventSourceResponse
 from app.dependencies import get_current_user, get_http_client
 from app.models import ChatRequest
-from app.services.convex import save_assistant_message, patch_message_usage
+from app.services.convex import query_convex, save_assistant_message, patch_message_usage
 from app.services.mcp_client import call_tool, list_tools
 from app.services.openrouter import stream_chat
 
@@ -15,6 +15,87 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_ITERATIONS = 50
+
+SKILL_TOOL_NAME = "get_skill_content"
+
+SKILL_TOOL_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": SKILL_TOOL_NAME,
+        "description": (
+            "Retrieve the full markdown content for a skill from the user's harness. "
+            "Use this when you need detailed instructions, best practices, or reference "
+            "material from a skill the user has installed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The full name of the skill (e.g. '0xbigboss/claude-code/react-best-practices')",
+                },
+            },
+            "required": ["name"],
+        },
+    },
+}
+
+
+def _build_skills_system_block(skills: list[dict]) -> str:
+    """Build a system prompt section listing available skills.
+
+    Each skill dict has at least 'name', and optionally 'description'.
+    """
+    lines = [
+        "You have access to the following skills from the user's harness. "
+        "Each skill contains detailed instructions and best practices. "
+        "When a user's request relates to a skill topic, use the get_skill_content "
+        "tool to retrieve its full content before responding.\n",
+        "Available skills:",
+    ]
+    for s in skills:
+        desc = f" — {s['description']}" if s.get("description") else ""
+        lines.append(f"  • {s['name']}{desc}")
+    return "\n".join(lines)
+
+
+async def _handle_get_skill_content(
+    http_client: httpx.AsyncClient,
+    skill_name: str,
+    allowed_skills: set[str],
+) -> str:
+    """Fetch a skill's markdown detail from Convex, falling back to HuggingFace."""
+    if skill_name not in allowed_skills:
+        return f"Error: Skill '{skill_name}' is not in the user's harness."
+
+    # Try Convex first (where ensureSkillDetails stores them)
+    result = await query_convex(
+        http_client, "skills:getByName", {"name": skill_name}
+    )
+    if result and result.get("detail"):
+        return result["detail"]
+
+    # Fallback: fetch directly from HuggingFace
+    try:
+        from urllib.parse import quote
+
+        encoded = quote(skill_name)
+        url = (
+            "https://datasets-server.huggingface.co/search"
+            "?dataset=tickleliu/all-skills-from-skills-sh"
+            f"&config=default&split=train&query={encoded}&offset=0&length=5"
+        )
+        resp = await http_client.get(url, timeout=15.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            for entry in data.get("rows", []):
+                row = entry.get("row", entry)
+                if row.get("name") == skill_name:
+                    return row.get("detail", "No detail available for this skill.")
+    except Exception:
+        logger.exception("Failed to fetch skill detail from HuggingFace for '%s'", skill_name)
+
+    return f"Could not retrieve content for skill '{skill_name}'."
 
 
 @router.post("/stream")
@@ -55,7 +136,26 @@ async def chat_stream(
                     ),
                 }
 
+        # Build skills manifest and inject get_skill_content tool
+        skill_refs = body.harness.skills
+        allowed_skill_names: set[str] = {s.name for s in skill_refs}
+        skill_manifest: list[dict] = []
+        if skill_refs:
+            if tools is None:
+                tools = []
+            tools.append(SKILL_TOOL_DEFINITION)
+
+            skill_manifest = [
+                {"name": s.name, "description": s.description}
+                for s in skill_refs
+            ]
+
         messages = [m.model_dump() for m in body.messages]
+
+        # Prepend a system message with the skills manifest
+        if skill_manifest:
+            skills_block = _build_skills_system_block(skill_manifest)
+            messages.insert(0, {"role": "system", "content": skills_block})
 
         # Accumulate across all iterations so reasoning/tool history isn't lost
         all_reasoning = ""
@@ -321,14 +421,24 @@ async def chat_stream(
             # Phase 2: Execute all tool calls in parallel, stream results as they complete
             async def _execute_tool(tool_info: dict) -> tuple[dict, str]:
                 """Execute a tool and return (tool_info, result) for identification."""
+                tool_name = tool_info["tool_name"]
                 logger.info(
-                    "Executing MCP tool '%s' with args: %s",
-                    tool_info["tool_name"],
+                    "Executing tool '%s' with args: %s",
+                    tool_name,
                     json.dumps(tool_info["args"])[:200],
                 )
+
+                # Intercept get_skill_content — handle locally instead of MCP
+                if tool_name == SKILL_TOOL_NAME:
+                    skill_name = tool_info["args"].get("name", "")
+                    result = await _handle_get_skill_content(
+                        http_client, skill_name, allowed_skill_names
+                    )
+                    return tool_info, result
+
                 result = await call_tool(
                     http_client,
-                    tool_info["tool_name"],
+                    tool_name,
                     tool_info["args"],
                     body.harness.mcp_servers,
                     user_id=user_id,

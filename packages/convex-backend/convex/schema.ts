@@ -18,7 +18,7 @@ export default defineSchema({
 				authToken: v.optional(v.string()),
 			}),
 		),
-		skills: v.array(v.string()),
+		skills: v.array(v.object({ name: v.string(), description: v.string() })),
 		suggestedPrompts: v.optional(v.array(v.string())),
 		userId: v.string(),
 		lastUsedAt: v.optional(v.number()),
@@ -112,6 +112,14 @@ export default defineSchema({
 	})
 		.index("by_user_and_server", ["userId", "mcpServerUrl"])
 		.index("by_user", ["userId"]),
+
+	skillDetails: defineTable({
+		name: v.string(),
+		skillName: v.string(),
+		description: v.string(),
+		detail: v.string(),
+		code: v.string(),
+	}).index("by_name", ["name"]),
 
 	userSettings: defineTable({
 		userId: v.string(),
