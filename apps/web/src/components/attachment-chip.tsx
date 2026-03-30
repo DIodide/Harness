@@ -22,7 +22,7 @@ export function AttachmentChip({
 					alt={attachment.fileName}
 					className="h-full w-auto object-cover"
 				/>
-			) : (isPdf || isAudio) ? (
+			) : isPdf || isAudio ? (
 				<div className="flex items-center gap-1.5 px-2">
 					<Icon size={12} className="shrink-0 text-muted-foreground" />
 					<span className="max-w-[120px] truncate text-[11px] text-muted-foreground">
