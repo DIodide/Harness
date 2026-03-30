@@ -14,7 +14,7 @@ export default defineSchema({
 			v.object({
 				name: v.string(),
 				url: v.string(),
-				authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth")),
+				authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth"), v.literal("tiger_junction")),
 				authToken: v.optional(v.string()),
 			}),
 		),

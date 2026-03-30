@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 class McpServer(BaseModel):
     name: str
     url: str
-    auth_type: Literal["none", "bearer", "oauth"] = "none"
+    auth_type: Literal["none", "bearer", "oauth", "tiger_junction"] = "none"
     auth_token: str | None = None
 
 
@@ -28,6 +28,7 @@ class HarnessConfig(BaseModel):
     sandbox_enabled: bool = False
     sandbox_id: str | None = None
     sandbox_config: SandboxConfig | None = None
+    princeton_netid: str | None = None
 
 
 class MessagePayload(BaseModel):

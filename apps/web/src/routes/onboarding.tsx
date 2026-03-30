@@ -30,6 +30,7 @@ import { useMemo, useState } from "react";
 import { HarnessMark } from "../components/harness-mark";
 import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
+import { PrincetonConnectRow } from "../components/princeton-connect-row";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Checkbox } from "../components/ui/checkbox";
@@ -124,9 +125,13 @@ function OnboardingPage() {
 	);
 
 	const hasOAuthServers = allMcpServers.some((s) => s.authType === "oauth");
+	const hasTigerJunction = allMcpServers.some(
+		(s) => s.authType === "tiger_junction",
+	);
+	const hasConnectStep = hasOAuthServers || hasTigerJunction;
 
 	const steps = useMemo(() => {
-		if (!hasOAuthServers) return BASE_STEPS;
+		if (!hasConnectStep) return BASE_STEPS;
 		// Insert connect step after MCP Servers, before Sandbox
 		return [
 			BASE_STEPS[0],
@@ -135,7 +140,7 @@ function OnboardingPage() {
 			BASE_STEPS[2],
 			BASE_STEPS[3],
 		];
-	}, [hasOAuthServers]);
+	}, [hasConnectStep]);
 
 	// Clamp stepIndex if steps shrink (e.g. OAuth servers removed while on connect step)
 	const safeIndex = Math.min(stepIndex, steps.length - 1);
@@ -334,7 +339,10 @@ function OnboardingPage() {
 							)}
 							{currentStep === "connect" && (
 								<StepConnect
-									servers={allMcpServers.filter((s) => s.authType === "oauth")}
+									servers={allMcpServers.filter(
+										(s) =>
+											s.authType === "oauth" || s.authType === "tiger_junction",
+									)}
 								/>
 							)}
 							{currentStep === "sandbox" && (
@@ -545,7 +553,9 @@ function AddMcpServerForm({
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");
 	const [url, setUrl] = useState("");
-	const [authType, setAuthType] = useState<"none" | "bearer" | "oauth">("none");
+	const [authType, setAuthType] = useState<
+		"none" | "bearer" | "oauth" | "tiger_junction"
+	>("none");
 	const [authToken, setAuthToken] = useState("");
 	const [showToken, setShowToken] = useState(false);
 
@@ -669,7 +679,9 @@ function AddMcpServerForm({
 				</label>
 				<Select
 					value={authType}
-					onValueChange={(v) => setAuthType(v as "none" | "bearer" | "oauth")}
+					onValueChange={(v) =>
+						setAuthType(v as "none" | "bearer" | "oauth" | "tiger_junction")
+					}
 				>
 					<SelectTrigger className="max-w-xs text-xs">
 						<SelectValue />
@@ -755,10 +767,13 @@ function StepConnect({ servers }: { servers: McpServerEntry[] }) {
 		convexQuery(api.mcpOAuthTokens.listStatuses, {}),
 	);
 
+	const oauthServers = servers.filter((s) => s.authType === "oauth");
+	const tjServers = servers.filter((s) => s.authType === "tiger_junction");
+
 	const connectedServers = useMemo(() => {
 		const now = Date.now();
 		const result: Record<string, boolean> = {};
-		for (const server of servers) {
+		for (const server of oauthServers) {
 			const persisted = tokenStatuses?.find(
 				(s) => s.mcpServerUrl === server.url,
 			);
@@ -767,20 +782,21 @@ function StepConnect({ servers }: { servers: McpServerEntry[] }) {
 			}
 		}
 		return result;
-	}, [tokenStatuses, servers]);
+	}, [tokenStatuses, oauthServers]);
 
-	const allConnected = Object.keys(connectedServers).length === servers.length;
 	return (
 		<div className="space-y-4">
 			<div>
 				<p className="text-xs text-muted-foreground">
-					Connect your OAuth-authenticated MCP servers. You'll be redirected to
-					each provider to authorize access.
+					Connect your accounts to enable authenticated MCP servers.
 				</p>
 			</div>
 
 			<div className="space-y-2">
-				{servers.map((server) => (
+				{tjServers.map((server) => (
+					<PrincetonConnectRow key={server.url} server={server} />
+				))}
+				{oauthServers.map((server) => (
 					<OAuthConnectRow
 						key={server.url}
 						server={server}
@@ -789,24 +805,9 @@ function StepConnect({ servers }: { servers: McpServerEntry[] }) {
 				))}
 			</div>
 
-			{allConnected && (
-				<motion.div
-					initial={{ opacity: 0, y: 4 }}
-					animate={{ opacity: 1, y: 0 }}
-					className="flex items-center gap-2 border border-emerald-500/20 bg-emerald-500/5 px-3 py-2"
-				>
-					<Check size={12} className="text-emerald-500" />
-					<p className="text-xs text-emerald-700 dark:text-emerald-400">
-						All servers connected. You're ready to continue.
-					</p>
-				</motion.div>
-			)}
-
-			{!allConnected && (
-				<p className="text-center text-[11px] text-muted-foreground/60">
-					You can skip this step and connect later from harness settings.
-				</p>
-			)}
+			<p className="text-center text-[11px] text-muted-foreground/60">
+				You can skip this step and connect later from harness settings.
+			</p>
 		</div>
 	);
 }
