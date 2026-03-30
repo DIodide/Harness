@@ -77,7 +77,6 @@ export interface ChatStreamRequest {
 		}>;
 		name: string;
 		harness_id?: string;
-		princeton_netid?: string;
 		sandbox_enabled?: boolean;
 		sandbox_id?: string;
 		sandbox_config?: {

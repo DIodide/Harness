@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.config import settings
 from app.models import McpServer
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ _request_id_counter = itertools.count(1)
 
 # Cache of session IDs per (server URL, user ID) to avoid re-initializing on every request.
 # Keyed by (url, user_id) because some MCP servers bind sessions to user identity.
-_session_cache: dict[tuple[str, str | None], str] = {}
+_session_cache: dict[tuple[str, str | None, str | None], str] = {}
 
 # Per-server lock to prevent concurrent session initialization races.
 _session_init_locks: dict[str, asyncio.Lock] = {}
@@ -33,6 +34,20 @@ class UserContext:
     """User identity context threaded through MCP calls."""
     user_id: str | None = None
     princeton_netid: str | None = None
+
+
+def extract_princeton_netid(jwt_payload: dict) -> str | None:
+    """Derive Princeton netid from verified Clerk JWT claims.
+
+    Checks the email claim (cryptographically signed by Clerk) for a
+    @princeton.edu address.  This is the server-side equivalent of the
+    frontend ``getPrincetonNetid`` helper — it must never trust a
+    client-supplied value.
+    """
+    email = jwt_payload.get("email") or ""
+    if email.endswith("@princeton.edu"):
+        return email.split("@")[0]
+    return None
 
 # TTL cache for tools/list results: url → (tools, timestamp).
 _tools_cache: dict[str, tuple[list[dict], float]] = {}
@@ -77,8 +92,6 @@ async def _build_headers(
     if server.auth_type == "bearer" and server.auth_token:
         headers["Authorization"] = f"Bearer {server.auth_token}"
     elif server.auth_type == "tiger_junction":
-        from app.config import settings
-
         token = settings.tiger_junction_mcp_token
         if token:
             headers["Authorization"] = f"Bearer {token}"

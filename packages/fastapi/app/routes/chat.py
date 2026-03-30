@@ -9,7 +9,7 @@ from app.config import settings
 from app.dependencies import get_current_user, get_http_client
 from app.models import ChatRequest
 from app.services.convex import save_assistant_message, patch_message_usage, create_sandbox_record
-from app.services.mcp_client import UserContext, call_tool, list_tools
+from app.services.mcp_client import UserContext, call_tool, extract_princeton_netid, list_tools
 from app.services.mcp_oauth import get_valid_token, GITHUB_STANDALONE_URL
 from app.services.openrouter import stream_chat
 from app.services.sandbox_tools import (
@@ -51,7 +51,7 @@ async def chat_stream(
     user_id = user.get("sub")
     user_ctx = UserContext(
         user_id=user_id,
-        princeton_netid=body.harness.princeton_netid,
+        princeton_netid=extract_princeton_netid(user),
     )
 
     async def event_generator():

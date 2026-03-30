@@ -102,7 +102,7 @@ import {
 } from "../../components/ui/tooltip";
 import { env } from "../../env";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
-import { getPrincetonNetid } from "../../lib/mcp";
+import type { McpAuthType } from "../../lib/mcp";
 import {
 	acceptString,
 	allowedMimeTypes,
@@ -157,9 +157,7 @@ const EMPTY_STREAM_STATE: ConvoStreamState = {
 function ChatPage() {
 	const navigate = useNavigate();
 	const { getToken } = useAuth();
-	const { user } = useUser();
 	const { harnessId: initialHarnessId } = Route.useSearch();
-	const princetonNetid = getPrincetonNetid(user);
 
 	const { data: harnesses, isLoading: harnessesLoading } = useQuery(
 		convexQuery(api.harnesses.list, {}),
@@ -692,7 +690,7 @@ function ChatPage() {
 					})),
 					name: activeHarness.name,
 					harness_id: activeHarness._id,
-					princeton_netid: princetonNetid ?? undefined,
+
 					sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
 					sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
 					sandbox_config: (activeHarness as any).sandboxConfig
@@ -716,7 +714,6 @@ function ChatPage() {
 		activeHarness,
 		chatStream,
 		sendMessageFromQueue,
-		princetonNetid,
 	]);
 
 	const handleSelectConversation = useCallback(
@@ -779,7 +776,6 @@ function ChatPage() {
 				})),
 				name: activeHarness.name,
 				harness_id: activeHarness._id,
-				princeton_netid: princetonNetid ?? undefined,
 				sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
 				sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
 				sandbox_config: (activeHarness as any).sandboxConfig
@@ -799,7 +795,7 @@ function ChatPage() {
 				conversation_id: activeConvoId,
 			});
 		},
-		[activeHarness, activeConvoId, chatStream, removeMessage, princetonNetid],
+		[activeHarness, activeConvoId, chatStream, removeMessage],
 	);
 
 	const forkConversation = useMutation({
@@ -877,7 +873,6 @@ function ChatPage() {
 							auth_token: s.authToken,
 						})),
 						name: activeHarness.name,
-						princeton_netid: princetonNetid ?? undefined,
 					},
 					conversation_id: newConvoId,
 				});
@@ -895,7 +890,6 @@ function ChatPage() {
 			editForkAndSend,
 			handleSelectConversation,
 			chatStream,
-			princetonNetid,
 		],
 	);
 
@@ -1689,7 +1683,7 @@ function ChatHeader({
 		mcpServers: Array<{
 			name: string;
 			url: string;
-			authType: "none" | "bearer" | "oauth" | "tiger_junction";
+			authType: McpAuthType;
 			authToken?: string;
 		}>;
 	};
@@ -2842,7 +2836,7 @@ function ChatInput({
 		mcpServers: Array<{
 			name: string;
 			url: string;
-			authType: "none" | "bearer" | "oauth" | "tiger_junction";
+			authType: McpAuthType;
 			authToken?: string;
 		}>;
 	};
@@ -2858,7 +2852,7 @@ function ChatInput({
 			mcp_servers: Array<{
 				name: string;
 				url: string;
-				auth_type: "none" | "bearer" | "oauth" | "tiger_junction";
+				auth_type: McpAuthType;
 				auth_token?: string;
 			}>;
 			name: string;
@@ -2883,9 +2877,6 @@ function ChatInput({
 	pendingPrompt?: string | null;
 	onPendingPromptConsumed?: () => void;
 }) {
-	const { user: chatInputUser } = useUser();
-	const chatInputNetid = getPrincetonNetid(chatInputUser);
-
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
@@ -3015,12 +3006,11 @@ function ChatInput({
 			mcp_servers: activeHarness.mcpServers.map((s) => ({
 				name: s.name,
 				url: s.url,
-				auth_type: s.authType as "none" | "bearer" | "oauth" | "tiger_junction",
+				auth_type: s.authType as McpAuthType,
 				auth_token: s.authToken,
 			})),
 			name: activeHarness.name,
 			harness_id: activeHarness._id,
-			princeton_netid: chatInputNetid ?? undefined,
 			sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
 			sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
 			sandbox_config: (activeHarness as any).sandboxConfig

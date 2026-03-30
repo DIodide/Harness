@@ -28,7 +28,6 @@ class HarnessConfig(BaseModel):
     sandbox_enabled: bool = False
     sandbox_id: str | None = None
     sandbox_config: SandboxConfig | None = None
-    princeton_netid: str | None = None
 
 
 class MessagePayload(BaseModel):
