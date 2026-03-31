@@ -7,14 +7,6 @@ export interface SkillRow {
 	installs: number;
 }
 
-/** Paginated response shape for skill list/search queries. */
-export interface SkillsResponse {
-	rows: SkillRow[];
-	total: number;
-	offset: number;
-	limit: number;
-}
-
 /** A skill entry as stored on a harness — name + description. */
 export interface SkillEntry {
 	name: string;

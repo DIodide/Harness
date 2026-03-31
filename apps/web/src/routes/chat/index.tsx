@@ -1675,7 +1675,7 @@ function ChatHeader({
 			authType: "none" | "bearer" | "oauth";
 			authToken?: string;
 		}>;
-		skills: Array<{ name: string; description: string }>;
+		skills: SkillEntry[];
 	};
 	harnesses: Array<{
 		_id: Id<"harnesses">;
@@ -2645,7 +2645,7 @@ function ChatInput({
 			authType: "none" | "bearer" | "oauth";
 			authToken?: string;
 		}>;
-		skills: Array<{ name: string; description: string }>;
+		skills: SkillEntry[];
 	};
 	onConvoCreated: (id: Id<"conversations">) => void;
 	isStreaming: boolean;
@@ -2662,7 +2662,7 @@ function ChatInput({
 				auth_type: "none" | "bearer" | "oauth";
 				auth_token?: string;
 			}>;
-			skills: Array<{ name: string; description: string }>;
+			skills: SkillEntry[];
 			name: string;
 		};
 		conversation_id: string;

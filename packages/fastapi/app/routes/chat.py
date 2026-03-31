@@ -108,8 +108,9 @@ async def _search_skills_sh(
 ) -> str | None:
     """Query skills.sh search API to find the correct source for a skill ID."""
     try:
+        from urllib.parse import quote
         resp = await http_client.get(
-            f"https://skills.sh/api/search?q={skill_id}&limit=20",
+            f"https://skills.sh/api/search?q={quote(skill_id, safe='')}&limit=20",
             timeout=10.0,
         )
         if resp.status_code != 200:

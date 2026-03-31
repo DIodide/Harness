@@ -126,15 +126,16 @@ export const upsertSkillsIndexBatch = internalMutation({
 export const checkExistingSkills = internalQuery({
 	args: { fullIds: v.array(v.string()) },
 	handler: async (ctx, args) => {
-		const existing = new Set<string>();
-		for (const fullId of args.fullIds) {
-			const doc = await ctx.db
-				.query("skillsIndex")
-				.withIndex("by_fullId", (q) => q.eq("fullId", fullId))
-				.first();
-			if (doc) existing.add(fullId);
-		}
-		return [...existing];
+		const results = await Promise.all(
+			args.fullIds.map(async (fullId) => {
+				const doc = await ctx.db
+					.query("skillsIndex")
+					.withIndex("by_fullId", (q) => q.eq("fullId", fullId))
+					.first();
+				return doc ? fullId : null;
+			}),
+		);
+		return results.filter((id): id is string => id !== null);
 	},
 });
 
@@ -347,22 +348,22 @@ export const ensureSkillDetails = action({
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
 
-		for (const name of args.names) {
-			// Check if we already have it cached
+		const CONCURRENCY = 3;
+
+		async function processSkill(name: string) {
 			const existing = await ctx.runQuery(internal.skills.getDetailByName, {
 				name,
 			});
-			if (existing?.detail) continue;
+			if (existing?.detail) return;
 
-			// Parse name: "owner/repo/skill-id" → source="owner/repo", skillId="skill-id"
 			const parts = name.split("/");
 			const skillId = parts.pop() ?? name;
 			const source = parts.join("/");
 
-			if (!source) continue;
+			if (!source) return;
 
 			const detail = await fetchSkillMd(source, skillId);
-			if (!detail) continue;
+			if (!detail) return;
 
 			let description = "";
 			const fmMatch = detail.match(/^---\s*\n([\s\S]*?)\n---/);
@@ -380,6 +381,12 @@ export const ensureSkillDetails = action({
 				detail,
 				code: `npx skills add https://github.com/${source} --skill ${skillId}`,
 			});
+		}
+
+		// Process in bounded-concurrency batches
+		for (let i = 0; i < args.names.length; i += CONCURRENCY) {
+			const batch = args.names.slice(i, i + CONCURRENCY);
+			await Promise.all(batch.map(processSkill));
 		}
 	},
 });
@@ -424,42 +431,19 @@ export const discoverSkillsFromSearch = action({
 		);
 		if (newSkills.length === 0) return 0;
 
-		// For each new skill, use the robust fetcher to get SKILL.md
-		const toUpsert: Array<{
-			skillId: string;
-			fullId: string;
-			source: string;
-			description: string;
-			installs: number;
-		}> = [];
+		// Just insert index entries with empty descriptions — SKILL.md fetching
+		// is deferred to ensureSkillDetails (fires after harness save) to avoid
+		// hammering GitHub with potentially hundreds of unauthenticated requests.
+		const toUpsert = newSkills.map((skill) => ({
+			skillId: skill.skillId,
+			fullId: skill.fullId,
+			source: skill.source,
+			description: "",
+			installs: skill.installs,
+		}));
 
-		for (const skill of newSkills) {
-			let description = "";
-			const detail = await fetchSkillMd(skill.source, skill.skillId);
-			if (detail) {
-				const fmMatch = detail.match(/^---\s*\n([\s\S]*?)\n---/);
-				if (fmMatch) {
-					const descMatch = fmMatch[1].match(/description:\s*(.+)/);
-					if (descMatch) {
-						description = descMatch[1].trim().replace(/^["']|["']$/g, "");
-					}
-				}
-			}
-
-			toUpsert.push({
-				skillId: skill.skillId,
-				fullId: skill.fullId,
-				source: skill.source,
-				description,
-				installs: skill.installs,
-			});
-		}
-
-		if (toUpsert.length > 0) {
-			return await ctx.runMutation(internal.skills.upsertSkillsIndexBatch, {
-				skills: toUpsert,
-			});
-		}
-		return 0;
+		return await ctx.runMutation(internal.skills.upsertSkillsIndexBatch, {
+			skills: toUpsert,
+		});
 	},
 });
