@@ -1,4 +1,4 @@
-import { Zap } from "lucide-react";
+import { Download, Zap } from "lucide-react";
 import type { SkillEntry } from "../lib/skills";
 import { RECOMMENDED_SKILLS } from "../lib/skills";
 import { Checkbox } from "./ui/checkbox";
@@ -16,17 +16,23 @@ export function RecommendedSkillsGrid({
 		return null;
 	}
 
+	const formatInstalls = (n: number) => {
+		if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+		if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+		return n.toString();
+	};
+
 	return (
 		<div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
 			{RECOMMENDED_SKILLS.map((rec) => {
-				const isSelected = selected.some((s) => s.name === rec.skill.name);
+				const isSelected = selected.some((s) => s.name === rec.skill.fullId);
 				return (
 					<button
 						key={rec.id}
 						type="button"
 						onClick={() =>
 							onToggle({
-								name: rec.skill.name,
+								name: rec.skill.fullId,
 								description: rec.skill.description,
 							})
 						}
@@ -45,16 +51,17 @@ export function RecommendedSkillsGrid({
 							<div className="flex items-center gap-1.5">
 								<Zap size={14} className="shrink-0 text-muted-foreground" />
 								<p className="text-xs font-medium text-foreground">
-									{rec.skill.skill_name}
+									{rec.skill.skillId}
 								</p>
+								{rec.skill.installs > 0 && (
+									<span className="flex items-center gap-0.5 text-[10px] text-muted-foreground/60">
+										<Download size={10} />
+										{formatInstalls(rec.skill.installs)}
+									</span>
+								)}
 							</div>
-							{rec.skill.name.includes("/") && (
-								<p className="text-[10px] leading-tight text-muted-foreground/50">
-									{rec.skill.name.split("/").slice(0, -1).join("/")}
-								</p>
-							)}
-							<p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-								{rec.skill.description || rec.skill.name}
+							<p className="text-[10px] leading-tight text-muted-foreground/50">
+								{rec.skill.source}
 							</p>
 						</div>
 					</button>

@@ -41,10 +41,33 @@ SKILL_TOOL_DEFINITION = {
 }
 
 
+def _extract_summary(detail: str, max_chars: int = 300) -> str:
+    """Extract a short summary from SKILL.md content.
+
+    Strips YAML frontmatter and headings, then takes the first meaningful
+    paragraph to give the model a sense of what the skill covers.
+    """
+    import re
+
+    text = detail.strip()
+    # Strip YAML frontmatter
+    text = re.sub(r"^---\s*\n[\s\S]*?\n---\s*\n?", "", text).strip()
+    # Collect non-heading, non-empty lines
+    lines = [
+        l.strip()
+        for l in text.split("\n")
+        if l.strip() and not l.strip().startswith("#")
+    ]
+    summary = " ".join(lines)
+    if len(summary) > max_chars:
+        summary = summary[:max_chars].rsplit(" ", 1)[0] + "…"
+    return summary
+
+
 def _build_skills_system_block(skills: list[dict]) -> str:
     """Build a system prompt section listing available skills.
 
-    Each skill dict has at least 'name', and optionally 'description'.
+    Each skill dict has 'name' and optionally 'summary' (extracted from SKILL.md).
     """
     lines = [
         "You have access to the following skills from the user's harness. "
@@ -54,8 +77,8 @@ def _build_skills_system_block(skills: list[dict]) -> str:
         "Available skills:",
     ]
     for s in skills:
-        desc = f" — {s['description']}" if s.get("description") else ""
-        lines.append(f"  • {s['name']}{desc}")
+        summary = f" — {s['summary']}" if s.get("summary") else ""
+        lines.append(f"  • {s['name']}{summary}")
     return "\n".join(lines)
 
 
@@ -64,7 +87,7 @@ async def _handle_get_skill_content(
     skill_name: str,
     allowed_skills: set[str],
 ) -> str:
-    """Fetch a skill's markdown detail from Convex, falling back to HuggingFace."""
+    """Fetch a skill's markdown detail from Convex, falling back to GitHub raw."""
     if skill_name not in allowed_skills:
         return f"Error: Skill '{skill_name}' is not in the user's harness."
 
@@ -75,25 +98,28 @@ async def _handle_get_skill_content(
     if result and result.get("detail"):
         return result["detail"]
 
-    # Fallback: fetch directly from HuggingFace
+    # Fallback: fetch SKILL.md directly from GitHub
     try:
-        from urllib.parse import quote
+        parts = skill_name.split("/")
+        skill_id = parts[-1] if parts else skill_name
+        source = "/".join(parts[:-1]) if len(parts) > 1 else ""
 
-        encoded = quote(skill_name)
-        url = (
-            "https://datasets-server.huggingface.co/search"
-            "?dataset=tickleliu/all-skills-from-skills-sh"
-            f"&config=default&split=train&query={encoded}&offset=0&length=5"
-        )
-        resp = await http_client.get(url, timeout=15.0)
-        if resp.status_code == 200:
-            data = resp.json()
-            for entry in data.get("rows", []):
-                row = entry.get("row", entry)
-                if row.get("name") == skill_name:
-                    return row.get("detail", "No detail available for this skill.")
+        if source:
+            urls_to_try = [
+                f"https://raw.githubusercontent.com/{source}/main/skills/{skill_id}/SKILL.md",
+                f"https://raw.githubusercontent.com/{source}/main/.agents/skills/{skill_id}/SKILL.md",
+                f"https://raw.githubusercontent.com/{source}/main/.claude/skills/{skill_id}/SKILL.md",
+                f"https://raw.githubusercontent.com/{source}/main/SKILL.md",
+            ]
+            for url in urls_to_try:
+                try:
+                    resp = await http_client.get(url, timeout=10.0)
+                    if resp.status_code == 200:
+                        return resp.text
+                except Exception:
+                    continue
     except Exception:
-        logger.exception("Failed to fetch skill detail from HuggingFace for '%s'", skill_name)
+        logger.exception("Failed to fetch skill detail from GitHub for '%s'", skill_name)
 
     return f"Could not retrieve content for skill '{skill_name}'."
 
@@ -145,8 +171,20 @@ async def chat_stream(
                 tools = []
             tools.append(SKILL_TOOL_DEFINITION)
 
+            # Fetch cached SKILL.md content to build short summaries
+            skill_details_list = await query_convex(
+                http_client,
+                "skills:getByNames",
+                {"names": [s.name for s in skill_refs]},
+            )
+            details_by_name: dict[str, str] = {}
+            if skill_details_list:
+                for d in skill_details_list:
+                    if d and d.get("detail"):
+                        details_by_name[d["name"]] = _extract_summary(d["detail"])
+
             skill_manifest = [
-                {"name": s.name, "description": s.description}
+                {"name": s.name, "summary": details_by_name.get(s.name, "")}
                 for s in skill_refs
             ]
 

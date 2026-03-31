@@ -1671,11 +1671,6 @@ function SkillsStatus({
 									<div className="truncate text-xs font-medium">
 										{skill.name.split("/").pop() ?? skill.name}
 									</div>
-									{skill.description && (
-										<div className="truncate text-[10px] text-muted-foreground">
-											{skill.description}
-										</div>
-									)}
 								</div>
 							))}
 						</div>

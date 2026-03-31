@@ -121,6 +121,20 @@ export default defineSchema({
 		code: v.string(),
 	}).index("by_name", ["name"]),
 
+	skillsIndex: defineTable({
+		skillId: v.string(),
+		fullId: v.string(),
+		source: v.string(),
+		description: v.string(),
+		installs: v.number(),
+	})
+		.index("by_fullId", ["fullId"])
+		.index("by_installs", ["installs"])
+		.searchIndex("search_skills", {
+			searchField: "description",
+			filterFields: [],
+		}),
+
 	userSettings: defineTable({
 		userId: v.string(),
 		autoSwitchHarness: v.boolean(),

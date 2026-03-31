@@ -1,8 +1,18 @@
+import { convexQuery, useConvexAction } from "@convex-dev/react-query";
+import { api } from "@harness/convex-backend/convex/_generated/api";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, Loader2, Search, X, Zap } from "lucide-react";
+import {
+	ArrowLeft,
+	ArrowRight,
+	Download,
+	Loader2,
+	Search,
+	X,
+	Zap,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { SkillEntry, SkillsResponse } from "../lib/skills";
-import { fetchSkills, searchSkills } from "../lib/skills-api";
+import type { SkillEntry, SkillRow } from "../lib/skills";
+import { searchSkillsSh } from "../lib/skills-api";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -22,6 +32,8 @@ export function SkillsBrowser({
 	const [page, setPage] = useState(0);
 	const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+	const discoverSkillsFn = useConvexAction(api.skills.discoverSkillsFromSearch);
+
 	useEffect(() => {
 		clearTimeout(debounceRef.current);
 		debounceRef.current = setTimeout(() => {
@@ -33,29 +45,113 @@ export function SkillsBrowser({
 
 	const offset = page * PAGE_SIZE;
 
-	const { data, isLoading, isFetching } = useQuery<SkillsResponse>({
-		queryKey: [
-			"skills",
-			"browse",
-			{ offset, limit: PAGE_SIZE, search: debouncedSearch },
-		],
-		queryFn: () =>
-			debouncedSearch
-				? searchSkills({
-						data: { q: debouncedSearch, offset, limit: PAGE_SIZE },
-					})
-				: fetchSkills({ data: { offset, limit: PAGE_SIZE } }),
+	// Browse mode: paginated query from Convex skillsIndex
+	const browseQuery = useQuery({
+		...convexQuery(api.skills.browseSkills, { offset, limit: PAGE_SIZE }),
 		placeholderData: keepPreviousData,
+		enabled: !debouncedSearch,
 	});
 
-	const rows = data?.rows ?? [];
-	const total = data?.total ?? 0;
+	// Total count (separate lightweight query, cached independently)
+	const countQuery = useQuery({
+		...convexQuery(api.skills.getSkillsIndexCount, {}),
+		enabled: !debouncedSearch,
+		staleTime: 30_000,
+	});
+
+	// Search mode: Convex full-text search
+	const convexSearchQuery = useQuery({
+		...convexQuery(api.skills.searchSkillsIndex, {
+			query: debouncedSearch,
+			limit: 100,
+		}),
+		enabled: !!debouncedSearch,
+	});
+
+	// Search mode: skills.sh live search
+	const skillsShQuery = useQuery({
+		queryKey: ["skills-sh-search", debouncedSearch],
+		queryFn: () => searchSkillsSh({ data: { q: debouncedSearch, limit: 100 } }),
+		enabled: !!debouncedSearch,
+	});
+
+	// When skills.sh returns results, fire-and-forget discover new ones into our index
+	useEffect(() => {
+		if (!skillsShQuery.data?.raw?.length) return;
+		const raw = skillsShQuery.data.raw;
+		discoverSkillsFn({
+			skills: raw.map((s) => ({
+				skillId: s.skillId,
+				fullId: s.id,
+				source: s.source,
+				installs: s.installs,
+			})),
+		}).catch(() => {});
+	}, [skillsShQuery.data, discoverSkillsFn]);
+
+	// Merge search results: prefer Convex (has descriptions) over skills.sh
+	const searchResults = (() => {
+		if (!debouncedSearch) return null;
+		const convexRows: SkillRow[] = (convexSearchQuery.data ?? []).map((d) => ({
+			skillId: d.skillId,
+			fullId: d.fullId,
+			source: d.source,
+			description: d.description,
+			installs: d.installs,
+		}));
+		const shRows = skillsShQuery.data?.rows ?? [];
+
+		// Merge: convex results first, then skills.sh results not already in convex
+		const seen = new Set(convexRows.map((r) => r.fullId));
+		const merged = [...convexRows];
+		for (const row of shRows) {
+			if (!seen.has(row.fullId)) {
+				seen.add(row.fullId);
+				merged.push(row);
+			}
+		}
+		return merged;
+	})();
+
+	// Determine what to display
+	const isSearchMode = !!debouncedSearch;
+	const isLoading = isSearchMode
+		? convexSearchQuery.isLoading && skillsShQuery.isLoading
+		: browseQuery.isLoading;
+	const isFetching = isSearchMode
+		? convexSearchQuery.isFetching || skillsShQuery.isFetching
+		: browseQuery.isFetching;
+
+	let rows: SkillRow[];
+	let total: number;
+	if (isSearchMode) {
+		const all = searchResults ?? [];
+		total = all.length;
+		rows = all.slice(offset, offset + PAGE_SIZE);
+	} else {
+		const browseData = browseQuery.data as { rows: SkillRow[] } | undefined;
+		rows = (browseData?.rows ?? []).map((r) => ({
+			skillId: r.skillId,
+			fullId: r.fullId,
+			source: r.source,
+			description: r.description,
+			installs: r.installs,
+		}));
+		total = (countQuery.data as number | undefined) ?? 0;
+	}
+
 	const totalPages = Math.ceil(total / PAGE_SIZE);
 
 	const isAdded = useCallback(
-		(name: string) => currentSkills.some((s) => s.name === name),
+		(fullId: string) => currentSkills.some((s) => s.name === fullId),
 		[currentSkills],
 	);
+
+	const formatInstalls = (n: number) => {
+		if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+		if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+		return n.toString();
+	};
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -81,7 +177,7 @@ export function SkillsBrowser({
 				)}
 			</div>
 
-			{debouncedSearch && (
+			{isSearchMode && (
 				<div className="flex items-center gap-2">
 					<Badge variant="secondary" className="text-[10px]">
 						{total.toLocaleString()} results
@@ -100,7 +196,7 @@ export function SkillsBrowser({
 				<div className="flex flex-col items-center justify-center py-12 text-center">
 					<Zap size={24} className="mb-2 text-muted-foreground/40" />
 					<p className="text-sm text-muted-foreground">
-						{debouncedSearch
+						{isSearchMode
 							? "No skills match your search."
 							: "No skills available."}
 					</p>
@@ -108,14 +204,14 @@ export function SkillsBrowser({
 			) : (
 				<div className="grid gap-2 sm:grid-cols-2">
 					{rows.map((skill) => {
-						const added = isAdded(skill.name);
+						const added = isAdded(skill.fullId);
 						return (
 							<button
-								key={skill.name}
+								key={skill.fullId}
 								type="button"
 								onClick={() =>
 									onToggle({
-										name: skill.name,
+										name: skill.fullId,
 										description: skill.description,
 									})
 								}
@@ -131,16 +227,19 @@ export function SkillsBrowser({
 									tabIndex={-1}
 								/>
 								<div className="min-w-0 flex-1">
-									<p className="text-xs font-medium text-foreground">
-										{skill.skill_name}
-									</p>
-									{skill.name.includes("/") && (
-										<p className="text-[10px] leading-tight text-muted-foreground/50">
-											{skill.name.split("/").slice(0, -1).join("/")}
+									<div className="flex items-center gap-2">
+										<p className="text-xs font-medium text-foreground">
+											{skill.skillId}
 										</p>
-									)}
-									<p className="mt-0.5 text-[11px] leading-snug text-muted-foreground line-clamp-2">
-										{skill.description || skill.name}
+										{skill.installs > 0 && (
+											<span className="flex items-center gap-0.5 text-[10px] text-muted-foreground/60">
+												<Download size={10} />
+												{formatInstalls(skill.installs)}
+											</span>
+										)}
+									</div>
+									<p className="text-[10px] leading-tight text-muted-foreground/50">
+										{skill.source}
 									</p>
 								</div>
 							</button>

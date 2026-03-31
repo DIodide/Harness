@@ -462,11 +462,6 @@ function HarnessEditPage() {
 												<p className="text-xs font-medium text-foreground">
 													{displayName}
 												</p>
-												{skill.description && (
-													<p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-														{skill.description}
-													</p>
-												)}
 											</div>
 										</button>
 									);

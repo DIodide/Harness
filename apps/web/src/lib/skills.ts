@@ -1,9 +1,10 @@
-/** A skill row as returned by the HuggingFace catalog. */
+/** A skill as stored in the Convex skillsIndex table. */
 export interface SkillRow {
-	name: string;
-	skill_name: string;
+	skillId: string;
+	fullId: string;
+	source: string;
 	description: string;
-	code: string;
+	installs: number;
 }
 
 /** Paginated response shape for skill list/search queries. */
@@ -29,90 +30,91 @@ export const RECOMMENDED_SKILLS: RecommendedSkill[] = [
 	{
 		id: "vercel-react-best-practices",
 		skill: {
-			name: "supercent-io/skills-template/vercel-react-best-practices",
-			skill_name: "vercel-react-best-practices",
-			description:
-				"React and Next.js performance optimization guidelines from Vercel Engineering.",
-			code: "npx skills add https://github.com/supercent-io/skills-template --skill vercel-react-best-practices",
+			fullId: "vercel-labs/agent-skills/vercel-react-best-practices",
+			skillId: "vercel-react-best-practices",
+			source: "vercel-labs/agent-skills",
+			description: "",
+			installs: 263727,
 		},
 	},
 	{
 		id: "brainstorming",
 		skill: {
-			name: "wireless25/agentic-coding/brainstorming",
-			skill_name: "brainstorming",
-			description:
-				"Collaborative ideation and exploration before implementation. Encourages brainstorming options and discussing trade-offs before diving into code.",
-			code: "npx skills add https://github.com/wireless25/agentic-coding --skill brainstorming",
+			fullId: "obra/superpowers/brainstorming",
+			skillId: "brainstorming",
+			source: "obra/superpowers",
+			description: "",
+			installs: 81413,
 		},
 	},
 	{
-		id: "browser-use",
+		id: "agent-browser",
 		skill: {
-			name: "davila7/claude-code-templates/browser-automation",
-			skill_name: "browser-automation",
-			description:
-				"Browser automation for web testing, scraping, and agentic interactions using Playwright and Puppeteer.",
-			code: "npx skills add https://github.com/davila7/claude-code-templates --skill browser-automation",
+			fullId: "vercel-labs/agent-browser/agent-browser",
+			skillId: "agent-browser",
+			source: "vercel-labs/agent-browser",
+			description: "",
+			installs: 142765,
 		},
 	},
 	{
 		id: "pdf",
 		skill: {
-			name: "childbamboo/claude-code-marketplace-sample/pdf-vision-reader",
-			skill_name: "pdf-vision-reader",
-			description:
-				"Converts PDF pages to images and uses vision analysis to extract content including diagrams, charts, and visual elements.",
-			code: "npx skills add https://github.com/childbamboo/claude-code-marketplace-sample --skill pdf-vision-reader",
+			fullId: "anthropics/skills/pdf",
+			skillId: "pdf",
+			source: "anthropics/skills",
+			description: "",
+			installs: 56560,
 		},
 	},
 	{
 		id: "systematic-debugging",
 		skill: {
-			name: "bobmatnyc/claude-mpm-skills/systematic-debugging",
-			skill_name: "systematic-debugging",
-			description:
-				"Systematic debugging methodology emphasizing root cause analysis over quick fixes.",
-			code: "npx skills add https://github.com/bobmatnyc/claude-mpm-skills --skill systematic-debugging",
+			fullId: "obra/superpowers/systematic-debugging",
+			skillId: "systematic-debugging",
+			source: "obra/superpowers",
+			description: "",
+			installs: 45129,
 		},
 	},
 	{
 		id: "xlsx",
 		skill: {
-			name: "bobmatnyc/claude-mpm-skills/xlsx",
-			skill_name: "xlsx",
-			description: "Working with Excel files programmatically.",
-			code: "npx skills add https://github.com/bobmatnyc/claude-mpm-skills --skill xlsx",
+			fullId: "anthropics/skills/xlsx",
+			skillId: "xlsx",
+			source: "anthropics/skills",
+			description: "",
+			installs: 40484,
 		},
 	},
 	{
-		id: "code-review",
+		id: "requesting-code-review",
 		skill: {
-			name: "alinaqi/claude-bootstrap/code-review",
-			skill_name: "code-review",
-			description:
-				"Mandatory code reviews via /code-review before commits and deploys.",
-			code: "npx skills add https://github.com/alinaqi/claude-bootstrap --skill code-review",
+			fullId: "obra/superpowers/requesting-code-review",
+			skillId: "requesting-code-review",
+			source: "obra/superpowers",
+			description: "",
+			installs: 36359,
 		},
 	},
 	{
-		id: "database-schema-design",
+		id: "neon-postgres",
 		skill: {
-			name: "omer-metin/skills-for-antigravity/database-schema-design",
-			skill_name: "database-schema-design",
-			description:
-				"Database schema design covering data modeling, migrations, relationships, and scaling patterns.",
-			code: "npx skills add https://github.com/omer-metin/skills-for-antigravity --skill database-schema-design",
+			fullId: "neondatabase/agent-skills/neon-postgres",
+			skillId: "neon-postgres",
+			source: "neondatabase/agent-skills",
+			description: "",
+			installs: 15318,
 		},
 	},
 	{
-		id: "git-best-practices",
+		id: "git-commit",
 		skill: {
-			name: "0xbigboss/claude-code/git-best-practices",
-			skill_name: "git-best-practices",
-			description:
-				"Git workflow patterns for commits, branching, PRs, and history management.",
-			code: "npx skills add https://github.com/0xbigboss/claude-code --skill git-best-practices",
+			fullId: "github/awesome-copilot/git-commit",
+			skillId: "git-commit",
+			source: "github/awesome-copilot",
+			description: "",
+			installs: 19375,
 		},
 	},
 ];
