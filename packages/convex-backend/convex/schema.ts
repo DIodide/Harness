@@ -131,7 +131,7 @@ export default defineSchema({
 		.index("by_fullId", ["fullId"])
 		.index("by_installs", ["installs"])
 		.searchIndex("search_skills", {
-			searchField: "description",
+			searchField: "skillId",
 			filterFields: [],
 		}),
 

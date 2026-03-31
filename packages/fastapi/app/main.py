@@ -47,7 +47,6 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
         "http://127.0.0.1:57177",
-        "https://aab7-140-180-240-231.ngrok-free.app",
         "http://127.0.0.1:57609",
     ],
     allow_credentials=True,

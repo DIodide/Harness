@@ -107,6 +107,7 @@ import {
 	modelSupportsMedia,
 } from "../../lib/models";
 import { buildMultimodalContent } from "../../lib/multimodal";
+import type { SkillEntry } from "../../lib/skills";
 import {
 	type ConvoStreamState,
 	type StreamPart,
@@ -1614,70 +1615,43 @@ function McpFailureBanner({
 	);
 }
 
-function SkillsStatus({
-	skills,
-}: {
-	skills: Array<{ name: string; description: string }>;
-}) {
-	const [open, setOpen] = useState(false);
-	const ref = useRef<HTMLDivElement>(null);
-
-	useEffect(() => {
-		if (!open) return;
-		const handler = (e: MouseEvent) => {
-			if (ref.current && !ref.current.contains(e.target as Node)) {
-				setOpen(false);
-			}
-		};
-		document.addEventListener("mousedown", handler);
-		return () => document.removeEventListener("mousedown", handler);
-	}, [open]);
-
+function SkillsStatus({ skills }: { skills: SkillEntry[] }) {
 	if (skills.length === 0) return null;
 
 	return (
-		<div ref={ref} className="relative">
+		<DropdownMenu>
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<button
-						type="button"
-						onClick={() => setOpen((prev) => !prev)}
-						className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-					>
-						<Zap size={10} />
-						{skills.length} Skill{skills.length !== 1 && "s"}
-					</button>
+					<DropdownMenuTrigger asChild>
+						<button
+							type="button"
+							className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+						>
+							<Zap size={10} />
+							{skills.length} Skill{skills.length !== 1 && "s"}
+						</button>
+					</DropdownMenuTrigger>
 				</TooltipTrigger>
 				<TooltipContent>Active skills</TooltipContent>
 			</Tooltip>
 
-			<AnimatePresence>
-				{open && (
-					<motion.div
-						initial={{ opacity: 0, y: -4, scale: 0.97 }}
-						animate={{ opacity: 1, y: 0, scale: 1 }}
-						exit={{ opacity: 0, y: -4, scale: 0.97 }}
-						transition={{ duration: 0.15 }}
-						className="absolute left-0 top-full z-50 mt-1 w-72 border border-border bg-background shadow-lg"
-					>
-						<div className="border-b border-border px-3 py-2">
-							<span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-								Skills
+			<DropdownMenuContent align="start" className="w-72">
+				<div className="border-b border-border px-3 py-2">
+					<span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+						Skills
+					</span>
+				</div>
+				<div className="max-h-48 overflow-y-auto py-1">
+					{skills.map((skill) => (
+						<DropdownMenuItem key={skill.name} className="px-3 py-1.5">
+							<span className="truncate text-xs font-medium">
+								{skill.name.split("/").pop() ?? skill.name}
 							</span>
-						</div>
-						<div className="max-h-48 overflow-y-auto py-1">
-							{skills.map((skill) => (
-								<div key={skill.name} className="px-3 py-1.5">
-									<div className="truncate text-xs font-medium">
-										{skill.name.split("/").pop() ?? skill.name}
-									</div>
-								</div>
-							))}
-						</div>
-					</motion.div>
-				)}
-			</AnimatePresence>
-		</div>
+						</DropdownMenuItem>
+					))}
+				</div>
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }
 

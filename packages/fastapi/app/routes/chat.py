@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 
 import httpx
 from fastapi import APIRouter, Depends, Request
@@ -82,12 +83,162 @@ def _build_skills_system_block(skills: list[dict]) -> str:
     return "\n".join(lines)
 
 
+async def _resolve_github_repo(
+    http_client: httpx.AsyncClient,
+    source: str,
+) -> str | None:
+    """Resolve canonical owner/repo via GitHub API (handles org renames/redirects)."""
+    try:
+        resp = await http_client.get(
+            f"https://api.github.com/repos/{source}",
+            headers={"Accept": "application/vnd.github.v3+json"},
+            timeout=10.0,
+            follow_redirects=True,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("full_name")
+    except Exception:
+        pass
+    return None
+
+
+async def _search_skills_sh(
+    http_client: httpx.AsyncClient,
+    skill_id: str,
+) -> str | None:
+    """Query skills.sh search API to find the correct source for a skill ID."""
+    try:
+        resp = await http_client.get(
+            f"https://skills.sh/api/search?q={skill_id}&limit=20",
+            timeout=10.0,
+        )
+        if resp.status_code != 200:
+            return None
+        skills = resp.json().get("skills", [])
+        normalized = skill_id.replace(":", "-").lower()
+        for s in skills:
+            if s.get("skillId") == skill_id:
+                return s.get("source")
+        for s in skills:
+            if s.get("skillId", "").replace(":", "-").lower() == normalized:
+                return s.get("source")
+    except Exception:
+        pass
+    return None
+
+
+async def _fetch_skill_md_from_repo(
+    http_client: httpx.AsyncClient,
+    source: str,
+    skill_id: str,
+) -> str | None:
+    """Try to fetch SKILL.md from a specific repo, trying main & master branches."""
+    gh_raw = "https://raw.githubusercontent.com"
+    gh_api = "https://api.github.com"
+    gh_headers = {"Accept": "application/vnd.github.v3+json"}
+    bases = ["skills", ".agents/skills", ".claude/skills"]
+    branches = ["main", "master"]
+    normalized_id = skill_id.replace(":", "-").lower()
+    ids_to_try = [skill_id] + ([normalized_id] if normalized_id != skill_id else [])
+
+    # 1. Direct paths (both branches)
+    for branch in branches:
+        for sid in ids_to_try:
+            for base in bases:
+                try:
+                    resp = await http_client.get(
+                        f"{gh_raw}/{source}/{branch}/{base}/{sid}/SKILL.md",
+                        timeout=10.0,
+                    )
+                    if resp.status_code == 200:
+                        return resp.text
+                except Exception:
+                    continue
+
+        # 2. Repo-root SKILL.md
+        try:
+            resp = await http_client.get(
+                f"{gh_raw}/{source}/{branch}/SKILL.md", timeout=10.0
+            )
+            if resp.status_code == 200:
+                return resp.text
+        except Exception:
+            pass
+
+    # 3. Full repo tree search
+    for branch in branches:
+        try:
+            resp = await http_client.get(
+                f"{gh_api}/repos/{source}/git/trees/{branch}?recursive=1",
+                headers=gh_headers,
+                timeout=10.0,
+                follow_redirects=True,
+            )
+            if resp.status_code != 200:
+                continue
+
+            tree = resp.json().get("tree", [])
+            skill_files = [
+                e["path"]
+                for e in tree
+                if e.get("type") == "blob" and e["path"].endswith("/SKILL.md")
+            ]
+            if not skill_files:
+                continue
+
+            def _dir_name(p: str) -> str:
+                segs = p.split("/")
+                return segs[-2] if len(segs) >= 2 else ""
+
+            match = next(
+                (p for p in skill_files if _dir_name(p) in (skill_id, normalized_id)),
+                None,
+            ) or next(
+                (
+                    p for p in skill_files
+                    if (
+                        normalized_id in _dir_name(p).lower()
+                        or _dir_name(p).lower() in normalized_id
+                    )
+                ),
+                None,
+            )
+
+            if match:
+                md_resp = await http_client.get(
+                    f"{gh_raw}/{source}/{branch}/{match}", timeout=10.0
+                )
+                if md_resp.status_code == 200:
+                    return md_resp.text
+
+            root_md = next(
+                (p for p in skill_files if p.count("/") <= 1), None
+            )
+            if root_md:
+                md_resp = await http_client.get(
+                    f"{gh_raw}/{source}/{branch}/{root_md}", timeout=10.0
+                )
+                if md_resp.status_code == 200:
+                    return md_resp.text
+        except Exception:
+            pass
+
+    return None
+
+
 async def _handle_get_skill_content(
     http_client: httpx.AsyncClient,
     skill_name: str,
     allowed_skills: set[str],
 ) -> str:
-    """Fetch a skill's markdown detail from Convex, falling back to GitHub raw."""
+    """Fetch a skill's markdown detail from Convex, falling back to GitHub.
+
+    Resolution strategy:
+    1. Check Convex cache.
+    2. Try GitHub with original source (main & master branches, direct + tree).
+    3. Resolve repo via GitHub API (handles org renames like inferen-sh → inference-sh).
+    4. Query skills.sh search API to discover the correct source.
+    """
     if skill_name not in allowed_skills:
         return f"Error: Skill '{skill_name}' is not in the user's harness."
 
@@ -98,28 +249,51 @@ async def _handle_get_skill_content(
     if result and result.get("detail"):
         return result["detail"]
 
-    # Fallback: fetch SKILL.md directly from GitHub
     try:
         parts = skill_name.split("/")
         skill_id = parts[-1] if parts else skill_name
         source = "/".join(parts[:-1]) if len(parts) > 1 else ""
 
-        if source:
-            urls_to_try = [
-                f"https://raw.githubusercontent.com/{source}/main/skills/{skill_id}/SKILL.md",
-                f"https://raw.githubusercontent.com/{source}/main/.agents/skills/{skill_id}/SKILL.md",
-                f"https://raw.githubusercontent.com/{source}/main/.claude/skills/{skill_id}/SKILL.md",
-                f"https://raw.githubusercontent.com/{source}/main/SKILL.md",
-            ]
-            for url in urls_to_try:
-                try:
-                    resp = await http_client.get(url, timeout=10.0)
-                    if resp.status_code == 200:
-                        return resp.text
-                except Exception:
-                    continue
+        if not source:
+            return f"Could not retrieve content for skill '{skill_name}'."
+
+        sources_tried: set[str] = set()
+
+        # Attempt 1: original source
+        sources_tried.add(source)
+        content = await _fetch_skill_md_from_repo(http_client, source, skill_id)
+        if content:
+            return content
+
+        # Attempt 2: resolve via GitHub API (handles org renames)
+        resolved = await _resolve_github_repo(http_client, source)
+        if resolved and resolved not in sources_tried:
+            sources_tried.add(resolved)
+            logger.info("Skill '%s': GitHub resolved '%s' → '%s'", skill_name, source, resolved)
+            content = await _fetch_skill_md_from_repo(http_client, resolved, skill_id)
+            if content:
+                return content
+
+        # Attempt 3: ask skills.sh for the correct source
+        sh_source = await _search_skills_sh(http_client, skill_id)
+        if sh_source and sh_source not in sources_tried:
+            sources_tried.add(sh_source)
+            logger.info("Skill '%s': skills.sh resolved source → '%s'", skill_name, sh_source)
+            content = await _fetch_skill_md_from_repo(http_client, sh_source, skill_id)
+            if content:
+                return content
+
+            # The skills.sh source might also need GitHub resolution
+            sh_resolved = await _resolve_github_repo(http_client, sh_source)
+            if sh_resolved and sh_resolved not in sources_tried:
+                sources_tried.add(sh_resolved)
+                content = await _fetch_skill_md_from_repo(http_client, sh_resolved, skill_id)
+                if content:
+                    return content
+
+        logger.warning("Skill '%s': exhausted all sources %s", skill_name, sources_tried)
     except Exception:
-        logger.exception("Failed to fetch skill detail from GitHub for '%s'", skill_name)
+        logger.exception("Failed to fetch skill detail for '%s'", skill_name)
 
     return f"Could not retrieve content for skill '{skill_name}'."
 

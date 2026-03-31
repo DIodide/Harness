@@ -3,10 +3,9 @@ import {
 	action,
 	internalMutation,
 	internalQuery,
-	mutation,
 	query,
 } from "./_generated/server";
-import { api, internal } from "./_generated/api";
+import { internal } from "./_generated/api";
 
 // ── skillDetails (full SKILL.md content, cached) ────────────────────
 
@@ -64,18 +63,16 @@ export const upsertSkillDetail = internalMutation({
 // ── skillsIndex (browseable catalog) ────────────────────────────────
 
 export const browseSkills = query({
-	args: { offset: v.number(), limit: v.number() },
+	args: {
+		cursor: v.union(v.string(), v.null()),
+		numItems: v.number(),
+	},
 	handler: async (ctx, args) => {
-		const rows = await ctx.db
+		return await ctx.db
 			.query("skillsIndex")
 			.withIndex("by_installs")
 			.order("desc")
-			.take(args.offset + args.limit);
-		return {
-			rows: rows.slice(args.offset),
-			offset: args.offset,
-			limit: args.limit,
-		};
+			.paginate({ cursor: args.cursor, numItems: args.numItems });
 	},
 });
 
@@ -84,22 +81,15 @@ export const searchSkillsIndex = query({
 	handler: async (ctx, args) => {
 		const results = await ctx.db
 			.query("skillsIndex")
-			.withSearchIndex("search_skills", (q) => q.search("description", args.query))
+			.withSearchIndex("search_skills", (q) => q.search("skillId", args.query))
 			.take(args.limit);
 		return results;
 	},
 });
 
-export const getSkillsIndexCount = query({
-	args: {},
-	handler: async (ctx) => {
-		const all = await ctx.db.query("skillsIndex").collect();
-		return all.length;
-	},
-});
 
 /** Upsert a batch of skills discovered from skills.sh search API */
-export const upsertSkillsIndexBatch = mutation({
+export const upsertSkillsIndexBatch = internalMutation({
 	args: {
 		skills: v.array(
 			v.object({
@@ -149,6 +139,205 @@ export const checkExistingSkills = internalQuery({
 });
 
 /**
+ * Try to fetch SKILL.md from GitHub for a given source/skillId.
+ *
+ * Resolution strategy (each step tried with both main & master branches):
+ * 1. Direct raw paths: skills/, .agents/skills/, .claude/skills/, repo-root
+ * 2. GitHub repo tree API to find SKILL.md anywhere (handles non-standard dirs)
+ *
+ * When the original source fails entirely, we attempt:
+ * 3. GitHub API repo resolution (handles org renames like inferen-sh → inference-sh)
+ * 4. skills.sh search API to discover the correct/current source
+ */
+
+/** Normalize a skillId for fuzzy directory matching (colons → hyphens, lowercase). */
+function normalizeSkillId(id: string): string {
+	return id.replace(/:/g, "-").toLowerCase();
+}
+
+/** Resolve the canonical owner/repo via GitHub API (follows renames/redirects). */
+async function resolveGitHubRepo(source: string): Promise<string | null> {
+	try {
+		const resp = await fetch(`https://api.github.com/repos/${source}`, {
+			headers: { Accept: "application/vnd.github.v3+json" },
+		});
+		if (resp.ok) {
+			const data = (await resp.json()) as { full_name?: string };
+			return data.full_name ?? null;
+		}
+	} catch {
+		// resolve failed
+	}
+	return null;
+}
+
+/** Query skills.sh search API to find the correct source for a skill ID. */
+async function searchSkillsSh(skillId: string): Promise<string | null> {
+	try {
+		const resp = await fetch(
+			`https://skills.sh/api/search?q=${encodeURIComponent(skillId)}&limit=20`,
+		);
+		if (!resp.ok) return null;
+		const data = (await resp.json()) as {
+			skills: Array<{ skillId: string; source: string }>;
+		};
+		const normalized = normalizeSkillId(skillId);
+		// Exact match first
+		for (const s of data.skills ?? []) {
+			if (s.skillId === skillId) return s.source;
+		}
+		// Fuzzy normalized match
+		for (const s of data.skills ?? []) {
+			if (normalizeSkillId(s.skillId) === normalized) return s.source;
+		}
+	} catch {
+		// search failed
+	}
+	return null;
+}
+
+/**
+ * Try to fetch SKILL.md from a specific repo, trying both main and master
+ * branches, direct paths, and full tree search.
+ */
+async function fetchSkillMdFromRepo(
+	source: string,
+	skillId: string,
+): Promise<string | null> {
+	const bases = ["skills", ".agents/skills", ".claude/skills"];
+	const ghApi = "https://api.github.com";
+	const ghRaw = "https://raw.githubusercontent.com";
+	const ghHeaders = { Accept: "application/vnd.github.v3+json" };
+	const normalizedId = normalizeSkillId(skillId);
+	const branches = ["main", "master"];
+
+	const idsToTry = [skillId, ...(normalizedId !== skillId ? [normalizedId] : [])];
+
+	// 1. Try direct paths (both branches)
+	for (const branch of branches) {
+		for (const id of idsToTry) {
+			for (const base of bases) {
+				try {
+					const resp = await fetch(
+						`${ghRaw}/${source}/${branch}/${base}/${id}/SKILL.md`,
+					);
+					if (resp.ok) return await resp.text();
+				} catch {
+					// Try next
+				}
+			}
+		}
+
+		// 2. Try repo-root SKILL.md
+		try {
+			const resp = await fetch(`${ghRaw}/${source}/${branch}/SKILL.md`);
+			if (resp.ok) return await resp.text();
+		} catch {
+			// Continue
+		}
+	}
+
+	// 3. Use the repo tree API to find SKILL.md anywhere
+	for (const branch of branches) {
+		try {
+			const resp = await fetch(
+				`${ghApi}/repos/${source}/git/trees/${branch}?recursive=1`,
+				{ headers: ghHeaders },
+			);
+			if (!resp.ok) continue;
+
+			const data = (await resp.json()) as {
+				tree: Array<{ path: string; type: string }>;
+			};
+			const skillFiles = data.tree
+				.filter((e) => e.type === "blob" && e.path.endsWith("/SKILL.md"))
+				.map((e) => e.path);
+
+			if (skillFiles.length === 0) continue;
+
+			// Exact dir name match first, then fuzzy
+			const match =
+				skillFiles.find((p) => {
+					const dir = p.split("/").slice(-2, -1)[0];
+					return dir === skillId || dir === normalizedId;
+				}) ??
+				skillFiles.find((p) => {
+					const dir = p.split("/").slice(-2, -1)[0] ?? "";
+					const normDir = dir.toLowerCase();
+					return (
+						normalizedId.includes(normDir) ||
+						normDir.includes(normalizedId)
+					);
+				});
+
+			if (match) {
+				const mdResp = await fetch(
+					`${ghRaw}/${source}/${branch}/${match}`,
+				);
+				if (mdResp.ok) return await mdResp.text();
+			}
+
+			// Check for a shallow SKILL.md (e.g. skill/SKILL.md at repo root)
+			const rootSkillMd = skillFiles.find(
+				(p) => p.split("/").length <= 2,
+			);
+			if (rootSkillMd) {
+				const mdResp = await fetch(
+					`${ghRaw}/${source}/${branch}/${rootSkillMd}`,
+				);
+				if (mdResp.ok) return await mdResp.text();
+			}
+		} catch {
+			// Tree fetch failed, try next branch
+		}
+	}
+
+	return null;
+}
+
+/**
+ * Robust SKILL.md fetcher: tries the original source, then resolves via
+ * GitHub API (org renames) and skills.sh (wrong/stale source paths).
+ */
+async function fetchSkillMd(
+	source: string,
+	skillId: string,
+): Promise<string | null> {
+	const sourcesTried = new Set<string>();
+
+	// Attempt 1: original source
+	sourcesTried.add(source);
+	const direct = await fetchSkillMdFromRepo(source, skillId);
+	if (direct) return direct;
+
+	// Attempt 2: resolve via GitHub API (handles org renames)
+	const resolved = await resolveGitHubRepo(source);
+	if (resolved && !sourcesTried.has(resolved)) {
+		sourcesTried.add(resolved);
+		const fromResolved = await fetchSkillMdFromRepo(resolved, skillId);
+		if (fromResolved) return fromResolved;
+	}
+
+	// Attempt 3: ask skills.sh for the correct source
+	const shSource = await searchSkillsSh(skillId);
+	if (shSource && !sourcesTried.has(shSource)) {
+		sourcesTried.add(shSource);
+		const fromSh = await fetchSkillMdFromRepo(shSource, skillId);
+		if (fromSh) return fromSh;
+
+		// The skills.sh source might also need GitHub resolution
+		const shResolved = await resolveGitHubRepo(shSource);
+		if (shResolved && !sourcesTried.has(shResolved)) {
+			sourcesTried.add(shResolved);
+			const fromShResolved = await fetchSkillMdFromRepo(shResolved, skillId);
+			if (fromShResolved) return fromShResolved;
+		}
+	}
+
+	return null;
+}
+
+/**
  * Background action called after saving a harness.
  * Fetches SKILL.md content from GitHub and caches in skillDetails.
  */
@@ -172,42 +361,17 @@ export const ensureSkillDetails = action({
 
 			if (!source) continue;
 
-			// Try fetching SKILL.md from GitHub raw with path fallbacks
-			const urlsToTry = [
-				`https://raw.githubusercontent.com/${source}/main/skills/${skillId}/SKILL.md`,
-				`https://raw.githubusercontent.com/${source}/main/.agents/skills/${skillId}/SKILL.md`,
-				`https://raw.githubusercontent.com/${source}/main/.claude/skills/${skillId}/SKILL.md`,
-				`https://raw.githubusercontent.com/${source}/main/SKILL.md`,
-			];
+			const detail = await fetchSkillMd(source, skillId);
+			if (!detail) continue;
 
-			let detail = "";
 			let description = "";
-			for (const url of urlsToTry) {
-				try {
-					const resp = await fetch(url);
-					if (resp.ok) {
-						const text = await resp.text();
-						detail = text;
-						// Extract description from YAML frontmatter
-						const fmMatch = text.match(
-							/^---\s*\n([\s\S]*?)\n---/,
-						);
-						if (fmMatch) {
-							const descMatch = fmMatch[1].match(
-								/description:\s*(.+)/,
-							);
-							if (descMatch) {
-								description = descMatch[1].trim().replace(/^["']|["']$/g, "");
-							}
-						}
-						break;
-					}
-				} catch {
-					// Try next URL
+			const fmMatch = detail.match(/^---\s*\n([\s\S]*?)\n---/);
+			if (fmMatch) {
+				const descMatch = fmMatch[1].match(/description:\s*(.+)/);
+				if (descMatch) {
+					description = descMatch[1].trim().replace(/^["']|["']$/g, "");
 				}
 			}
-
-			if (!detail) continue;
 
 			await ctx.runMutation(internal.skills.upsertSkillDetail, {
 				name,
@@ -260,7 +424,7 @@ export const discoverSkillsFromSearch = action({
 		);
 		if (newSkills.length === 0) return 0;
 
-		// For each new skill, try to fetch description from GitHub SKILL.md
+		// For each new skill, use the robust fetcher to get SKILL.md
 		const toUpsert: Array<{
 			skillId: string;
 			fullId: string;
@@ -271,30 +435,14 @@ export const discoverSkillsFromSearch = action({
 
 		for (const skill of newSkills) {
 			let description = "";
-			const urlsToTry = [
-				`https://raw.githubusercontent.com/${skill.source}/main/skills/${skill.skillId}/SKILL.md`,
-				`https://raw.githubusercontent.com/${skill.source}/main/.agents/skills/${skill.skillId}/SKILL.md`,
-				`https://raw.githubusercontent.com/${skill.source}/main/.claude/skills/${skill.skillId}/SKILL.md`,
-			];
-
-			for (const url of urlsToTry) {
-				try {
-					const resp = await fetch(url);
-					if (resp.ok) {
-						const text = await resp.text();
-						const fmMatch = text.match(/^---\s*\n([\s\S]*?)\n---/);
-						if (fmMatch) {
-							const descMatch = fmMatch[1].match(
-								/description:\s*(.+)/,
-							);
-							if (descMatch) {
-								description = descMatch[1].trim().replace(/^["']|["']$/g, "");
-							}
-						}
-						break;
+			const detail = await fetchSkillMd(skill.source, skill.skillId);
+			if (detail) {
+				const fmMatch = detail.match(/^---\s*\n([\s\S]*?)\n---/);
+				if (fmMatch) {
+					const descMatch = fmMatch[1].match(/description:\s*(.+)/);
+					if (descMatch) {
+						description = descMatch[1].trim().replace(/^["']|["']$/g, "");
 					}
-				} catch {
-					// Try next URL
 				}
 			}
 
@@ -308,7 +456,7 @@ export const discoverSkillsFromSearch = action({
 		}
 
 		if (toUpsert.length > 0) {
-			return await ctx.runMutation(api.skills.upsertSkillsIndexBatch, {
+			return await ctx.runMutation(internal.skills.upsertSkillsIndexBatch, {
 				skills: toUpsert,
 			});
 		}

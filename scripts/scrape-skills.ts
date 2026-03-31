@@ -144,7 +144,7 @@ async function upsertToConvex(
 	for (let i = 0; i < skills.length; i += chunkSize) {
 		const chunk = skills.slice(i, i + chunkSize);
 		try {
-			const resp = await fetch(`${CONVEX_URL}/api/mutation`, {
+			const resp = await fetch(`${CONVEX_URL}/api/run`, {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",

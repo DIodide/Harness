@@ -29,7 +29,10 @@ export function SkillsBrowser({
 }) {
 	const [search, setSearch] = useState("");
 	const [debouncedSearch, setDebouncedSearch] = useState("");
-	const [page, setPage] = useState(0);
+	const [searchPage, setSearchPage] = useState(0);
+	// Cursor stack: index 0 is null (first page), subsequent entries are continueCursor values
+	const [cursorStack, setCursorStack] = useState<(string | null)[]>([null]);
+	const [browsePageIndex, setBrowsePageIndex] = useState(0);
 	const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
 	const discoverSkillsFn = useConvexAction(api.skills.discoverSkillsFromSearch);
@@ -38,25 +41,23 @@ export function SkillsBrowser({
 		clearTimeout(debounceRef.current);
 		debounceRef.current = setTimeout(() => {
 			setDebouncedSearch(search);
-			setPage(0);
+			setSearchPage(0);
+			setCursorStack([null]);
+			setBrowsePageIndex(0);
 		}, 300);
 		return () => clearTimeout(debounceRef.current);
 	}, [search]);
 
-	const offset = page * PAGE_SIZE;
+	const currentCursor = cursorStack[browsePageIndex] ?? null;
 
-	// Browse mode: paginated query from Convex skillsIndex
+	// Browse mode: cursor-based paginated query from Convex skillsIndex
 	const browseQuery = useQuery({
-		...convexQuery(api.skills.browseSkills, { offset, limit: PAGE_SIZE }),
+		...convexQuery(api.skills.browseSkills, {
+			cursor: currentCursor,
+			numItems: PAGE_SIZE,
+		}),
 		placeholderData: keepPreviousData,
 		enabled: !debouncedSearch,
-	});
-
-	// Total count (separate lightweight query, cached independently)
-	const countQuery = useQuery({
-		...convexQuery(api.skills.getSkillsIndexCount, {}),
-		enabled: !debouncedSearch,
-		staleTime: 30_000,
 	});
 
 	// Search mode: Convex full-text search
@@ -75,12 +76,19 @@ export function SkillsBrowser({
 		enabled: !!debouncedSearch,
 	});
 
+	// Track which fullIds we've already sent to discover in this session
+	const seenFullIdsRef = useRef(new Set<string>());
+
 	// When skills.sh returns results, fire-and-forget discover new ones into our index
 	useEffect(() => {
 		if (!skillsShQuery.data?.raw?.length) return;
-		const raw = skillsShQuery.data.raw;
+		const unseen = skillsShQuery.data.raw.filter(
+			(s) => !seenFullIdsRef.current.has(s.id),
+		);
+		if (unseen.length === 0) return;
+		for (const s of unseen) seenFullIdsRef.current.add(s.id);
 		discoverSkillsFn({
-			skills: raw.map((s) => ({
+			skills: unseen.map((s) => ({
 				skillId: s.skillId,
 				fullId: s.id,
 				source: s.source,
@@ -123,24 +131,50 @@ export function SkillsBrowser({
 		: browseQuery.isFetching;
 
 	let rows: SkillRow[];
-	let total: number;
+	let hasMore: boolean;
+	let page: number;
 	if (isSearchMode) {
 		const all = searchResults ?? [];
-		total = all.length;
+		const offset = searchPage * PAGE_SIZE;
 		rows = all.slice(offset, offset + PAGE_SIZE);
+		hasMore = offset + PAGE_SIZE < all.length;
+		page = searchPage;
 	} else {
-		const browseData = browseQuery.data as { rows: SkillRow[] } | undefined;
-		rows = (browseData?.rows ?? []).map((r) => ({
+		const browseData = browseQuery.data as
+			| { page: SkillRow[]; isDone: boolean; continueCursor: string }
+			| undefined;
+		rows = (browseData?.page ?? []).map((r) => ({
 			skillId: r.skillId,
 			fullId: r.fullId,
 			source: r.source,
 			description: r.description,
 			installs: r.installs,
 		}));
-		total = (countQuery.data as number | undefined) ?? 0;
+		hasMore = browseData ? !browseData.isDone : false;
+		page = browsePageIndex;
 	}
 
-	const totalPages = Math.ceil(total / PAGE_SIZE);
+	// Cache the continueCursor for the next page when browse data arrives
+	const browseContinueCursor =
+		!isSearchMode && browseQuery.data
+			? (browseQuery.data as { continueCursor: string; isDone: boolean })
+					.continueCursor
+			: null;
+	const browseIsDone =
+		!isSearchMode && browseQuery.data
+			? (browseQuery.data as { isDone: boolean }).isDone
+			: true;
+
+	useEffect(() => {
+		if (browseContinueCursor && !browseIsDone) {
+			setCursorStack((prev) => {
+				if (prev[browsePageIndex + 1] === browseContinueCursor) return prev;
+				const next = prev.slice(0, browsePageIndex + 1);
+				next.push(browseContinueCursor);
+				return next;
+			});
+		}
+	}, [browseContinueCursor, browseIsDone, browsePageIndex]);
 
 	const isAdded = useCallback(
 		(fullId: string) => currentSkills.some((s) => s.name === fullId),
@@ -180,7 +214,7 @@ export function SkillsBrowser({
 			{isSearchMode && (
 				<div className="flex items-center gap-2">
 					<Badge variant="secondary" className="text-[10px]">
-						{total.toLocaleString()} results
+						{(searchResults ?? []).length.toLocaleString()} results
 					</Badge>
 					{isFetching && (
 						<Loader2 size={12} className="animate-spin text-muted-foreground" />
@@ -248,25 +282,31 @@ export function SkillsBrowser({
 				</div>
 			)}
 
-			{totalPages > 1 && (
+			{(page > 0 || hasMore) && (
 				<div className="flex items-center justify-between border-t border-border pt-3">
 					<Button
 						variant="outline"
 						size="sm"
-						onClick={() => setPage((p) => Math.max(0, p - 1))}
+						onClick={() => {
+							if (isSearchMode) setSearchPage((p) => Math.max(0, p - 1));
+							else setBrowsePageIndex((p) => Math.max(0, p - 1));
+						}}
 						disabled={page === 0}
 					>
 						<ArrowLeft size={12} />
 						Prev
 					</Button>
 					<span className="text-[11px] text-muted-foreground">
-						Page {page + 1} of {totalPages.toLocaleString()}
+						Page {page + 1}
 					</span>
 					<Button
 						variant="outline"
 						size="sm"
-						onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-						disabled={page >= totalPages - 1}
+						onClick={() => {
+							if (isSearchMode) setSearchPage((p) => p + 1);
+							else setBrowsePageIndex((p) => p + 1);
+						}}
+						disabled={!hasMore}
 					>
 						Next
 						<ArrowRight size={12} />
