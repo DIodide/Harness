@@ -1032,22 +1032,23 @@ function ChatPage() {
 						activeHarness={activeHarness}
 						sessionModel={
 						userSettings?.modelSelectorMode === "harness" ? null : sessionModel
-					}
-					modelSelectorMode={
-						(userSettings?.modelSelectorMode as "session" | "harness") ??
-						"session"
-					}
-					onSessionModelChange={(model) => {
-						if (
-							userSettings?.modelSelectorMode === "harness" &&
-							model !== null &&
-							activeHarnessId
-						) {
-							updateHarness.mutate({ id: activeHarnessId, model });
-						} else {
-							setSessionModel(model);
 						}
-					}}
+						modelSelectorMode={
+							(userSettings?.modelSelectorMode as "session" | "harness") ??
+							"session"
+						}
+						onSessionModelChange={(model) => {
+							if (
+								userSettings?.modelSelectorMode === "harness" &&
+								model !== null &&
+								activeHarnessId &&
+								model !== activeHarness?.model
+							) {
+								updateHarness.mutate({ id: activeHarnessId, model });
+							} else {
+								setSessionModel(model);
+							}
+						}}
 						onConvoCreated={handleSelectConversation}
 						isStreaming={isActiveConvoStreaming}
 						onStream={chatStream.stream}
