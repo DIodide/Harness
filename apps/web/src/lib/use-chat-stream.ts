@@ -72,9 +72,10 @@ export interface ChatStreamRequest {
 		mcp_servers: Array<{
 			name: string;
 			url: string;
-			auth_type: "none" | "bearer" | "oauth";
+			auth_type: "none" | "bearer" | "oauth" | "tiger_junction";
 			auth_token?: string;
 		}>;
+		skills: Array<{ name: string; description: string }>;
 		name: string;
 		harness_id?: string;
 		sandbox_enabled?: boolean;

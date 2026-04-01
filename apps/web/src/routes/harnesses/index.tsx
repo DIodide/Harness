@@ -228,7 +228,7 @@ function HarnessGroup({
 		mcpServers: Array<{
 			name: string;
 			url: string;
-			authType: "none" | "bearer" | "oauth";
+			authType: "none" | "bearer" | "oauth" | "tiger_junction";
 			authToken?: string;
 		}>;
 		skills: string[];
@@ -283,7 +283,7 @@ function HarnessCard({
 		mcpServers: Array<{
 			name: string;
 			url: string;
-			authType: "none" | "bearer" | "oauth";
+			authType: "none" | "bearer" | "oauth" | "tiger_junction";
 			authToken?: string;
 		}>;
 		skills: string[];

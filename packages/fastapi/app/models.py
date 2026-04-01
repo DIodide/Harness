@@ -6,8 +6,13 @@ from pydantic import BaseModel, Field
 class McpServer(BaseModel):
     name: str
     url: str
-    auth_type: Literal["none", "bearer", "oauth"] = "none"
+    auth_type: Literal["none", "bearer", "oauth", "tiger_junction"] = "none"
     auth_token: str | None = None
+
+
+class SkillRef(BaseModel):
+    name: str
+    description: str = ""
 
 
 class SandboxConfig(BaseModel):
@@ -23,6 +28,7 @@ class SandboxConfig(BaseModel):
 class HarnessConfig(BaseModel):
     model: str
     mcp_servers: list[McpServer] = []
+    skills: list[SkillRef] = []
     name: str
     harness_id: str | None = None
     sandbox_enabled: bool = False

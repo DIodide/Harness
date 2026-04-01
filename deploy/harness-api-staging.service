@@ -1,0 +1,15 @@
+[Unit]
+Description=Harness FastAPI Backend (Staging)
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/opt/harness-api-staging
+EnvironmentFile=/opt/harness-api-staging/.env
+ExecStart=/opt/harness-api-staging/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8001
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

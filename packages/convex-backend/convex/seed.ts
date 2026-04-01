@@ -19,7 +19,11 @@ export const seedAll = internalMutation({
 			model: "claude-sonnet-4",
 			status: "started",
 			mcpServers: [],
-			skills: ["coding", "debugging", "devops"],
+			skills: [
+				{ name: "coding", description: "General coding assistance" },
+				{ name: "debugging", description: "Debugging and troubleshooting" },
+				{ name: "devops", description: "DevOps and infrastructure" },
+			],
 			userId,
 			lastUsedAt: Date.now(),
 		});
@@ -29,7 +33,10 @@ export const seedAll = internalMutation({
 			model: "gpt-4o",
 			status: "started",
 			mcpServers: [],
-			skills: ["research", "writing"],
+			skills: [
+				{ name: "research", description: "Research and analysis" },
+				{ name: "writing", description: "Technical writing" },
+			],
 			userId,
 			lastUsedAt: Date.now() - 86400000,
 		});
@@ -39,7 +46,7 @@ export const seedAll = internalMutation({
 			model: "gemini-2.5-pro",
 			status: "stopped",
 			mcpServers: [],
-			skills: ["devops"],
+			skills: [{ name: "devops", description: "DevOps and infrastructure" }],
 			userId,
 			lastUsedAt: Date.now() - 172800000,
 		});
@@ -49,7 +56,7 @@ export const seedAll = internalMutation({
 			model: "gpt-4o",
 			status: "stopped",
 			mcpServers: [],
-			skills: ["analysis"],
+			skills: [{ name: "analysis", description: "Data analysis" }],
 			userId,
 			lastUsedAt: Date.now() - 259200000,
 		});
@@ -59,7 +66,10 @@ export const seedAll = internalMutation({
 			model: "claude-opus-4",
 			status: "draft",
 			mcpServers: [],
-			skills: ["writing", "research"],
+			skills: [
+				{ name: "writing", description: "Technical writing" },
+				{ name: "research", description: "Research and analysis" },
+			],
 			userId,
 		});
 
@@ -247,7 +257,11 @@ export const clearAndReseed = internalMutation({
 			model: "claude-sonnet-4",
 			status: "started",
 			mcpServers: [],
-			skills: ["coding", "debugging", "devops"],
+			skills: [
+				{ name: "coding", description: "General coding assistance" },
+				{ name: "debugging", description: "Debugging and troubleshooting" },
+				{ name: "devops", description: "DevOps and infrastructure" },
+			],
 			userId,
 			lastUsedAt: Date.now(),
 		});
@@ -257,7 +271,10 @@ export const clearAndReseed = internalMutation({
 			model: "gpt-4o",
 			status: "started",
 			mcpServers: [],
-			skills: ["research", "writing"],
+			skills: [
+				{ name: "research", description: "Research and analysis" },
+				{ name: "writing", description: "Technical writing" },
+			],
 			userId,
 			lastUsedAt: Date.now() - 86400000,
 		});
@@ -267,7 +284,7 @@ export const clearAndReseed = internalMutation({
 			model: "gemini-2.5-pro",
 			status: "stopped",
 			mcpServers: [],
-			skills: ["devops"],
+			skills: [{ name: "devops", description: "DevOps and infrastructure" }],
 			userId,
 			lastUsedAt: Date.now() - 172800000,
 		});
