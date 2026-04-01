@@ -35,6 +35,7 @@ import {
 	User,
 	Wrench,
 	X,
+	Zap,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import React, {
@@ -103,6 +104,7 @@ import {
 } from "../../components/ui/tooltip";
 import { env } from "../../env";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
+import type { McpAuthType } from "../../lib/mcp";
 import {
 	acceptString,
 	allowedMimeTypes,
@@ -115,6 +117,7 @@ import {
 	SandboxPanelProvider,
 	useSandboxPanel,
 } from "../../lib/sandbox-panel-context";
+import type { SkillEntry } from "../../lib/skills";
 import {
 	type ConvoStreamState,
 	type StreamPart,
@@ -690,11 +693,17 @@ function ChatPage() {
 					mcp_servers: activeHarness.mcpServers.map((s) => ({
 						name: s.name,
 						url: s.url,
-						auth_type: s.authType as "none" | "bearer" | "oauth",
+						auth_type: s.authType as
+							| "none"
+							| "bearer"
+							| "oauth"
+							| "tiger_junction",
 						auth_token: s.authToken,
 					})),
+					skills: activeHarness.skills ?? [],
 					name: activeHarness.name,
 					harness_id: activeHarness._id,
+
 					sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
 					sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
 					sandbox_config: (activeHarness as any).sandboxConfig
@@ -772,9 +781,14 @@ function ChatPage() {
 				mcp_servers: activeHarness.mcpServers.map((s) => ({
 					name: s.name,
 					url: s.url,
-					auth_type: s.authType as "none" | "bearer" | "oauth",
+					auth_type: s.authType as
+						| "none"
+						| "bearer"
+						| "oauth"
+						| "tiger_junction",
 					auth_token: s.authToken,
 				})),
+				skills: activeHarness.skills ?? [],
 				name: activeHarness.name,
 				harness_id: activeHarness._id,
 				sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
@@ -866,9 +880,14 @@ function ChatPage() {
 						mcp_servers: activeHarness.mcpServers.map((s) => ({
 							name: s.name,
 							url: s.url,
-							auth_type: s.authType as "none" | "bearer" | "oauth",
+							auth_type: s.authType as
+								| "none"
+								| "bearer"
+								| "oauth"
+								| "tiger_junction",
 							auth_token: s.authToken,
 						})),
+						skills: activeHarness.skills ?? [],
 						name: activeHarness.name,
 					},
 					conversation_id: newConvoId,
@@ -1666,6 +1685,46 @@ function McpFailureBanner({
 	);
 }
 
+function SkillsStatus({ skills }: { skills: SkillEntry[] }) {
+	if (skills.length === 0) return null;
+
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<button
+							type="button"
+							className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+						>
+							<Zap size={10} />
+							{skills.length} Skill{skills.length !== 1 && "s"}
+						</button>
+					</TooltipTrigger>
+					<TooltipContent>Active skills</TooltipContent>
+				</Tooltip>
+			</DropdownMenuTrigger>
+
+			<DropdownMenuContent align="start" className="w-72">
+				<div className="border-b border-border px-3 py-2">
+					<span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+						Skills
+					</span>
+				</div>
+				<div className="max-h-48 overflow-y-auto py-1">
+					{skills.map((skill) => (
+						<DropdownMenuItem key={skill.name} className="px-3 py-1.5">
+							<span className="truncate text-xs font-medium">
+								{skill.name.split("/").pop() ?? skill.name}
+							</span>
+						</DropdownMenuItem>
+					))}
+				</div>
+			</DropdownMenuContent>
+		</DropdownMenu>
+	);
+}
+
 function ChatHeader({
 	harness,
 	harnesses,
@@ -1683,9 +1742,10 @@ function ChatHeader({
 		mcpServers: Array<{
 			name: string;
 			url: string;
-			authType: "none" | "bearer" | "oauth";
+			authType: McpAuthType;
 			authToken?: string;
 		}>;
+		skills: SkillEntry[];
 	};
 	harnesses: Array<{
 		_id: Id<"harnesses">;
@@ -1758,6 +1818,10 @@ function ChatHeader({
 						servers={harness.mcpServers}
 						healthStatuses={mcpHealthStatuses}
 					/>
+				)}
+
+				{harness && harness.skills.length > 0 && (
+					<SkillsStatus skills={harness.skills} />
 				)}
 
 				{harness && (harness as any).sandboxEnabled && <SandboxBadge />}
@@ -2161,7 +2225,7 @@ function ChatMessages({
 									]
 								: [];
 						const editVersionIdx =
-							editAllVersionIds.length === 0
+							editAllVersionIds.length === 0 || editVersionId === undefined
 								? -1
 								: editAllVersionIds.indexOf(editVersionId);
 						return (
@@ -2838,9 +2902,10 @@ function ChatInput({
 		mcpServers: Array<{
 			name: string;
 			url: string;
-			authType: "none" | "bearer" | "oauth";
+			authType: McpAuthType;
 			authToken?: string;
 		}>;
+		skills: SkillEntry[];
 	};
 	onConvoCreated: (id: Id<"conversations">) => void;
 	isStreaming: boolean;
@@ -2854,9 +2919,10 @@ function ChatInput({
 			mcp_servers: Array<{
 				name: string;
 				url: string;
-				auth_type: "none" | "bearer" | "oauth";
+				auth_type: McpAuthType;
 				auth_token?: string;
 			}>;
+			skills: SkillEntry[];
 			name: string;
 		};
 		conversation_id: string;
@@ -3014,9 +3080,10 @@ function ChatInput({
 			mcp_servers: activeHarness.mcpServers.map((s) => ({
 				name: s.name,
 				url: s.url,
-				auth_type: s.authType as "none" | "bearer" | "oauth",
+				auth_type: s.authType as McpAuthType,
 				auth_token: s.authToken,
 			})),
+			skills: activeHarness.skills ?? [],
 			name: activeHarness.name,
 			harness_id: activeHarness._id,
 			sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
@@ -3183,6 +3250,7 @@ function ChatInput({
 	const showStopButton = isStreaming && !text.trim();
 
 	return (
+		// biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop drop zone
 		<div
 			className={cn(
 				"relative border-t border-border px-4 py-2 transition-colors",

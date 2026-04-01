@@ -1,5 +1,9 @@
 import { useAuth } from "@clerk/tanstack-react-start";
-import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
+import {
+	convexQuery,
+	useConvexAction,
+	useConvexMutation,
+} from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -31,6 +35,9 @@ import { useMemo, useState } from "react";
 import { HarnessMark } from "../components/harness-mark";
 import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
+import { PrincetonConnectRow } from "../components/princeton-connect-row";
+import { RecommendedSkillsGrid } from "../components/recommended-skills-grid";
+import { SkillsBrowser } from "../components/skills-browser";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Checkbox } from "../components/ui/checkbox";
@@ -46,6 +53,7 @@ import { env } from "../env";
 import type { McpServerEntry } from "../lib/mcp";
 import { presetIdsToServerEntries } from "../lib/mcp";
 import { MODELS } from "../lib/models";
+import type { SkillEntry } from "../lib/skills";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
@@ -57,35 +65,6 @@ export const Route = createFileRoute("/onboarding")({
 	},
 	component: OnboardingPage,
 });
-
-const AVAILABLE_SKILLS = [
-	{ id: "coding", name: "Coding", description: "Write and review code" },
-	{
-		id: "research",
-		name: "Research",
-		description: "Gather and synthesize information",
-	},
-	{
-		id: "writing",
-		name: "Writing",
-		description: "Draft documents and content",
-	},
-	{
-		id: "analysis",
-		name: "Data Analysis",
-		description: "Analyze datasets and trends",
-	},
-	{
-		id: "debugging",
-		name: "Debugging",
-		description: "Find and fix issues in code",
-	},
-	{
-		id: "devops",
-		name: "DevOps",
-		description: "Infrastructure and deployment",
-	},
-];
 
 const BASE_STEPS = [
 	{ key: "name", label: "Name & Model", icon: Wrench },
@@ -113,7 +92,7 @@ function OnboardingPage() {
 		resourceTier: "basic" as "basic" | "standard" | "performance",
 	});
 	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>([]);
-	const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>([]);
 
 	const [stepIndex, setStepIndex] = useState(0);
 
@@ -126,9 +105,13 @@ function OnboardingPage() {
 	);
 
 	const hasOAuthServers = allMcpServers.some((s) => s.authType === "oauth");
+	const hasTigerJunction = allMcpServers.some(
+		(s) => s.authType === "tiger_junction",
+	);
+	const hasConnectStep = hasOAuthServers || hasTigerJunction;
 
 	const steps = useMemo(() => {
-		if (!hasOAuthServers) return BASE_STEPS;
+		if (!hasConnectStep) return BASE_STEPS;
 		// Insert connect step after MCP Servers, before Sandbox
 		return [
 			BASE_STEPS[0],
@@ -137,7 +120,7 @@ function OnboardingPage() {
 			BASE_STEPS[2],
 			BASE_STEPS[3],
 		];
-	}, [hasOAuthServers]);
+	}, [hasConnectStep]);
 
 	// Clamp stepIndex if steps shrink (e.g. OAuth servers removed while on connect step)
 	const safeIndex = Math.min(stepIndex, steps.length - 1);
@@ -146,6 +129,7 @@ function OnboardingPage() {
 	const updateHarnessMut = useMutation({
 		mutationFn: useConvexMutation(api.harnesses.update),
 	});
+	const ensureSkillDetailsFn = useConvexAction(api.skills.ensureSkillDetails);
 	const { getToken } = useAuth();
 
 	const createHarness = useMutation({
@@ -153,6 +137,13 @@ function OnboardingPage() {
 		onSuccess: (harnessId) => {
 			const id = harnessId as Id<"harnesses">;
 			navigate({ to: "/chat", search: { harnessId: id as string } });
+
+			// Fire-and-forget: sync skill details for added skills
+			if (selectedSkills.length > 0) {
+				ensureSkillDetailsFn({
+					names: selectedSkills.map((s) => s.name),
+				}).catch(() => {});
+			}
 
 			// Fire-and-forget: generate suggested prompts from MCP tools
 			if (allMcpServers.length > 0) {
@@ -238,12 +229,6 @@ function OnboardingPage() {
 
 	const handleRemoveServer = (index: number) => {
 		setCustomMcpServers((prev) => prev.filter((_, i) => i !== index));
-	};
-
-	const toggleSkill = (id: string) => {
-		setSelectedSkills((prev) =>
-			prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id],
-		);
 	};
 
 	const togglePresetMcp = (id: string) => {
@@ -340,7 +325,10 @@ function OnboardingPage() {
 							)}
 							{currentStep === "connect" && (
 								<StepConnect
-									servers={allMcpServers.filter((s) => s.authType === "oauth")}
+									servers={allMcpServers.filter(
+										(s) =>
+											s.authType === "oauth" || s.authType === "tiger_junction",
+									)}
 								/>
 							)}
 							{currentStep === "sandbox" && (
@@ -352,7 +340,16 @@ function OnboardingPage() {
 								/>
 							)}
 							{currentStep === "skills" && (
-								<StepSkills selected={selectedSkills} toggle={toggleSkill} />
+								<StepSkills
+									selected={selectedSkills}
+									onToggle={(skill) =>
+										setSelectedSkills((prev) =>
+											prev.some((s) => s.name === skill.name)
+												? prev.filter((s) => s.name !== skill.name)
+												: [...prev, skill],
+										)
+									}
+								/>
 							)}
 						</motion.div>
 					</AnimatePresence>
@@ -570,7 +567,9 @@ function AddMcpServerForm({
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");
 	const [url, setUrl] = useState("");
-	const [authType, setAuthType] = useState<"none" | "bearer" | "oauth">("none");
+	const [authType, setAuthType] = useState<
+		"none" | "bearer" | "oauth" | "tiger_junction"
+	>("none");
 	const [authToken, setAuthToken] = useState("");
 	const [showToken, setShowToken] = useState(false);
 
@@ -694,7 +693,9 @@ function AddMcpServerForm({
 				</label>
 				<Select
 					value={authType}
-					onValueChange={(v) => setAuthType(v as "none" | "bearer" | "oauth")}
+					onValueChange={(v) =>
+						setAuthType(v as "none" | "bearer" | "oauth" | "tiger_junction")
+					}
 				>
 					<SelectTrigger className="max-w-xs text-xs">
 						<SelectValue />
@@ -780,10 +781,13 @@ function StepConnect({ servers }: { servers: McpServerEntry[] }) {
 		convexQuery(api.mcpOAuthTokens.listStatuses, {}),
 	);
 
+	const oauthServers = servers.filter((s) => s.authType === "oauth");
+	const tjServers = servers.filter((s) => s.authType === "tiger_junction");
+
 	const connectedServers = useMemo(() => {
 		const now = Date.now();
 		const result: Record<string, boolean> = {};
-		for (const server of servers) {
+		for (const server of oauthServers) {
 			const persisted = tokenStatuses?.find(
 				(s) => s.mcpServerUrl === server.url,
 			);
@@ -792,20 +796,21 @@ function StepConnect({ servers }: { servers: McpServerEntry[] }) {
 			}
 		}
 		return result;
-	}, [tokenStatuses, servers]);
+	}, [tokenStatuses, oauthServers]);
 
-	const allConnected = Object.keys(connectedServers).length === servers.length;
 	return (
 		<div className="space-y-4">
 			<div>
 				<p className="text-xs text-muted-foreground">
-					Connect your OAuth-authenticated MCP servers. You'll be redirected to
-					each provider to authorize access.
+					Connect your accounts to enable authenticated MCP servers.
 				</p>
 			</div>
 
 			<div className="space-y-2">
-				{servers.map((server) => (
+				{tjServers.map((server) => (
+					<PrincetonConnectRow key={server.url} server={server} />
+				))}
+				{oauthServers.map((server) => (
 					<OAuthConnectRow
 						key={server.url}
 						server={server}
@@ -814,24 +819,9 @@ function StepConnect({ servers }: { servers: McpServerEntry[] }) {
 				))}
 			</div>
 
-			{allConnected && (
-				<motion.div
-					initial={{ opacity: 0, y: 4 }}
-					animate={{ opacity: 1, y: 0 }}
-					className="flex items-center gap-2 border border-emerald-500/20 bg-emerald-500/5 px-3 py-2"
-				>
-					<Check size={12} className="text-emerald-500" />
-					<p className="text-xs text-emerald-700 dark:text-emerald-400">
-						All servers connected. You're ready to continue.
-					</p>
-				</motion.div>
-			)}
-
-			{!allConnected && (
-				<p className="text-center text-[11px] text-muted-foreground/60">
-					You can skip this step and connect later from harness settings.
-				</p>
-			)}
+			<p className="text-center text-[11px] text-muted-foreground/60">
+				You can skip this step and connect later from harness settings.
+			</p>
 		</div>
 	);
 }
@@ -997,43 +987,27 @@ function StepSandbox({
 
 function StepSkills({
 	selected,
-	toggle,
+	onToggle,
 }: {
-	selected: string[];
-	toggle: (id: string) => void;
+	selected: SkillEntry[];
+	onToggle: (skill: SkillEntry) => void;
 }) {
 	return (
-		<div className="space-y-3">
+		<div className="space-y-4">
 			<p className="text-xs text-muted-foreground">
-				Select the skills your agent should have.
+				Select recommended skills or browse the full catalog.
 			</p>
-			<div className="grid gap-2 sm:grid-cols-2">
-				{AVAILABLE_SKILLS.map((skill) => (
-					<button
-						key={skill.id}
-						type="button"
-						onClick={() => toggle(skill.id)}
-						className={`flex items-start gap-3 border p-3 text-left transition-colors ${
-							selected.includes(skill.id)
-								? "border-foreground bg-foreground/3"
-								: "border-border hover:border-foreground/20"
-						}`}
-					>
-						<Checkbox
-							checked={selected.includes(skill.id)}
-							className="mt-0.5"
-							tabIndex={-1}
-						/>
-						<div>
-							<p className="text-xs font-medium text-foreground">
-								{skill.name}
-							</p>
-							<p className="text-xs text-muted-foreground">
-								{skill.description}
-							</p>
-						</div>
-					</button>
-				))}
+			{selected.length > 0 && (
+				<Badge variant="secondary" className="text-[10px]">
+					{selected.length} selected
+				</Badge>
+			)}
+			<RecommendedSkillsGrid selected={selected} onToggle={onToggle} />
+			<div>
+				<h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+					Browse All Skills
+				</h3>
+				<SkillsBrowser currentSkills={selected} onToggle={onToggle} />
 			</div>
 		</div>
 	);

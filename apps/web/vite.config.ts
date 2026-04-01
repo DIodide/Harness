@@ -1,4 +1,5 @@
 import { fileURLToPath, URL } from "node:url";
+import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
@@ -15,15 +16,21 @@ const config = defineConfig({
 	optimizeDeps: {
 		include: ["use-sync-external-store/shim/index.js"],
 	},
+	// Order matters: TanStack Start must run immediately after Cloudflare so the
+	// router generator initializes before other plugins transform the graph (avoids
+	// "Crawling result not available" when loading routeTree.gen.ts). Matches:
+	// https://developers.cloudflare.com/workers/frameworks/framework-guides/tanstack/
 	plugins: [
-		devtools(),
-		// this is the plugin that enables path aliases
+		cloudflare({ viteEnvironment: { name: "ssr" } }),
+		tanstackStart(),
+		viteReact(),
+		// Event bus defaults to port 42069 and throws EADDRINUSE if another dev
+		// server (or stale process) already bound it — common with turbo dev.
+		devtools({ eventBusConfig: { enabled: false } }),
 		viteTsConfigPaths({
 			projects: ["./tsconfig.json"],
 		}),
 		tailwindcss(),
-		tanstackStart(),
-		viteReact(),
 	],
 	server: {
 		allowedHosts: true,

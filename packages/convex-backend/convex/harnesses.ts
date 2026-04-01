@@ -36,11 +36,11 @@ export const create = mutation({
 			v.object({
 				name: v.string(),
 				url: v.string(),
-				authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth")),
+				authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth"), v.literal("tiger_junction")),
 				authToken: v.optional(v.string()),
 			}),
 		),
-		skills: v.array(v.string()),
+		skills: v.array(v.object({ name: v.string(), description: v.string() })),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxConfig: v.optional(
 			v.object({
@@ -87,12 +87,12 @@ export const update = mutation({
 				v.object({
 					name: v.string(),
 					url: v.string(),
-					authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth")),
+					authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth"), v.literal("tiger_junction")),
 					authToken: v.optional(v.string()),
 				}),
 			),
 		),
-		skills: v.optional(v.array(v.string())),
+		skills: v.optional(v.array(v.object({ name: v.string(), description: v.string() }))),
 		suggestedPrompts: v.optional(v.array(v.string())),
 		lockModel: v.optional(v.boolean()),
 		sandboxEnabled: v.optional(v.boolean()),

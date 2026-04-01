@@ -16,6 +16,7 @@ import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
 import type * as sandboxes from "../sandboxes.js";
 import type * as seed from "../seed.js";
+import type * as skills from "../skills.js";
 import type * as userSettings from "../userSettings.js";
 
 import type {
@@ -33,6 +34,7 @@ declare const fullApi: ApiFromModules<{
   migrations: typeof migrations;
   sandboxes: typeof sandboxes;
   seed: typeof seed;
+  skills: typeof skills;
   userSettings: typeof userSettings;
 }>;
 
