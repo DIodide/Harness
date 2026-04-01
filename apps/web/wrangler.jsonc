@@ -5,6 +5,10 @@
 	"compatibility_flags": ["nodejs_compat"],
 	"main": "@tanstack/react-start/server-entry",
 	"observability": { "enabled": true },
+	"vars": {
+		"VITE_CONVEX_URL": "https://effervescent-cow-736.convex.cloud",
+		"VITE_CLERK_PUBLISHABLE_KEY": "pk_test_cG9saXRlLW1vcmF5LTY0LmNsZXJrLmFjY291bnRzLmRldiQ"
+	},
 	"env": {
 		"staging": {
 			"name": "harness-web-staging"
