@@ -1620,9 +1620,9 @@ function SkillsStatus({ skills }: { skills: SkillEntry[] }) {
 
 	return (
 		<DropdownMenu>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<DropdownMenuTrigger asChild>
+			<DropdownMenuTrigger asChild>
+				<Tooltip>
+					<TooltipTrigger asChild>
 						<button
 							type="button"
 							className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -1630,10 +1630,10 @@ function SkillsStatus({ skills }: { skills: SkillEntry[] }) {
 							<Zap size={10} />
 							{skills.length} Skill{skills.length !== 1 && "s"}
 						</button>
-					</DropdownMenuTrigger>
-				</TooltipTrigger>
-				<TooltipContent>Active skills</TooltipContent>
-			</Tooltip>
+					</TooltipTrigger>
+					<TooltipContent>Active skills</TooltipContent>
+				</Tooltip>
+			</DropdownMenuTrigger>
 
 			<DropdownMenuContent align="start" className="w-72">
 				<div className="border-b border-border px-3 py-2">
