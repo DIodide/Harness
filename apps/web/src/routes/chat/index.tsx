@@ -105,6 +105,7 @@ import { useFileAttachments } from "../../hooks/use-file-attachments";
 import {
 	acceptString,
 	allowedMimeTypes,
+	MODELS,
 	modelSupportsAudio,
 	modelSupportsMedia,
 } from "../../lib/models";
@@ -172,6 +173,8 @@ function ChatPage() {
 		useState<Id<"harnesses"> | null>(null);
 	const [activeConvoId, setActiveConvoId] =
 		useState<Id<"conversations"> | null>(null);
+	// Session-only model override — does not persist to the harness
+	const [sessionModel, setSessionModel] = useState<string | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
 	const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
 	const [editingMessageId, setEditingMessageId] =
@@ -437,8 +440,8 @@ function ChatPage() {
 
 				const partialContent = state.content ?? "";
 				// model is only sent in the "done" event which doesn't fire on abort,
-				// so fall back to the active harness model
-				const model = state.model ?? activeHarness?.model ?? null;
+				// so fall back to the session model, then the harness model
+				const model = state.model ?? sessionModel ?? activeHarness?.model ?? null;
 
 				saveInterruptedMsg.mutate({
 					conversationId: convoId as Id<"conversations">,
@@ -494,6 +497,12 @@ function ChatPage() {
 		const started = harnesses.find((h) => h.status === "started");
 		setActiveHarnessId(started?._id ?? harnesses[0]._id);
 	}, [harnesses, activeHarnessId, initialHarnessId]);
+
+	// Reset session model whenever the active harness changes
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on harness switch
+	useEffect(() => {
+		setSessionModel(null);
+	}, [activeHarnessId]);
 
 	useEffect(() => {
 		if (harnesses && harnesses.length === 0) {
@@ -676,7 +685,7 @@ function ChatPage() {
 			chatStream.stream({
 				messages: history,
 				harness: {
-					model: activeHarness.model,
+					model: sessionModel ?? activeHarness.model,
 					mcp_servers: activeHarness.mcpServers.map((s) => ({
 						name: s.name,
 						url: s.url,
@@ -708,6 +717,7 @@ function ChatPage() {
 		activeHarness,
 		chatStream,
 		sendMessageFromQueue,
+		sessionModel,
 	]);
 
 	const handleSelectConversation = useCallback(
@@ -757,7 +767,7 @@ function ChatPage() {
 			await removeMessage.mutateAsync({ id: messageId });
 
 			const harnessConfig = {
-				model: activeHarness.model,
+				model: sessionModel ?? activeHarness.model,
 				mcp_servers: activeHarness.mcpServers.map((s) => ({
 					name: s.name,
 					url: s.url,
@@ -785,7 +795,7 @@ function ChatPage() {
 				conversation_id: activeConvoId,
 			});
 		},
-		[activeHarness, activeConvoId, chatStream, removeMessage],
+		[activeHarness, activeConvoId, chatStream, removeMessage, sessionModel],
 	);
 
 	const forkConversation = useMutation({
@@ -851,7 +861,7 @@ function ChatPage() {
 				chatStream.stream({
 					messages: history,
 					harness: {
-						model: activeHarness.model,
+						model: sessionModel ?? activeHarness.model,
 						mcp_servers: activeHarness.mcpServers.map((s) => ({
 							name: s.name,
 							url: s.url,
@@ -876,6 +886,7 @@ function ChatPage() {
 			editForkAndSend,
 			handleSelectConversation,
 			chatStream,
+			sessionModel,
 		],
 	);
 
@@ -995,6 +1006,8 @@ function ChatPage() {
 					<ChatInput
 						conversationId={activeConvoId}
 						activeHarness={activeHarness}
+						sessionModel={sessionModel}
+						onSessionModelChange={setSessionModel}
 						onConvoCreated={handleSelectConversation}
 						isStreaming={isActiveConvoStreaming}
 						onStream={chatStream.stream}
@@ -2802,6 +2815,8 @@ function EmptyChat({
 function ChatInput({
 	conversationId,
 	activeHarness,
+	sessionModel,
+	onSessionModelChange,
 	onConvoCreated,
 	isStreaming,
 	onStream,
@@ -2861,6 +2876,8 @@ function ChatInput({
 	onDequeue: (index: number) => void;
 	onSendNow: (index: number) => void;
 	pendingPrompt?: string | null;
+	sessionModel?: string | null;
+	onSessionModelChange: (model: string) => void;
 	onPendingPromptConsumed?: () => void;
 }) {
 	const [text, setText] = useState("");
@@ -2868,13 +2885,17 @@ function ChatInput({
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [isDragOver, setIsDragOver] = useState(false);
 
-	const supportsMedia = modelSupportsMedia(activeHarness?.model);
-	const supportsAudio = modelSupportsAudio(activeHarness?.model);
+	const effectiveModel = sessionModel ?? activeHarness?.model;
+	const currentModelLabel =
+		MODELS.find((m) => m.value === effectiveModel)?.label ?? effectiveModel ?? "Model";
+
+	const supportsMedia = modelSupportsMedia(effectiveModel);
+	const supportsAudio = modelSupportsAudio(effectiveModel);
 	const supportsAnyAttachment = supportsMedia || supportsAudio;
-	const modelAccept = acceptString(activeHarness?.model);
+	const modelAccept = acceptString(effectiveModel);
 	const modelAllowedMimes = useMemo(
-		() => allowedMimeTypes(activeHarness?.model),
-		[activeHarness?.model],
+		() => allowedMimeTypes(effectiveModel),
+		[effectiveModel],
 	);
 
 	const {
@@ -2988,7 +3009,7 @@ function ChatInput({
 
 		// Snapshot harness config at send time (convert to snake_case for FastAPI)
 		const harnessConfig = {
-			model: activeHarness.model,
+			model: effectiveModel ?? activeHarness.model,
 			mcp_servers: activeHarness.mcpServers.map((s) => ({
 				name: s.name,
 				url: s.url,
@@ -3321,6 +3342,40 @@ function ChatInput({
 						rows={1}
 						className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
 					/>
+					{activeHarness && (
+						<DropdownMenu>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<DropdownMenuTrigger asChild>
+										<button
+											type="button"
+											className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+										>
+											<span className="max-w-[90px] truncate">{currentModelLabel}</span>
+											<ChevronDown size={10} />
+										</button>
+									</DropdownMenuTrigger>
+								</TooltipTrigger>
+								<TooltipContent>Switch model for this session</TooltipContent>
+							</Tooltip>
+							<DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+								{MODELS.map((model) => (
+									<DropdownMenuItem
+										key={model.value}
+										onClick={() => onSessionModelChange(model.value)}
+										className="flex items-center gap-2"
+									>
+										{model.value === effectiveModel ? (
+											<Check size={12} className="shrink-0" />
+										) : (
+											<span className="w-3 shrink-0" />
+										)}
+										{model.label}
+									</DropdownMenuItem>
+								))}
+							</DropdownMenuContent>
+						</DropdownMenu>
+					)}
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Button
