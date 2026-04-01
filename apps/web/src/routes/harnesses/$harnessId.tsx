@@ -7,7 +7,12 @@ import {
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	redirect,
+	useNavigate,
+} from "@tanstack/react-router";
 import {
 	ArrowLeft,
 	Box,
@@ -75,6 +80,7 @@ export const Route = createFileRoute("/harnesses/$harnessId")({
 });
 
 function HarnessEditPage() {
+	const navigate = useNavigate();
 	const { harnessId } = Route.useParams();
 	const { data: harness, isLoading } = useQuery(
 		convexQuery(api.harnesses.get, {
@@ -97,6 +103,7 @@ function HarnessEditPage() {
 			setMcpServers(null);
 			setSkills(null);
 			toast.success("Harness saved");
+			navigate({ to: "/harnesses" });
 
 			// Fire-and-forget: sync skill details for newly added skills
 			if (savedSkills !== null && savedSkills.length > 0) {
@@ -452,7 +459,17 @@ function HarnessEditPage() {
 
 						<div className="space-y-4">
 							{/* Enable toggle */}
-							<label className="flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30">
+							<div
+								className="flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30"
+								onClick={() => setSandboxEnabled(!currentSandboxEnabled)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" || e.key === " ")
+										setSandboxEnabled(!currentSandboxEnabled);
+								}}
+								role="checkbox"
+								aria-checked={currentSandboxEnabled}
+								tabIndex={0}
+							>
 								<Checkbox
 									checked={currentSandboxEnabled}
 									onCheckedChange={(checked) =>
@@ -469,7 +486,7 @@ function HarnessEditPage() {
 									</p>
 								</div>
 								<Box size={14} className="shrink-0 text-muted-foreground" />
-							</label>
+							</div>
 
 							{currentSandboxEnabled && (
 								<motion.div
@@ -480,9 +497,9 @@ function HarnessEditPage() {
 								>
 									{/* Sandbox type */}
 									<div>
-										<label className="mb-1.5 block text-xs font-medium text-foreground">
+										<span className="mb-1.5 block text-xs font-medium text-foreground">
 											Sandbox Type
-										</label>
+										</span>
 										<div className="grid gap-2 sm:grid-cols-2">
 											<button
 												type="button"
@@ -533,9 +550,9 @@ function HarnessEditPage() {
 
 									{/* Resource tier */}
 									<div>
-										<label className="mb-1.5 block text-xs font-medium text-foreground">
+										<span className="mb-1.5 block text-xs font-medium text-foreground">
 											Resource Tier
-										</label>
+										</span>
 										<Select
 											value={currentSandboxConfig.resourceTier}
 											onValueChange={(v) =>
@@ -570,9 +587,9 @@ function HarnessEditPage() {
 
 									{/* Default language */}
 									<div>
-										<label className="mb-1.5 block text-xs font-medium text-foreground">
+										<span className="mb-1.5 block text-xs font-medium text-foreground">
 											Default Language
-										</label>
+										</span>
 										<Select
 											value={currentSandboxConfig.defaultLanguage}
 											onValueChange={(v) =>
@@ -623,7 +640,31 @@ function HarnessEditPage() {
 													className="max-w-sm text-xs"
 												/>
 											</div>
-											<label className="flex cursor-pointer items-center gap-2.5">
+											<div
+												className="flex cursor-pointer items-center gap-2.5"
+												onClick={() =>
+													setSandboxConfig({
+														...currentSandboxConfig,
+														networkRestricted: !(
+															currentSandboxConfig.networkRestricted ?? false
+														),
+													})
+												}
+												onKeyDown={(e) => {
+													if (e.key === "Enter" || e.key === " ")
+														setSandboxConfig({
+															...currentSandboxConfig,
+															networkRestricted: !(
+																currentSandboxConfig.networkRestricted ?? false
+															),
+														});
+												}}
+												role="checkbox"
+												aria-checked={
+													currentSandboxConfig.networkRestricted ?? false
+												}
+												tabIndex={0}
+											>
 												<Checkbox
 													checked={
 														currentSandboxConfig.networkRestricted ?? false
@@ -647,7 +688,7 @@ function HarnessEditPage() {
 													size={12}
 													className="shrink-0 text-muted-foreground"
 												/>
-											</label>
+											</div>
 										</div>
 									</details>
 								</motion.div>

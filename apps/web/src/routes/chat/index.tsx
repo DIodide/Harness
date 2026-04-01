@@ -26,6 +26,7 @@ import {
 	PanelLeftOpen,
 	Paperclip,
 	Plus,
+	RotateCcw,
 	Search, // Icon for search
 	Settings,
 	SlidersHorizontal,
@@ -709,16 +710,14 @@ function ChatPage() {
 					name: activeHarness.name,
 					harness_id: activeHarness._id,
 
-					sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
-					sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
-					sandbox_config: (activeHarness as any).sandboxConfig
+					sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+					sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
+					sandbox_config: activeHarness.sandboxConfig
 						? {
-								persistent: (activeHarness as any).sandboxConfig.persistent,
-								auto_start: (activeHarness as any).sandboxConfig.autoStart,
-								default_language: (activeHarness as any).sandboxConfig
-									.defaultLanguage,
-								resource_tier: (activeHarness as any).sandboxConfig
-									.resourceTier,
+								persistent: activeHarness.sandboxConfig.persistent,
+								auto_start: activeHarness.sandboxConfig.autoStart,
+								default_language: activeHarness.sandboxConfig.defaultLanguage,
+								resource_tier: activeHarness.sandboxConfig.resourceTier,
 							}
 						: undefined,
 				},
@@ -796,15 +795,14 @@ function ChatPage() {
 				skills: activeHarness.skills ?? [],
 				name: activeHarness.name,
 				harness_id: activeHarness._id,
-				sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
-				sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
-				sandbox_config: (activeHarness as any).sandboxConfig
+				sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+				sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
+				sandbox_config: activeHarness.sandboxConfig
 					? {
-							persistent: (activeHarness as any).sandboxConfig.persistent,
-							auto_start: (activeHarness as any).sandboxConfig.autoStart,
-							default_language: (activeHarness as any).sandboxConfig
-								.defaultLanguage,
-							resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
+							persistent: activeHarness.sandboxConfig.persistent,
+							auto_start: activeHarness.sandboxConfig.autoStart,
+							default_language: activeHarness.sandboxConfig.defaultLanguage,
+							resource_tier: activeHarness.sandboxConfig.resourceTier,
 						}
 					: undefined,
 			};
@@ -928,8 +926,8 @@ function ChatPage() {
 		? chatStream.streamingConvoIds.has(activeConvoId)
 		: false;
 
-	const sandboxEnabled = (activeHarness as any)?.sandboxEnabled ?? false;
-	const daytonaSandboxId = (activeHarness as any)?.daytonaSandboxId ?? null;
+	const sandboxEnabled = activeHarness?.sandboxEnabled ?? false;
+	const daytonaSandboxId = activeHarness?.daytonaSandboxId ?? null;
 
 	return (
 		<SandboxPanelProvider sandboxId={sandboxEnabled ? daytonaSandboxId : null}>
@@ -1190,12 +1188,12 @@ function ChatSidebar({
 	return (
 		<div className="flex h-full w-[280px] flex-col bg-background">
 			<div className="flex items-center justify-between px-3 py-3">
-				<div className="flex items-center gap-2">
+				<Link to="/" className="flex items-center gap-2">
 					<HarnessMark size={18} className="text-foreground" />
 					<span className="text-sm font-semibold tracking-tight text-foreground">
 						Harness
 					</span>
-				</div>
+				</Link>
 				<div className="flex items-center gap-1">
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -1797,6 +1795,7 @@ function ChatHeader({
 			authToken?: string;
 		}>;
 		skills: SkillEntry[];
+		sandboxEnabled?: boolean;
 	};
 	harnesses: Array<{
 		_id: Id<"harnesses">;
@@ -1875,7 +1874,7 @@ function ChatHeader({
 					<SkillsStatus skills={harness.skills} />
 				)}
 
-				{harness && (harness as any).sandboxEnabled && <SandboxBadge />}
+				{harness && harness.sandboxEnabled && <SandboxBadge />}
 			</div>
 		</header>
 	);
@@ -2958,6 +2957,14 @@ function ChatInput({
 			authToken?: string;
 		}>;
 		skills: SkillEntry[];
+		sandboxEnabled?: boolean;
+		daytonaSandboxId?: string;
+		sandboxConfig?: {
+			persistent: boolean;
+			autoStart: boolean;
+			defaultLanguage: string;
+			resourceTier: string;
+		};
 	};
 	onConvoCreated: (id: Id<"conversations">) => void;
 	isStreaming: boolean;
@@ -3141,15 +3148,14 @@ function ChatInput({
 			skills: activeHarness.skills ?? [],
 			name: activeHarness.name,
 			harness_id: activeHarness._id,
-			sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
-			sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
-			sandbox_config: (activeHarness as any).sandboxConfig
+			sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+			sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
+			sandbox_config: activeHarness.sandboxConfig
 				? {
-						persistent: (activeHarness as any).sandboxConfig.persistent,
-						auto_start: (activeHarness as any).sandboxConfig.autoStart,
-						default_language: (activeHarness as any).sandboxConfig
-							.defaultLanguage,
-						resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
+						persistent: activeHarness.sandboxConfig.persistent,
+						auto_start: activeHarness.sandboxConfig.autoStart,
+						default_language: activeHarness.sandboxConfig.defaultLanguage,
+						resource_tier: activeHarness.sandboxConfig.resourceTier,
 					}
 				: undefined,
 		};
@@ -3501,9 +3507,9 @@ function ChatInput({
 									<>
 										<DropdownMenuItem
 											onClick={() => onSessionModelChange(null)}
-											className="flex items-center gap-2 text-muted-foreground italic"
+											className="flex items-center gap-2"
 										>
-											<span className="w-3 shrink-0" />
+											<RotateCcw size={12} className="shrink-0" />
 											Use harness default
 										</DropdownMenuItem>
 										<DropdownMenuSeparator />
