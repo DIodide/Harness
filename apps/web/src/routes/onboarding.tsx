@@ -11,14 +11,19 @@ import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import {
 	ArrowLeft,
 	ArrowRight,
+	Box,
 	Check,
+	Cpu,
 	Eye,
 	EyeOff,
+	HardDrive,
 	Layers,
 	Link2,
+	Play,
 	Plus,
 	Server,
 	Shield,
+	Terminal,
 	Trash2,
 	Wrench,
 	X,
@@ -29,6 +34,7 @@ import { useMemo, useState } from "react";
 import { HarnessMark } from "../components/harness-mark";
 import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
+import { PrincetonConnectRow } from "../components/princeton-connect-row";
 import { RecommendedSkillsGrid } from "../components/recommended-skills-grid";
 import { SkillsBrowser } from "../components/skills-browser";
 import { Badge } from "../components/ui/badge";
@@ -61,6 +67,7 @@ export const Route = createFileRoute("/onboarding")({
 const BASE_STEPS = [
 	{ key: "name", label: "Name & Model", icon: Wrench },
 	{ key: "mcps", label: "MCP Servers", icon: Layers },
+	{ key: "sandbox", label: "Sandbox", icon: Terminal },
 	{ key: "skills", label: "Skills", icon: Zap },
 ];
 
@@ -74,6 +81,13 @@ function OnboardingPage() {
 	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>(
 		[],
 	);
+	const [sandboxEnabled, setSandboxEnabled] = useState(false);
+	const [sandboxConfig, setSandboxConfig] = useState({
+		persistent: false,
+		autoStart: true,
+		defaultLanguage: "python",
+		resourceTier: "basic" as "basic" | "standard" | "performance",
+	});
 	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>([]);
 	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>([]);
 
@@ -88,12 +102,22 @@ function OnboardingPage() {
 	);
 
 	const hasOAuthServers = allMcpServers.some((s) => s.authType === "oauth");
+	const hasTigerJunction = allMcpServers.some(
+		(s) => s.authType === "tiger_junction",
+	);
+	const hasConnectStep = hasOAuthServers || hasTigerJunction;
 
 	const steps = useMemo(() => {
-		if (!hasOAuthServers) return BASE_STEPS;
-		// Insert connect step after MCP Servers
-		return [BASE_STEPS[0], BASE_STEPS[1], CONNECT_STEP, BASE_STEPS[2]];
-	}, [hasOAuthServers]);
+		if (!hasConnectStep) return BASE_STEPS;
+		// Insert connect step after MCP Servers, before Sandbox
+		return [
+			BASE_STEPS[0],
+			BASE_STEPS[1],
+			CONNECT_STEP,
+			BASE_STEPS[2],
+			BASE_STEPS[3],
+		];
+	}, [hasConnectStep]);
 
 	// Clamp stepIndex if steps shrink (e.g. OAuth servers removed while on connect step)
 	const safeIndex = Math.min(stepIndex, steps.length - 1);
@@ -179,7 +203,8 @@ function OnboardingPage() {
 			status: "started",
 			mcpServers: allMcpServers,
 			skills: selectedSkills,
-		});
+			...(sandboxEnabled ? { sandboxEnabled: true, sandboxConfig } : {}),
+		} as any);
 	};
 
 	const handleSaveDraft = () => {
@@ -189,7 +214,8 @@ function OnboardingPage() {
 			status: "draft",
 			mcpServers: allMcpServers,
 			skills: selectedSkills,
-		});
+			...(sandboxEnabled ? { sandboxEnabled: true, sandboxConfig } : {}),
+		} as any);
 	};
 
 	const handleAddServer = (server: McpServerEntry) => {
@@ -292,7 +318,18 @@ function OnboardingPage() {
 							)}
 							{currentStep === "connect" && (
 								<StepConnect
-									servers={allMcpServers.filter((s) => s.authType === "oauth")}
+									servers={allMcpServers.filter(
+										(s) =>
+											s.authType === "oauth" || s.authType === "tiger_junction",
+									)}
+								/>
+							)}
+							{currentStep === "sandbox" && (
+								<StepSandbox
+									enabled={sandboxEnabled}
+									setEnabled={setSandboxEnabled}
+									config={sandboxConfig}
+									setConfig={setSandboxConfig}
 								/>
 							)}
 							{currentStep === "skills" && (
@@ -504,7 +541,9 @@ function AddMcpServerForm({
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");
 	const [url, setUrl] = useState("");
-	const [authType, setAuthType] = useState<"none" | "bearer" | "oauth">("none");
+	const [authType, setAuthType] = useState<
+		"none" | "bearer" | "oauth" | "tiger_junction"
+	>("none");
 	const [authToken, setAuthToken] = useState("");
 	const [showToken, setShowToken] = useState(false);
 
@@ -628,7 +667,9 @@ function AddMcpServerForm({
 				</label>
 				<Select
 					value={authType}
-					onValueChange={(v) => setAuthType(v as "none" | "bearer" | "oauth")}
+					onValueChange={(v) =>
+						setAuthType(v as "none" | "bearer" | "oauth" | "tiger_junction")
+					}
 				>
 					<SelectTrigger className="max-w-xs text-xs">
 						<SelectValue />
@@ -714,10 +755,13 @@ function StepConnect({ servers }: { servers: McpServerEntry[] }) {
 		convexQuery(api.mcpOAuthTokens.listStatuses, {}),
 	);
 
+	const oauthServers = servers.filter((s) => s.authType === "oauth");
+	const tjServers = servers.filter((s) => s.authType === "tiger_junction");
+
 	const connectedServers = useMemo(() => {
 		const now = Date.now();
 		const result: Record<string, boolean> = {};
-		for (const server of servers) {
+		for (const server of oauthServers) {
 			const persisted = tokenStatuses?.find(
 				(s) => s.mcpServerUrl === server.url,
 			);
@@ -726,20 +770,21 @@ function StepConnect({ servers }: { servers: McpServerEntry[] }) {
 			}
 		}
 		return result;
-	}, [tokenStatuses, servers]);
+	}, [tokenStatuses, oauthServers]);
 
-	const allConnected = Object.keys(connectedServers).length === servers.length;
 	return (
 		<div className="space-y-4">
 			<div>
 				<p className="text-xs text-muted-foreground">
-					Connect your OAuth-authenticated MCP servers. You'll be redirected to
-					each provider to authorize access.
+					Connect your accounts to enable authenticated MCP servers.
 				</p>
 			</div>
 
 			<div className="space-y-2">
-				{servers.map((server) => (
+				{tjServers.map((server) => (
+					<PrincetonConnectRow key={server.url} server={server} />
+				))}
+				{oauthServers.map((server) => (
 					<OAuthConnectRow
 						key={server.url}
 						server={server}
@@ -748,22 +793,166 @@ function StepConnect({ servers }: { servers: McpServerEntry[] }) {
 				))}
 			</div>
 
-			{allConnected && (
-				<motion.div
-					initial={{ opacity: 0, y: 4 }}
-					animate={{ opacity: 1, y: 0 }}
-					className="flex items-center gap-2 border border-emerald-500/20 bg-emerald-500/5 px-3 py-2"
-				>
-					<Check size={12} className="text-emerald-500" />
-					<p className="text-xs text-emerald-700 dark:text-emerald-400">
-						All servers connected. You're ready to continue.
+			<p className="text-center text-[11px] text-muted-foreground/60">
+				You can skip this step and connect later from harness settings.
+			</p>
+		</div>
+	);
+}
+
+function StepSandbox({
+	enabled,
+	setEnabled,
+	config,
+	setConfig,
+}: {
+	enabled: boolean;
+	setEnabled: (v: boolean) => void;
+	config: {
+		persistent: boolean;
+		autoStart: boolean;
+		defaultLanguage: string;
+		resourceTier: "basic" | "standard" | "performance";
+	};
+	setConfig: (v: {
+		persistent: boolean;
+		autoStart: boolean;
+		defaultLanguage: string;
+		resourceTier: "basic" | "standard" | "performance";
+	}) => void;
+}) {
+	return (
+		<div className="space-y-4">
+			<p className="text-xs text-muted-foreground">
+				Give your harness an isolated sandbox environment for code execution,
+				file management, terminal commands, and git operations.
+			</p>
+
+			<label className="flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30">
+				<Checkbox
+					checked={enabled}
+					onCheckedChange={(checked) => setEnabled(checked === true)}
+				/>
+				<div className="flex-1">
+					<p className="text-xs font-medium text-foreground">Enable sandbox</p>
+					<p className="text-[11px] text-muted-foreground">
+						A sandbox will be auto-provisioned when you start chatting
 					</p>
+				</div>
+				<Box size={14} className="shrink-0 text-muted-foreground" />
+			</label>
+
+			{enabled && (
+				<motion.div
+					initial={{ opacity: 0, height: 0 }}
+					animate={{ opacity: 1, height: "auto" }}
+					exit={{ opacity: 0, height: 0 }}
+					className="space-y-4"
+				>
+					{/* Sandbox type */}
+					<div>
+						<label className="mb-1.5 block text-xs font-medium text-foreground">
+							Sandbox Type
+						</label>
+						<div className="grid gap-2 sm:grid-cols-2">
+							<button
+								type="button"
+								onClick={() => setConfig({ ...config, persistent: false })}
+								className={`flex items-start gap-2.5 border px-3 py-2.5 text-left transition-colors ${
+									!config.persistent
+										? "border-foreground bg-foreground/5"
+										: "border-border hover:bg-muted/30"
+								}`}
+							>
+								<Play size={12} className="mt-0.5 shrink-0" />
+								<div>
+									<p className="text-xs font-medium">Ephemeral</p>
+									<p className="text-[11px] text-muted-foreground">
+										Created per conversation, auto-deleted when done
+									</p>
+								</div>
+							</button>
+							<button
+								type="button"
+								onClick={() => setConfig({ ...config, persistent: true })}
+								className={`flex items-start gap-2.5 border px-3 py-2.5 text-left transition-colors ${
+									config.persistent
+										? "border-foreground bg-foreground/5"
+										: "border-border hover:bg-muted/30"
+								}`}
+							>
+								<HardDrive size={12} className="mt-0.5 shrink-0" />
+								<div>
+									<p className="text-xs font-medium">Persistent</p>
+									<p className="text-[11px] text-muted-foreground">
+										Maintains state across conversations
+									</p>
+								</div>
+							</button>
+						</div>
+					</div>
+
+					{/* Resource tier */}
+					<div>
+						<label className="mb-1.5 block text-xs font-medium text-foreground">
+							Resource Tier
+						</label>
+						<Select
+							value={config.resourceTier}
+							onValueChange={(v) =>
+								setConfig({
+									...config,
+									resourceTier: v as "basic" | "standard" | "performance",
+								})
+							}
+						>
+							<SelectTrigger className="max-w-sm text-xs">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="basic">
+									<Cpu size={10} />
+									Basic — 1 CPU, 1 GB RAM, 3 GB Disk
+								</SelectItem>
+								<SelectItem value="standard">
+									<Cpu size={10} />
+									Standard — 2 CPU, 4 GB RAM, 8 GB Disk
+								</SelectItem>
+								<SelectItem value="performance">
+									<Cpu size={10} />
+									Performance — 4 CPU, 8 GB RAM, 10 GB Disk
+								</SelectItem>
+							</SelectContent>
+						</Select>
+					</div>
+
+					{/* Default language */}
+					<div>
+						<label className="mb-1.5 block text-xs font-medium text-foreground">
+							Default Language
+						</label>
+						<Select
+							value={config.defaultLanguage}
+							onValueChange={(v) =>
+								setConfig({ ...config, defaultLanguage: v })
+							}
+						>
+							<SelectTrigger className="max-w-sm text-xs">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="python">Python</SelectItem>
+								<SelectItem value="javascript">JavaScript</SelectItem>
+								<SelectItem value="typescript">TypeScript</SelectItem>
+							</SelectContent>
+						</Select>
+					</div>
 				</motion.div>
 			)}
 
-			{!allConnected && (
+			{!enabled && (
 				<p className="text-center text-[11px] text-muted-foreground/60">
-					You can skip this step and connect later from harness settings.
+					You can enable a sandbox later from the harness settings.
 				</p>
 			)}
 		</div>

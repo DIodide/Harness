@@ -73,7 +73,7 @@ function AttachmentItem({ attachment }: { attachment: Attachment }) {
 						{attachment.fileName}
 					</span>
 				</div>
-				{/* biome-ignore lint/a11y/useMediaCaption: audio recordings have no caption track */}
+				{/* biome-ignore lint/a11y/useMediaCaption: audio recording playback */}
 				<audio controls src={url} className="h-8 w-full" preload="metadata" />
 			</div>
 		);

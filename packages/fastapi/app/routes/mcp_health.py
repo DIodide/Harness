@@ -11,6 +11,7 @@ from app.dependencies import get_current_user, get_http_client
 from app.models import McpServer
 from app.services.mcp_client import (
     McpAuthRequiredError,
+    UserContext,
     check_server_health,
     evict_session_cache,
     list_tools,
@@ -40,13 +41,13 @@ class HealthCheckResponse(BaseModel):
 async def _check_one(
     client: httpx.AsyncClient,
     server: McpServer,
-    user_id: str | None,
+    user_ctx: UserContext | None,
     force: bool,
 ) -> ServerHealth:
     if force:
         evict_session_cache(server.url)
     try:
-        reachable = await check_server_health(client, server, user_id=user_id)
+        reachable = await check_server_health(client, server, user_ctx=user_ctx)
         if reachable:
             return ServerHealth(name=server.name, url=server.url, reachable=True, status="ok")
         return ServerHealth(name=server.name, url=server.url, reachable=False, status="error")
@@ -63,10 +64,10 @@ async def check_health(
     http_client: httpx.AsyncClient = Depends(get_http_client),
     user: dict = Depends(get_current_user),
 ):
-    user_id = user.get("sub")
+    user_ctx = UserContext(user_id=user.get("sub"))
 
     results = await asyncio.gather(
-        *[_check_one(http_client, s, user_id, body.force) for s in body.mcp_servers],
+        *[_check_one(http_client, s, user_ctx, body.force) for s in body.mcp_servers],
         return_exceptions=True,
     )
 
@@ -95,14 +96,14 @@ async def generate_prompts(
     http_client: httpx.AsyncClient = Depends(get_http_client),
     user: dict = Depends(get_current_user),
 ):
-    user_id = user.get("sub")
+    user_ctx = UserContext(user_id=user.get("sub"))
 
     if not body.mcp_servers:
         return GeneratePromptsResponse(prompts=[])
 
     # Fetch available tools from all MCP servers
     try:
-        tools, _ = await list_tools(http_client, body.mcp_servers, user_id=user_id)
+        tools, _ = await list_tools(http_client, body.mcp_servers, user_ctx=user_ctx)
     except Exception:
         logger.exception("Failed to fetch tools for prompt generation")
         return GeneratePromptsResponse(prompts=[])

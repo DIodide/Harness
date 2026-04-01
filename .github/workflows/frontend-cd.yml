@@ -1,0 +1,55 @@
+name: Deploy Frontend
+
+on:
+  push:
+    branches: [staging, main]
+    paths:
+      - "apps/web/**"
+      - "packages/convex-backend/**"
+      - ".github/workflows/frontend-cd.yml"
+
+concurrency:
+  group: frontend-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Deploy Convex backend
+        run: cd packages/convex-backend && npx convex deploy
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "env=production" >> "$GITHUB_OUTPUT"
+            echo "fastapi_url=${{ secrets.FASTAPI_URL_PROD }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "env=staging" >> "$GITHUB_OUTPUT"
+            echo "fastapi_url=${{ secrets.FASTAPI_URL_STAGING }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build frontend
+        run: cd apps/web && bun run build
+        env:
+          VITE_CONVEX_URL: ${{ secrets.VITE_CONVEX_URL }}
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          VITE_FASTAPI_URL: ${{ steps.env.outputs.fastapi_url }}
+
+      - name: Deploy to Cloudflare Workers
+        run: cd apps/web && npx wrangler deploy --env ${{ steps.env.outputs.env }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

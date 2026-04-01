@@ -1,7 +1,11 @@
+import type { UserResource } from "@clerk/types";
+
+export type McpAuthType = "none" | "bearer" | "oauth" | "tiger_junction";
+
 export interface McpServerEntry {
 	name: string;
 	url: string;
-	authType: "none" | "bearer" | "oauth";
+	authType: McpAuthType;
 	authToken?: string;
 }
 
@@ -15,15 +19,39 @@ export interface PresetMcpDefinition {
 
 export const PRESET_MCPS: PresetMcpDefinition[] = [
 	{
-		id: "junctionengine",
+		id: "princetoncourses",
 		description:
-			"Get Princeton course information with live registrar data and student reviews.",
+			"Search Princeton courses, read evaluations, and explore instructors with live registrar data.",
 		iconName: "https://www.google.com/s2/favicons?domain=princeton.edu&sz=64",
 		category: "student",
 		server: {
-			name: "Junction Engine",
-			url: "https://junction-engine.tigerapps.org/mcp",
-			authType: "none",
+			name: "Princeton Courses",
+			url: "https://junction-engine.tigerapps.org/princetoncourses/mcp",
+			authType: "tiger_junction",
+		},
+	},
+	{
+		id: "tigerjunction",
+		description:
+			"Manage your course schedules — create, edit, verify conflicts, and find courses that fit.",
+		iconName: "https://www.google.com/s2/favicons?domain=princeton.edu&sz=64",
+		category: "student",
+		server: {
+			name: "TigerJunction",
+			url: "https://junction-engine.tigerapps.org/junction/mcp",
+			authType: "tiger_junction",
+		},
+	},
+	{
+		id: "tigersnatch",
+		description:
+			"Track course demand and subscribe to enrollment notifications for closed classes.",
+		iconName: "https://www.google.com/s2/favicons?domain=princeton.edu&sz=64",
+		category: "student",
+		server: {
+			name: "TigerSnatch",
+			url: "https://junction-engine.tigerapps.org/snatch/mcp",
+			authType: "tiger_junction",
 		},
 	},
 	{
@@ -164,4 +192,48 @@ export function presetIdsToServerEntries(ids: string[]): McpServerEntry[] {
 		const preset = PRESET_MCPS.find((p) => p.id === id);
 		return preset ? [preset.server] : [];
 	});
+}
+
+/**
+ * Extract the Princeton netid from any verified @princeton.edu email on the user's account.
+ * Checks: primary email, all verified emails, and verified external accounts (Google, Microsoft, etc.).
+ * Returns null if no verified Princeton email is found.
+ */
+export function getPrincetonNetid(
+	user: UserResource | null | undefined,
+): string | null {
+	if (!user) return null;
+
+	// 1. Check primary email (already verified by sign-in provider)
+	const primary = user.primaryEmailAddress?.emailAddress;
+	if (primary?.endsWith("@princeton.edu")) {
+		return primary.split("@")[0];
+	}
+
+	// 2. Check all verified email addresses on the account
+	for (const email of user.emailAddresses ?? []) {
+		if (
+			email.emailAddress?.endsWith("@princeton.edu") &&
+			email.verification?.status === "verified"
+		) {
+			return email.emailAddress.split("@")[0];
+		}
+	}
+
+	// 3. Check verified external accounts (Microsoft Entra ID, Google, etc.)
+	const princetonExternal = user.externalAccounts?.find(
+		(a) =>
+			a.emailAddress?.endsWith("@princeton.edu") &&
+			a.verification?.status === "verified",
+	);
+	if (princetonExternal) {
+		return princetonExternal.emailAddress.split("@")[0];
+	}
+
+	return null;
+}
+
+/** Check whether any servers in the list require Princeton (tiger_junction) auth. */
+export function hasTigerJunctionServers(servers: McpServerEntry[]): boolean {
+	return servers.some((s) => s.authType === "tiger_junction");
 }

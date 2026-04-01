@@ -9,7 +9,7 @@ import {
 	redirect,
 	useNavigate,
 } from "@tanstack/react-router";
-import { usePaginatedQuery } from "convex/react"; // any downsides to mixing convex/react with tanstack/react-query?
+import { usePaginatedQuery } from "convex/react";
 import {
 	AlertTriangle,
 	ArrowUp,
@@ -42,6 +42,7 @@ import React, {
 	type KeyboardEvent,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -61,6 +62,8 @@ import {
 	MessageActions,
 } from "../../components/message-actions";
 import { MessageAttachments } from "../../components/message-attachments";
+import { SandboxPanel } from "../../components/sandbox/sandbox-panel";
+import { SandboxResult } from "../../components/sandbox-result";
 import {
 	Avatar,
 	AvatarFallback,
@@ -100,6 +103,18 @@ import {
 } from "../../components/ui/tooltip";
 import { env } from "../../env";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
+import type { McpAuthType } from "../../lib/mcp";
+import {
+	acceptString,
+	allowedMimeTypes,
+	modelSupportsAudio,
+	modelSupportsMedia,
+} from "../../lib/models";
+import { buildMultimodalContent } from "../../lib/multimodal";
+import {
+	SandboxPanelProvider,
+	useSandboxPanel,
+} from "../../lib/sandbox-panel-context";
 import {
 	acceptString,
 	allowedMimeTypes,
@@ -675,11 +690,29 @@ function ChatPage() {
 					mcp_servers: activeHarness.mcpServers.map((s) => ({
 						name: s.name,
 						url: s.url,
-						auth_type: s.authType as "none" | "bearer" | "oauth",
+						auth_type: s.authType as
+							| "none"
+							| "bearer"
+							| "oauth"
+							| "tiger_junction",
 						auth_token: s.authToken,
 					})),
 					skills: activeHarness.skills ?? [],
 					name: activeHarness.name,
+					harness_id: activeHarness._id,
+
+					sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
+					sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
+					sandbox_config: (activeHarness as any).sandboxConfig
+						? {
+								persistent: (activeHarness as any).sandboxConfig.persistent,
+								auto_start: (activeHarness as any).sandboxConfig.autoStart,
+								default_language: (activeHarness as any).sandboxConfig
+									.defaultLanguage,
+								resource_tier: (activeHarness as any).sandboxConfig
+									.resourceTier,
+							}
+						: undefined,
 				},
 				conversation_id: convoId,
 			});
@@ -744,11 +777,27 @@ function ChatPage() {
 				mcp_servers: activeHarness.mcpServers.map((s) => ({
 					name: s.name,
 					url: s.url,
-					auth_type: s.authType as "none" | "bearer" | "oauth",
+					auth_type: s.authType as
+						| "none"
+						| "bearer"
+						| "oauth"
+						| "tiger_junction",
 					auth_token: s.authToken,
 				})),
 				skills: activeHarness.skills ?? [],
 				name: activeHarness.name,
+				harness_id: activeHarness._id,
+				sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
+				sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
+				sandbox_config: (activeHarness as any).sandboxConfig
+					? {
+							persistent: (activeHarness as any).sandboxConfig.persistent,
+							auto_start: (activeHarness as any).sandboxConfig.autoStart,
+							default_language: (activeHarness as any).sandboxConfig
+								.defaultLanguage,
+							resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
+						}
+					: undefined,
 			};
 
 			chatStream.stream({
@@ -776,12 +825,10 @@ function ChatPage() {
 		[activeConvoId, forkConversation, handleSelectConversation],
 	);
 
-	const editForkConversation = useMutation({
-		mutationFn: useConvexMutation(api.conversations.editFork),
+	const editForkAndSend = useMutation({
+		mutationFn: useConvexMutation(api.conversations.editForkAndSend),
 	});
-	const sendMessageMutation = useMutation({
-		mutationFn: useConvexMutation(api.messages.send),
-	});
+	const isEditSaving = useRef(false);
 
 	const handleStartEditPrompt = useCallback(
 		(messageId: Id<"messages">, content: string) => {
@@ -799,55 +846,61 @@ function ChatPage() {
 	const handleSaveEditPrompt = useCallback(
 		async (messageId: Id<"messages">, newContent: string) => {
 			if (!activeConvoId || !activeHarness || !activeMessages) return;
-			const idx = activeMessages.findIndex((m) => m._id === messageId);
-			if (idx === -1) return;
+			if (isEditSaving.current) return;
+			isEditSaving.current = true;
 
-			const newConvoId = await editForkConversation.mutateAsync({
-				conversationId: activeConvoId,
-				upToMessageCount: idx,
-			});
+			try {
+				const idx = activeMessages.findIndex((m) => m._id === messageId);
+				if (idx === -1) return;
 
-			handleSelectConversation(newConvoId);
+				// Atomic fork + message insert — no flicker
+				const newConvoId = await editForkAndSend.mutateAsync({
+					conversationId: activeConvoId,
+					upToMessageCount: idx,
+					newContent,
+					harnessId: activeHarness._id,
+				});
 
-			await sendMessageMutation.mutateAsync({
-				conversationId: newConvoId,
-				role: "user",
-				content: newContent,
-				harnessId: activeHarness._id,
-			});
+				handleSelectConversation(newConvoId);
 
-			const history = activeMessages.slice(0, idx).map((m) => ({
-				role: m.role,
-				content: m.content,
-			}));
-			history.push({ role: "user", content: newContent });
+				const history = activeMessages.slice(0, idx).map((m) => ({
+					role: m.role,
+					content: m.content,
+				}));
+				history.push({ role: "user", content: newContent });
 
-			chatStream.stream({
-				messages: history,
-				harness: {
-					model: activeHarness.model,
-					mcp_servers: activeHarness.mcpServers.map((s) => ({
-						name: s.name,
-						url: s.url,
-						auth_type: s.authType as "none" | "bearer" | "oauth",
-						auth_token: s.authToken,
-					})),
-					skills: activeHarness.skills ?? [],
-					name: activeHarness.name,
-				},
-				conversation_id: newConvoId,
-			});
+				chatStream.stream({
+					messages: history,
+					harness: {
+						model: activeHarness.model,
+						mcp_servers: activeHarness.mcpServers.map((s) => ({
+							name: s.name,
+							url: s.url,
+							auth_type: s.authType as
+								| "none"
+								| "bearer"
+								| "oauth"
+								| "tiger_junction",
+							auth_token: s.authToken,
+						})),
+						skills: activeHarness.skills ?? [],
+						name: activeHarness.name,
+					},
+					conversation_id: newConvoId,
+				});
 
-			setEditingMessageId(null);
-			setEditingContent("");
+				setEditingMessageId(null);
+				setEditingContent("");
+			} finally {
+				isEditSaving.current = false;
+			}
 		},
 		[
 			activeConvoId,
 			activeHarness,
 			activeMessages,
-			editForkConversation,
+			editForkAndSend,
 			handleSelectConversation,
-			sendMessageMutation,
 			chatStream,
 		],
 	);
@@ -865,118 +918,128 @@ function ChatPage() {
 		? chatStream.streamingConvoIds.has(activeConvoId)
 		: false;
 
+	const sandboxEnabled = (activeHarness as any)?.sandboxEnabled ?? false;
+	const daytonaSandboxId = (activeHarness as any)?.daytonaSandboxId ?? null;
+
 	return (
-		<div className="flex h-full overflow-hidden bg-background">
-			<AnimatePresence>
-				{sidebarOpen && (
-					<motion.aside
-						initial={{ width: 0, opacity: 0 }}
-						animate={{ width: 280, opacity: 1 }}
-						exit={{ width: 0, opacity: 0 }}
-						transition={{ duration: 0.2 }}
-						className="flex h-full flex-col overflow-hidden border-r border-border"
-					>
-						<ChatSidebar
-							conversations={(conversations ?? []).filter(
-								(c) => !(c as Record<string, unknown>).editParentConversationId,
-							)}
-							activeConvoId={activeConvoId}
-							onSelect={handleSelectConversation}
-							onSelectMessage={handleSelectMessage}
-							harnessId={activeHarnessId}
-							onClose={() => setSidebarOpen(false)}
-							streamingConvoIds={chatStream.streamingConvoIds}
-							doneConvoIds={doneConvoIds}
-						/>
-					</motion.aside>
-				)}
-			</AnimatePresence>
+		<SandboxPanelProvider sandboxId={sandboxEnabled ? daytonaSandboxId : null}>
+			<div className="flex h-full overflow-hidden bg-background">
+				<AnimatePresence>
+					{sidebarOpen && (
+						<motion.aside
+							initial={{ width: 0, opacity: 0 }}
+							animate={{ width: 280, opacity: 1 }}
+							exit={{ width: 0, opacity: 0 }}
+							transition={{ duration: 0.2 }}
+							className="flex h-full flex-col overflow-hidden border-r border-border"
+						>
+							<ChatSidebar
+								conversations={(conversations ?? []).filter(
+									(c) =>
+										!(c as Record<string, unknown>).editParentConversationId,
+								)}
+								activeConvoId={activeConvoId}
+								onSelect={handleSelectConversation}
+								onSelectMessage={handleSelectMessage}
+								harnessId={activeHarnessId}
+								onClose={() => setSidebarOpen(false)}
+								streamingConvoIds={chatStream.streamingConvoIds}
+								doneConvoIds={doneConvoIds}
+							/>
+						</motion.aside>
+					)}
+				</AnimatePresence>
 
-			<div className="flex flex-1 flex-col overflow-hidden">
-				<ChatHeader
-					harness={activeHarness}
-					harnesses={harnesses ?? []}
-					onSwitchHarness={setActiveHarnessId}
-					sidebarOpen={sidebarOpen}
-					onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-					isStreaming={isActiveConvoStreaming}
-					mcpHealthStatuses={mcpHealthStatuses}
-				/>
-
-				<McpFailureBanner
-					failures={mcpFailures}
-					onDismiss={(id) =>
-						setMcpFailures((prev) => prev.filter((f) => f.id !== id))
-					}
-					onDismissAll={() => setMcpFailures([])}
-				/>
-
-				{activeConvoId ? (
-					<ChatMessages
-						conversationId={activeConvoId}
-						messages={activeMessages ?? []}
-						streamingContent={activeStreamState.content}
-						streamingReasoning={activeStreamState.reasoning}
-						activeToolCalls={activeStreamState.toolCalls}
-						streamParts={activeStreamState.parts}
-						pendingDoneContent={activeStreamState.pendingDoneContent}
-						streamUsage={activeStreamState.usage}
-						streamModel={activeStreamState.model}
-						onStreamSynced={handleStreamSynced}
-						displayMode={
-							(userSettings?.displayMode as DisplayMode) ?? "standard"
-						}
-						onRegenerate={handleRegenerate}
-						onFork={handleFork}
-						onStartEditPrompt={handleStartEditPrompt}
-						onCancelEditPrompt={handleCancelEditPrompt}
-						onSaveEditPrompt={handleSaveEditPrompt}
-						editingMessageId={editingMessageId}
-						editingContent={editingContent}
-						onEditContentChange={setEditingContent}
-						allConversations={conversations ?? []}
-						activeConversation={activeConversation}
-						forkedFromConversationId={
-							activeConversation?.forkedFromConversationId
-						}
-						forkedFromConversationTitle={
-							activeConversation?.forkedFromConversationId
-								? (conversations?.find(
-										(c) =>
-											c._id === activeConversation.forkedFromConversationId,
-									)?.title ?? "Original conversation")
-								: undefined
-						}
-						forkedAtMessageCount={activeConversation?.forkedAtMessageCount}
-						onNavigateToConversation={handleSelectConversation}
+				<div className="flex flex-1 flex-col overflow-hidden">
+					<ChatHeader
+						harness={activeHarness}
+						harnesses={harnesses ?? []}
+						onSwitchHarness={setActiveHarnessId}
+						sidebarOpen={sidebarOpen}
+						onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
 						isStreaming={isActiveConvoStreaming}
-						scrollToMessageId={scrollToMessageId}
-						onClearScrollTarget={() => setScrollToMessageId(null)}
+						mcpHealthStatuses={mcpHealthStatuses}
 					/>
-				) : (
-					<EmptyChat
-						suggestedPrompts={activeHarness?.suggestedPrompts}
-						onPromptClick={(text) => setPendingPrompt(text)}
-					/>
-				)}
 
-				<ChatInput
-					conversationId={activeConvoId}
-					activeHarness={activeHarness}
-					onConvoCreated={handleSelectConversation}
-					isStreaming={isActiveConvoStreaming}
-					onStream={chatStream.stream}
-					onInterrupt={handleInterrupt}
-					onEnqueue={enqueueMessage}
-					messages={activeMessages}
-					messageQueue={messageQueue}
-					onDequeue={dequeueMessage}
-					onSendNow={handleSendNow}
-					pendingPrompt={pendingPrompt}
-					onPendingPromptConsumed={() => setPendingPrompt(null)}
-				/>
+					<McpFailureBanner
+						failures={mcpFailures}
+						onDismiss={(id) =>
+							setMcpFailures((prev) => prev.filter((f) => f.id !== id))
+						}
+						onDismissAll={() => setMcpFailures([])}
+					/>
+
+					{activeConvoId ? (
+						<ChatMessages
+							conversationId={activeConvoId}
+							messages={activeMessages ?? []}
+							streamingContent={activeStreamState.content}
+							streamingReasoning={activeStreamState.reasoning}
+							activeToolCalls={activeStreamState.toolCalls}
+							streamParts={activeStreamState.parts}
+							pendingDoneContent={activeStreamState.pendingDoneContent}
+							streamUsage={activeStreamState.usage}
+							streamModel={activeStreamState.model}
+							onStreamSynced={handleStreamSynced}
+							displayMode={
+								(userSettings?.displayMode as DisplayMode) ?? "standard"
+							}
+							onRegenerate={handleRegenerate}
+							onFork={handleFork}
+							onStartEditPrompt={handleStartEditPrompt}
+							onCancelEditPrompt={handleCancelEditPrompt}
+							onSaveEditPrompt={handleSaveEditPrompt}
+							editingMessageId={editingMessageId}
+							editingContent={editingContent}
+							onEditContentChange={setEditingContent}
+							allConversations={conversations ?? []}
+							activeConversation={activeConversation}
+							forkedFromConversationId={
+								activeConversation?.forkedFromConversationId
+							}
+							forkedFromConversationTitle={
+								activeConversation?.forkedFromConversationId
+									? (conversations?.find(
+											(c) =>
+												c._id === activeConversation.forkedFromConversationId,
+										)?.title ?? "Original conversation")
+									: undefined
+							}
+							forkedAtMessageCount={activeConversation?.forkedAtMessageCount}
+							onNavigateToConversation={handleSelectConversation}
+							isStreaming={isActiveConvoStreaming}
+							scrollToMessageId={scrollToMessageId}
+							onClearScrollTarget={() => setScrollToMessageId(null)}
+						/>
+					) : (
+						<EmptyChat
+							suggestedPrompts={activeHarness?.suggestedPrompts}
+							onPromptClick={(text) => setPendingPrompt(text)}
+						/>
+					)}
+
+					<ChatInput
+						conversationId={activeConvoId}
+						activeHarness={activeHarness}
+						onConvoCreated={handleSelectConversation}
+						isStreaming={isActiveConvoStreaming}
+						onStream={chatStream.stream}
+						onInterrupt={handleInterrupt}
+						onEnqueue={enqueueMessage}
+						messages={activeMessages}
+						messageQueue={messageQueue}
+						onDequeue={dequeueMessage}
+						onSendNow={handleSendNow}
+						pendingPrompt={pendingPrompt}
+						onPendingPromptConsumed={() => setPendingPrompt(null)}
+					/>
+				</div>
+
+				<AnimatePresence>
+					{sandboxEnabled && <SandboxPanelToggle />}
+				</AnimatePresence>
 			</div>
-		</div>
+		</SandboxPanelProvider>
 	);
 }
 
@@ -1672,7 +1735,7 @@ function ChatHeader({
 		mcpServers: Array<{
 			name: string;
 			url: string;
-			authType: "none" | "bearer" | "oauth";
+			authType: McpAuthType;
 			authToken?: string;
 		}>;
 		skills: SkillEntry[];
@@ -1753,9 +1816,49 @@ function ChatHeader({
 				{harness && harness.skills.length > 0 && (
 					<SkillsStatus skills={harness.skills} />
 				)}
+
+				{harness && (harness as any).sandboxEnabled && <SandboxBadge />}
 			</div>
 		</header>
 	);
+}
+
+/** Clickable sandbox badge in the header — toggles the sandbox panel. */
+function SandboxBadge() {
+	const panel = useSandboxPanel();
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<button
+					type="button"
+					onClick={() => panel?.togglePanel()}
+					className={cn(
+						"flex items-center gap-1.5 border px-2 py-1 text-[10px] transition-colors",
+						panel?.panelOpen
+							? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+							: "border-border text-muted-foreground hover:bg-muted/30",
+					)}
+				>
+					<div className="h-1.5 w-1.5 bg-emerald-500" />
+					<span>Sandbox</span>
+				</button>
+			</TooltipTrigger>
+			<TooltipContent>
+				<p>
+					{panel?.panelOpen
+						? "Close sandbox panel"
+						: "Open sandbox panel — browse files and interact directly"}
+				</p>
+			</TooltipContent>
+		</Tooltip>
+	);
+}
+
+/** Renders the sandbox panel (animated) when open. */
+function SandboxPanelToggle() {
+	const panel = useSandboxPanel();
+	if (!panel?.panelOpen) return null;
+	return <SandboxPanel />;
 }
 
 function ChatMessages({
@@ -1865,23 +1968,72 @@ function ChatMessages({
 	onClearScrollTarget: () => void;
 }) {
 	const scrollRef = useRef<HTMLDivElement>(null);
-	const userHasScrolledUp = useRef(false);
-	const isAutoScrolling = useRef(false);
 	const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null);
+	// "Pinned to bottom" — when true, auto-scroll follows new content.
+	// Unpins when the user scrolls up past a threshold; re-pins when they
+	// scroll back near the bottom or click the scroll-to-bottom button.
+	const [isPinned, setIsPinned] = useState(true);
+	const isPinnedRef = useRef(true);
+	// When true, suppress entrance animations and auto-scroll (set on conversation switches)
+	const skipNextTransition = useRef(false);
+	// Skip entry animation on conversation switches (but not the initial mount)
+	const prevConversationId = useRef(conversationId);
+	if (prevConversationId.current !== conversationId) {
+		prevConversationId.current = conversationId;
+		skipNextTransition.current = true;
+		// Re-pin when switching conversations
+		isPinnedRef.current = true;
+		setIsPinned(true);
+	}
+	// Snapshot captured at render time so animations can read it before the effect resets it
+	const skipEntryAnimation = skipNextTransition.current;
 
-	// Track user scroll position to avoid hijacking scroll during streaming
+	// Unpin when the user scrolls up (wheel or touch).
+	// We detect intent directly via input events — not scroll position —
+	// because scroll-position checks race against programmatic auto-scroll.
 	useEffect(() => {
 		const el = scrollRef.current;
 		if (!el) return;
-		const handleScroll = () => {
-			// Ignore scroll events triggered by our own programmatic scrolling
-			if (isAutoScrolling.current) return;
-			const distanceFromBottom =
-				el.scrollHeight - el.scrollTop - el.clientHeight;
-			userHasScrolledUp.current = distanceFromBottom > 100;
+		let lastTouchY = 0;
+
+		const unpin = () => {
+			isPinnedRef.current = false;
+			setIsPinned(false);
 		};
-		el.addEventListener("scroll", handleScroll, { passive: true });
-		return () => el.removeEventListener("scroll", handleScroll);
+		const handleWheel = (e: WheelEvent) => {
+			if (e.deltaY < 0 && isPinnedRef.current && el.scrollTop > 0) {
+				unpin();
+			}
+		};
+		const handleTouchStart = (e: TouchEvent) => {
+			lastTouchY = e.touches[0].clientY;
+		};
+		const handleTouchMove = (e: TouchEvent) => {
+			if (
+				e.touches[0].clientY > lastTouchY &&
+				isPinnedRef.current &&
+				el.scrollTop > 0
+			) {
+				unpin();
+			}
+			lastTouchY = e.touches[0].clientY;
+		};
+
+		el.addEventListener("wheel", handleWheel, { passive: true });
+		el.addEventListener("touchstart", handleTouchStart, { passive: true });
+		el.addEventListener("touchmove", handleTouchMove, { passive: true });
+		return () => {
+			el.removeEventListener("wheel", handleWheel);
+			el.removeEventListener("touchstart", handleTouchStart);
+			el.removeEventListener("touchmove", handleTouchMove);
+		};
+	}, []);
+
+	const scrollToBottom = useCallback(() => {
+		if (!scrollRef.current) return;
+		scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+		isPinnedRef.current = true;
+		setIsPinned(true);
 	}, []);
 
 	// Build a lookup map for O(1) ancestor traversal
@@ -1959,25 +2111,28 @@ function ChatMessages({
 		}
 	}, [convexHasMessage, onStreamSynced, conversationId]);
 
-	// Reset scroll lock when user sends a new message
+	// Re-pin when user sends a new message (they expect to see the response)
 	const messageCount = messages?.length ?? 0;
 	const lastMsgRole = messages?.[messages.length - 1]?.role;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: only reset on new user message
 	useEffect(() => {
 		if (lastMsgRole === "user") {
-			userHasScrolledUp.current = false;
+			isPinnedRef.current = true;
+			setIsPinned(true);
 		}
 	}, [messageCount]);
 
+	// Auto-scroll: runs in useLayoutEffect (synchronous, before paint) so it
+	// can't race with wheel/touch events that fire after paint. Once the user
+	// unpins, this becomes a no-op until they re-pin.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new messages and streaming
-	useEffect(() => {
-		if (scrollRef.current && !userHasScrolledUp.current) {
-			isAutoScrolling.current = true;
+	useLayoutEffect(() => {
+		if (skipNextTransition.current) {
+			skipNextTransition.current = false;
+			return;
+		}
+		if (scrollRef.current && isPinnedRef.current) {
 			scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-			// Reset after the browser fires the scroll event
-			requestAnimationFrame(() => {
-				isAutoScrolling.current = false;
-			});
 		}
 	}, [messages, streamingContent, streamingReasoning]);
 
@@ -2027,312 +2182,339 @@ function ChatMessages({
 	return (
 		<div ref={scrollRef} className="flex-1 overflow-y-auto">
 			<div className="mx-auto max-w-3xl px-4 py-6">
-				{messages?.map((msg, i) => {
-					// Skip entrance animation for the message that just replaced the streaming bubble
-					const isJustSynced = convexHasMessage && msg._id === lastMsg?._id;
-					const showForkBanner =
-						forkedFromConversationId !== undefined &&
-						forkedAtMessageCount !== undefined &&
-						i === forkedAtMessageCount - 1;
-					const { rootId: editRootId, versionId: editVersionId } =
-						msg.role === "user" && activeConversation
-							? findEditAncestor(activeConversation._id, i)
-							: { rootId: undefined, versionId: undefined };
-					const editSiblings =
-						editRootId !== undefined
-							? allConversations.filter(
-									(c) =>
-										c.editParentConversationId === editRootId &&
-										c.editParentMessageCount === i,
-								)
-							: [];
-					const editAllVersionIds =
-						editSiblings.length > 0
-							? [
-									editRootId as Id<"conversations">,
-									...[...editSiblings]
-										.sort((a, b) => a._creationTime - b._creationTime)
-										.map((c) => c._id),
-								]
-							: [];
-					const editVersionIdx =
-						editAllVersionIds.length === 0
-							? -1
-							: editAllVersionIds.indexOf(editVersionId);
-					return (
-						<React.Fragment key={msg._id}>
-							<motion.div
-								data-message-id={msg._id}
-								initial={isJustSynced ? false : { opacity: 0, y: 8 }}
-								animate={{ opacity: 1, y: 0 }}
-								transition={
-									isJustSynced ? { duration: 0 } : { delay: i * 0.03 }
-								}
-								className={cn(
-									"group mb-6 flex gap-3",
-									msg.role === "user" && "justify-end",
-								)}
-							>
-								{msg.role === "assistant" && (
-									<Avatar className="h-7 w-7 shrink-0">
-										<AvatarFallback className="bg-foreground text-background text-[10px]">
-											<Sparkles size={12} />
-										</AvatarFallback>
-									</Avatar>
-								)}
-								<div
+				{(() => {
+					const lastUserMsgIdx = messages
+						? messages.reduce(
+								(last, m, idx) => (m.role === "user" ? idx : last),
+								-1,
+							)
+						: -1;
+					return messages?.map((msg, i) => {
+						// Skip entrance animation for the message that just replaced the streaming bubble
+						const isJustSynced = convexHasMessage && msg._id === lastMsg?._id;
+						const showForkBanner =
+							forkedFromConversationId !== undefined &&
+							forkedAtMessageCount !== undefined &&
+							i === forkedAtMessageCount - 1;
+						const { rootId: editRootId, versionId: editVersionId } =
+							msg.role === "user" && activeConversation
+								? findEditAncestor(activeConversation._id, i)
+								: { rootId: undefined, versionId: undefined };
+						const editSiblings =
+							editRootId !== undefined
+								? allConversations.filter(
+										(c) =>
+											c.editParentConversationId === editRootId &&
+											c.editParentMessageCount === i,
+									)
+								: [];
+						const editAllVersionIds =
+							editSiblings.length > 0
+								? [
+										editRootId as Id<"conversations">,
+										...[...editSiblings]
+											.sort((a, b) => a._creationTime - b._creationTime)
+											.map((c) => c._id),
+									]
+								: [];
+						const editVersionIdx =
+							editAllVersionIds.length === 0
+								? -1
+								: editAllVersionIds.indexOf(editVersionId);
+						return (
+							<React.Fragment key={msg._id}>
+								<motion.div
+									data-message-id={msg._id}
+									initial={
+										isJustSynced || skipEntryAnimation
+											? false
+											: { opacity: 0, y: 8 }
+									}
+									animate={{ opacity: 1, y: 0 }}
+									transition={
+										isJustSynced || skipEntryAnimation
+											? { duration: 0 }
+											: { delay: i * 0.03 }
+									}
 									className={cn(
-										"max-w-[80%]",
-										msg.role === "user" && "flex flex-col items-end",
+										"group mb-6 flex gap-3",
+										msg.role === "user" && "justify-end",
 									)}
 								>
-									{msg.role === "user" &&
-										msg.attachments &&
-										msg.attachments.length > 0 && (
-											<MessageAttachments attachments={msg.attachments} />
-										)}
+									{msg.role === "assistant" && (
+										<Avatar className="h-7 w-7 shrink-0">
+											<AvatarFallback className="bg-foreground text-background text-[10px]">
+												<Sparkles size={12} />
+											</AvatarFallback>
+										</Avatar>
+									)}
 									<div
 										className={cn(
-											"text-sm leading-relaxed",
-											msg.role === "user" && editingMessageId !== msg._id
-												? "bg-foreground px-3.5 py-2.5 text-background"
-												: "text-foreground",
+											"max-w-[80%]",
+											msg.role === "user" && "flex flex-col items-end",
 										)}
 									>
-										{msg.role === "assistant" &&
-										(msg as Record<string, unknown>).parts ? (
-											(
-												(msg as Record<string, unknown>).parts as Array<{
-													type: "text" | "reasoning" | "tool_call";
-													content?: string;
-													tool?: string;
-													arguments?: Record<string, unknown>;
-													call_id?: string;
-													result?: string;
-												}>
-											).map((part) => {
-												const key =
-													part.type === "tool_call"
-														? (part.call_id ?? part.tool)
-														: `${part.type}-${part.content?.slice(0, 32)}`;
-												if (part.type === "reasoning" && part.content) {
-													return (
+										{msg.role === "user" &&
+											msg.attachments &&
+											msg.attachments.length > 0 && (
+												<MessageAttachments attachments={msg.attachments} />
+											)}
+										<div
+											className={cn(
+												"text-sm leading-relaxed",
+												msg.role === "user" && editingMessageId !== msg._id
+													? "bg-foreground px-3.5 py-2.5 text-background"
+													: "text-foreground",
+											)}
+										>
+											{msg.role === "assistant" &&
+											(msg as Record<string, unknown>).parts ? (
+												(
+													(msg as Record<string, unknown>).parts as Array<{
+														type: "text" | "reasoning" | "tool_call";
+														content?: string;
+														tool?: string;
+														arguments?: Record<string, unknown>;
+														call_id?: string;
+														result?: string;
+													}>
+												).map((part) => {
+													const key =
+														part.type === "tool_call"
+															? (part.call_id ?? part.tool)
+															: `${part.type}-${part.content?.slice(0, 32)}`;
+													if (part.type === "reasoning" && part.content) {
+														return (
+															<ThinkingBlock
+																key={key}
+																content={part.content}
+																isStreaming={false}
+															/>
+														);
+													}
+													if (part.type === "text" && part.content) {
+														return (
+															<MarkdownMessage
+																key={key}
+																content={part.content}
+															/>
+														);
+													}
+													if (part.type === "tool_call" && part.tool) {
+														return (
+															<ToolCallBlock
+																key={key}
+																tool={part.tool}
+																arguments={part.arguments ?? {}}
+																result={part.result}
+																isStreaming={false}
+															/>
+														);
+													}
+													return null;
+												})
+											) : (
+												<>
+													{msg.role === "assistant" && msg.reasoning && (
 														<ThinkingBlock
-															key={key}
-															content={part.content}
+															content={msg.reasoning}
 															isStreaming={false}
 														/>
-													);
-												}
-												if (part.type === "text" && part.content) {
-													return (
-														<MarkdownMessage key={key} content={part.content} />
-													);
-												}
-												if (part.type === "tool_call" && part.tool) {
-													return (
-														<ToolCallBlock
-															key={key}
-															tool={part.tool}
-															arguments={part.arguments ?? {}}
-															result={part.result}
-															isStreaming={false}
-														/>
-													);
-												}
-												return null;
-											})
-										) : (
-											<>
-												{msg.role === "assistant" && msg.reasoning && (
-													<ThinkingBlock
-														content={msg.reasoning}
-														isStreaming={false}
-													/>
-												)}
-												{msg.role === "assistant" ? (
-													<MarkdownMessage content={msg.content} />
-												) : editingMessageId === msg._id ? (
-													<div className="flex flex-col gap-2">
-														<textarea
-															ref={(el) => {
-																if (el) {
-																	el.focus();
-																	el.setSelectionRange(
-																		el.value.length,
-																		el.value.length,
-																	);
-																}
-															}}
-															className="min-h-[80px] w-full resize-none rounded border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-															value={editingContent}
-															onChange={(e) =>
-																onEditContentChange(e.target.value)
-															}
-														/>
-														<div className="flex gap-2">
-															<button
-																type="button"
-																onClick={() =>
-																	onSaveEditPrompt(msg._id, editingContent)
-																}
-																className="rounded bg-foreground px-3 py-1 text-xs text-background hover:bg-foreground/90"
-															>
-																Save
-															</button>
-															<button
-																type="button"
-																onClick={onCancelEditPrompt}
-																className="rounded border border-border px-3 py-1 text-xs text-foreground hover:bg-muted"
-															>
-																Cancel
-															</button>
-														</div>
-													</div>
-												) : (
-													<p className="whitespace-pre-wrap">{msg.content}</p>
-												)}
-												{msg.role === "assistant" &&
-													msg.toolCalls &&
-													msg.toolCalls.length > 0 && (
-														<div className="mt-2 space-y-1">
-															{(
-																msg.toolCalls as Array<{
-																	tool: string;
-																	arguments: Record<string, unknown>;
-																	call_id: string;
-																	result: string;
-																}>
-															).map((tc) => (
-																<ToolCallBlock
-																	key={tc.call_id}
-																	tool={tc.tool}
-																	arguments={tc.arguments}
-																	result={tc.result}
-																	isStreaming={false}
-																/>
-															))}
-														</div>
 													)}
-											</>
+													{msg.role === "assistant" ? (
+														<MarkdownMessage content={msg.content} />
+													) : editingMessageId === msg._id ? (
+														<div className="flex flex-col gap-2">
+															<textarea
+																ref={(el) => {
+																	if (el) {
+																		el.focus();
+																		el.setSelectionRange(
+																			el.value.length,
+																			el.value.length,
+																		);
+																	}
+																}}
+																className="min-h-[80px] w-full resize-none rounded border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+																value={editingContent}
+																onChange={(e) =>
+																	onEditContentChange(e.target.value)
+																}
+																onKeyDown={(e) => {
+																	if (e.key === "Enter" && !e.shiftKey) {
+																		e.preventDefault();
+																		onSaveEditPrompt(msg._id, editingContent);
+																	}
+																}}
+															/>
+															<div className="flex gap-2">
+																<button
+																	type="button"
+																	onClick={() =>
+																		onSaveEditPrompt(msg._id, editingContent)
+																	}
+																	className="rounded bg-foreground px-3 py-1 text-xs text-background hover:bg-foreground/90"
+																>
+																	Save
+																</button>
+																<button
+																	type="button"
+																	onClick={onCancelEditPrompt}
+																	className="rounded border border-border px-3 py-1 text-xs text-foreground hover:bg-muted"
+																>
+																	Cancel
+																</button>
+															</div>
+														</div>
+													) : (
+														<p className="whitespace-pre-wrap">{msg.content}</p>
+													)}
+													{msg.role === "assistant" &&
+														msg.toolCalls &&
+														msg.toolCalls.length > 0 && (
+															<div className="mt-2 space-y-1">
+																{(
+																	msg.toolCalls as Array<{
+																		tool: string;
+																		arguments: Record<string, unknown>;
+																		call_id: string;
+																		result: string;
+																	}>
+																).map((tc) => (
+																	<ToolCallBlock
+																		key={tc.call_id}
+																		tool={tc.tool}
+																		arguments={tc.arguments}
+																		result={tc.result}
+																		isStreaming={false}
+																	/>
+																))}
+															</div>
+														)}
+												</>
+											)}
+										</div>
+										{msg.role === "assistant" && msg.interrupted && (
+											<div className="mt-1 flex items-center gap-1.5 text-xs text-amber-500">
+												<span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
+												Response interrupted
+											</div>
+										)}
+										<MessageActions
+											content={msg.content}
+											role={msg.role}
+											displayMode={displayMode}
+											isStreaming={isStreaming}
+											usage={
+												msg.role === "assistant" && msg.usage
+													? (msg.usage as UsageData)
+													: undefined
+											}
+											model={
+												msg.role === "assistant"
+													? (msg.model ?? undefined)
+													: undefined
+											}
+											onRegenerate={
+												msg.role === "assistant"
+													? () => {
+															if (!messages) return;
+															const idx = messages.findIndex(
+																(m) => m._id === msg._id,
+															);
+															const history = messages
+																.slice(0, idx)
+																.map((m) => ({
+																	role: m.role,
+																	content: m.content,
+																}));
+															onRegenerate(msg._id, history);
+														}
+													: undefined
+											}
+											onFork={
+												msg.role === "assistant"
+													? () => onFork(msg._id)
+													: undefined
+											}
+											onEditPrompt={
+												msg.role === "user" && i === lastUserMsgIdx
+													? () => onStartEditPrompt(msg._id, msg.content)
+													: undefined
+											}
+										/>
+										{editVersionIdx !== -1 && editAllVersionIds.length > 1 && (
+											<div className="mt-1 flex items-center justify-end gap-1 text-[10px] text-muted-foreground">
+												<button
+													type="button"
+													disabled={editVersionIdx === 0}
+													onClick={() => {
+														skipNextTransition.current = true;
+														onNavigateToConversation(
+															editAllVersionIds[
+																editVersionIdx - 1
+															] as Id<"conversations">,
+														);
+													}}
+													className="disabled:opacity-30 hover:text-foreground"
+												>
+													←
+												</button>
+												<span>
+													{editVersionIdx + 1}/{editAllVersionIds.length}
+												</span>
+												<button
+													type="button"
+													disabled={
+														editVersionIdx === editAllVersionIds.length - 1
+													}
+													onClick={() => {
+														skipNextTransition.current = true;
+														onNavigateToConversation(
+															editAllVersionIds[
+																editVersionIdx + 1
+															] as Id<"conversations">,
+														);
+													}}
+													className="disabled:opacity-30 hover:text-foreground"
+												>
+													→
+												</button>
+											</div>
 										)}
 									</div>
-									{msg.role === "assistant" && msg.interrupted && (
-										<div className="mt-1 flex items-center gap-1.5 text-xs text-amber-500">
-											<span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />
-											Response interrupted
-										</div>
+									{msg.role === "user" && (
+										<Avatar className="h-7 w-7 shrink-0">
+											<AvatarFallback className="bg-muted text-foreground text-[10px]">
+												U
+											</AvatarFallback>
+										</Avatar>
 									)}
-									<MessageActions
-										content={msg.content}
-										role={msg.role}
-										displayMode={displayMode}
-										isStreaming={isStreaming}
-										usage={
-											msg.role === "assistant" && msg.usage
-												? (msg.usage as UsageData)
-												: undefined
-										}
-										model={
-											msg.role === "assistant"
-												? (msg.model ?? undefined)
-												: undefined
-										}
-										onRegenerate={
-											msg.role === "assistant"
-												? () => {
-														if (!messages) return;
-														const idx = messages.findIndex(
-															(m) => m._id === msg._id,
-														);
-														const history = messages.slice(0, idx).map((m) => ({
-															role: m.role,
-															content: m.content,
-														}));
-														onRegenerate(msg._id, history);
-													}
-												: undefined
-										}
-										onFork={
-											msg.role === "assistant"
-												? () => onFork(msg._id)
-												: undefined
-										}
-										onEditPrompt={
-											msg.role === "user"
-												? () => onStartEditPrompt(msg._id, msg.content)
-												: undefined
-										}
-									/>
-									{editVersionIdx !== -1 && editAllVersionIds.length > 1 && (
-										<div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+								</motion.div>
+								{showForkBanner && forkedFromConversationId && (
+									<div className="my-4 flex items-center gap-3 text-xs text-muted-foreground">
+										<div className="h-px flex-1 bg-border" />
+										<span>
+											Branched from{" "}
 											<button
 												type="button"
-												disabled={editVersionIdx === 0}
 												onClick={() =>
 													onNavigateToConversation(
-														editAllVersionIds[
-															editVersionIdx - 1
-														] as Id<"conversations">,
+														forkedFromConversationId ?? null,
 													)
 												}
-												className="disabled:opacity-30 hover:text-foreground"
+												className="font-medium text-foreground underline underline-offset-2 hover:text-foreground/80"
 											>
-												←
+												{forkedFromConversationTitle}
 											</button>
-											<span>
-												{editVersionIdx + 1}/{editAllVersionIds.length}
-											</span>
-											<button
-												type="button"
-												disabled={
-													editVersionIdx === editAllVersionIds.length - 1
-												}
-												onClick={() =>
-													onNavigateToConversation(
-														editAllVersionIds[
-															editVersionIdx + 1
-														] as Id<"conversations">,
-													)
-												}
-												className="disabled:opacity-30 hover:text-foreground"
-											>
-												→
-											</button>
-										</div>
-									)}
-								</div>
-								{msg.role === "user" && (
-									<Avatar className="h-7 w-7 shrink-0">
-										<AvatarFallback className="bg-muted text-foreground text-[10px]">
-											U
-										</AvatarFallback>
-									</Avatar>
+										</span>
+										<div className="h-px flex-1 bg-border" />
+									</div>
 								)}
-							</motion.div>
-							{showForkBanner && forkedFromConversationId && (
-								<div className="my-4 flex items-center gap-3 text-xs text-muted-foreground">
-									<div className="h-px flex-1 bg-border" />
-									<span>
-										Branched from{" "}
-										<button
-											type="button"
-											onClick={() =>
-												onNavigateToConversation(
-													forkedFromConversationId ?? null,
-												)
-											}
-											className="font-medium text-foreground underline underline-offset-2 hover:text-foreground/80"
-										>
-											{forkedFromConversationTitle}
-										</button>
-									</span>
-									<div className="h-px flex-1 bg-border" />
-								</div>
-							)}
-						</React.Fragment>
-					);
-				})}
+							</React.Fragment>
+						);
+					});
+				})()}
 
 				{showStreamingBubble && (
 					<motion.div
@@ -2398,6 +2580,17 @@ function ChatMessages({
 					</motion.div>
 				)}
 			</div>
+			{!isPinned && (
+				<div className="sticky bottom-4 flex justify-center pointer-events-none">
+					<button
+						type="button"
+						onClick={scrollToBottom}
+						className="pointer-events-auto rounded-full border border-border bg-background p-2 shadow-md transition-colors hover:bg-muted"
+					>
+						<ChevronDown size={16} />
+					</button>
+				</div>
+			)}
 		</div>
 	);
 }
@@ -2477,9 +2670,67 @@ function ToolCallBlock({
 	isStreaming: boolean;
 }) {
 	const [open, setOpen] = useState(false);
-	const displayName = tool.includes("__") ? tool.replace("__", " / ") : tool;
+	const isSandboxTool = tool.startsWith("sandbox__");
+	const displayName = isSandboxTool
+		? tool.replace("sandbox__", "sandbox / ")
+		: tool.includes("__")
+			? tool.replace("__", " / ")
+			: tool;
 	const authError = result ? parseAuthRequiredError(result) : null;
 
+	// For sandbox tools with results, render rich result inline (always visible)
+	if (isSandboxTool && result && !isStreaming && !authError) {
+		return (
+			<div className="mb-1.5">
+				<button
+					type="button"
+					onClick={() => setOpen((o) => !o)}
+					className="flex items-center gap-1.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+				>
+					<motion.span
+						animate={{ rotate: open ? 90 : 0 }}
+						transition={{ duration: 0.15 }}
+						className="flex"
+					>
+						<ChevronRight size={10} />
+					</motion.span>
+					<Wrench size={10} className="text-emerald-500" />
+					<span>{displayName}</span>
+				</button>
+
+				{/* Rich sandbox result (always visible) */}
+				<div className="ml-4 mt-1">
+					<SandboxResult result={result} toolName={tool} args={args} />
+				</div>
+
+				{/* Collapsible raw arguments (for developer mode) */}
+				<AnimatePresence>
+					{open && (
+						<motion.div
+							initial={{ height: 0, opacity: 0 }}
+							animate={{ height: "auto", opacity: 1 }}
+							exit={{ height: 0, opacity: 0 }}
+							transition={{ duration: 0.2 }}
+							className="overflow-hidden"
+						>
+							<div className="mt-1.5 ml-4 space-y-2 border-l-2 border-muted-foreground/20 pl-3 text-[11px] leading-relaxed text-muted-foreground">
+								<div>
+									<p className="mb-0.5 font-medium text-foreground/70">
+										Arguments
+									</p>
+									<pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[10px]">
+										{JSON.stringify(args, null, 2)}
+									</pre>
+								</div>
+							</div>
+						</motion.div>
+					)}
+				</AnimatePresence>
+			</div>
+		);
+	}
+
+	// Default rendering for MCP tools and streaming sandbox tools
 	return (
 		<div className="mb-1.5">
 			<button
@@ -2642,7 +2893,7 @@ function ChatInput({
 		mcpServers: Array<{
 			name: string;
 			url: string;
-			authType: "none" | "bearer" | "oauth";
+			authType: McpAuthType;
 			authToken?: string;
 		}>;
 		skills: SkillEntry[];
@@ -2659,7 +2910,7 @@ function ChatInput({
 			mcp_servers: Array<{
 				name: string;
 				url: string;
-				auth_type: "none" | "bearer" | "oauth";
+				auth_type: McpAuthType;
 				auth_token?: string;
 			}>;
 			skills: SkillEntry[];
@@ -2814,11 +3065,23 @@ function ChatInput({
 			mcp_servers: activeHarness.mcpServers.map((s) => ({
 				name: s.name,
 				url: s.url,
-				auth_type: s.authType as "none" | "bearer" | "oauth",
+				auth_type: s.authType as McpAuthType,
 				auth_token: s.authToken,
 			})),
 			skills: activeHarness.skills ?? [],
 			name: activeHarness.name,
+			harness_id: activeHarness._id,
+			sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
+			sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
+			sandbox_config: (activeHarness as any).sandboxConfig
+				? {
+						persistent: (activeHarness as any).sandboxConfig.persistent,
+						auto_start: (activeHarness as any).sandboxConfig.autoStart,
+						default_language: (activeHarness as any).sandboxConfig
+							.defaultLanguage,
+						resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
+					}
+				: undefined,
 		};
 
 		let convoId = conversationId;

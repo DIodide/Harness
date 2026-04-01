@@ -6,11 +6,22 @@ import re
 import httpx
 from fastapi import APIRouter, Depends, Request
 from sse_starlette.sse import EventSourceResponse
+from app.config import settings
 from app.dependencies import get_current_user, get_http_client
 from app.models import ChatRequest
-from app.services.convex import query_convex, save_assistant_message, patch_message_usage
-from app.services.mcp_client import call_tool, list_tools
+from app.services.convex import query_convex, save_assistant_message, patch_message_usage, create_sandbox_record
+from app.services.mcp_client import UserContext, call_tool, extract_princeton_netid, list_tools
+from app.services.mcp_oauth import get_valid_token, GITHUB_STANDALONE_URL
 from app.services.openrouter import stream_chat
+from app.services.sandbox_tools import (
+    SANDBOX_TOOL_DEFINITIONS,
+    SANDBOX_TOOL_NAMES,
+    execute_sandbox_tool,
+)
+from app.services.daytona_service import (
+    get_daytona_service,
+    RESOURCE_TIERS,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -311,15 +322,26 @@ async def chat_stream(
         user.get("sub", "unknown"),
         body.conversation_id,
     )
+    logger.info(
+        "Harness config: sandbox_enabled=%s, sandbox_id=%s, sandbox_config=%s, daytona_key=%s",
+        body.harness.sandbox_enabled,
+        body.harness.sandbox_id,
+        body.harness.sandbox_config,
+        bool(settings.daytona_api_key),
+    )
 
     user_id = user.get("sub")
+    user_ctx = UserContext(
+        user_id=user_id,
+        princeton_netid=extract_princeton_netid(user),
+    )
 
     async def event_generator():
         # Fetch available MCP tools for this harness
         tools: list[dict] | None = None
         if body.harness.mcp_servers:
             tools, mcp_failures = await list_tools(
-                http_client, body.harness.mcp_servers, user_id=user_id
+                http_client, body.harness.mcp_servers, user_ctx=user_ctx
             )
             if not tools:
                 tools = None
@@ -370,6 +392,126 @@ async def chat_stream(
                 {"name": s.name, "summary": details_by_name.get(s.name, "")}
                 for s in skill_refs
             ]
+
+        # Inject sandbox tools if harness has sandbox enabled
+        sandbox_id: str | None = None
+        daytona_service = None
+        if body.harness.sandbox_enabled and settings.daytona_api_key:
+            daytona_service = get_daytona_service()
+
+            if body.harness.sandbox_id:
+                # Existing sandbox — use it directly
+                sandbox_id = body.harness.sandbox_id
+            else:
+                # Auto-provision a new sandbox on first chat message
+                yield {
+                    "event": "sandbox_status",
+                    "data": json.dumps({"sandbox_id": "", "status": "creating"}),
+                }
+                try:
+                    sandbox_config = body.harness.sandbox_config
+                    resource_tier = sandbox_config.resource_tier if sandbox_config else "basic"
+                    language = sandbox_config.default_language if sandbox_config else "python"
+                    ephemeral = not (sandbox_config and sandbox_config.persistent)
+
+                    sandbox = await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        lambda: daytona_service.create_sandbox(
+                            user_id=user_id,
+                            harness_id=None,
+                            language=language,
+                            resource_tier=resource_tier,
+                            ephemeral=ephemeral,
+                        ),
+                    )
+                    sandbox_id = sandbox.id
+                    logger.info(
+                        "Auto-provisioned sandbox '%s' for harness '%s'",
+                        sandbox_id, body.harness.name,
+                    )
+
+                    # Persist sandbox record to Convex and link to harness
+                    tier = RESOURCE_TIERS.get(
+                        resource_tier, RESOURCE_TIERS["basic"],
+                    )
+                    await create_sandbox_record(
+                        http_client,
+                        user_id=user_id,
+                        harness_id=body.harness.harness_id,
+                        daytona_sandbox_id=sandbox_id,
+                        name=f"{body.harness.name} sandbox",
+                        language=language,
+                        ephemeral=ephemeral,
+                        resources={
+                            "cpu": tier["cpu"],
+                            "memoryGB": tier["memory"],
+                            "diskGB": tier["disk"],
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to auto-provision sandbox for harness '%s'",
+                        body.harness.name,
+                    )
+                    yield {
+                        "event": "sandbox_status",
+                        "data": json.dumps({"sandbox_id": "", "status": "error"}),
+                    }
+                    # Continue without sandbox — MCP tools still work
+                    daytona_service = None
+
+            if sandbox_id and daytona_service:
+                if tools is None:
+                    tools = []
+                tools.extend(SANDBOX_TOOL_DEFINITIONS)
+                logger.info(
+                    "Sandbox tools injected for harness '%s' (sandbox_id=%s)",
+                    body.harness.name, sandbox_id,
+                )
+                yield {
+                    "event": "sandbox_status",
+                    "data": json.dumps({"sandbox_id": sandbox_id, "status": "active"}),
+                }
+
+        # Resolve GitHub OAuth credentials for sandbox git operations.
+        # Check standalone GitHub token first, then fall back to MCP token.
+        git_credentials: dict | None = None
+        if sandbox_id and daytona_service:
+            gh_token = await get_valid_token(
+                http_client, user_id, GITHUB_STANDALONE_URL,
+            )
+            # Fallback: check if a GitHub MCP server has a token
+            if not gh_token and body.harness.mcp_servers:
+                for server in body.harness.mcp_servers:
+                    if server.auth_type == "oauth" and "github" in server.url.lower():
+                        gh_token = await get_valid_token(
+                            http_client, user_id, server.url,
+                        )
+                        break
+
+            if gh_token:
+                git_credentials = {
+                    "username": "x-access-token",
+                    "password": gh_token,
+                }
+                logger.info(
+                    "Resolved GitHub OAuth token for sandbox git operations",
+                )
+                # Configure git credential store inside the sandbox
+                # so raw `git push` via run_command also works
+                try:
+                    _tok = gh_token
+                    await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        lambda: daytona_service.setup_git_credentials(
+                            sandbox_id, "x-access-token", _tok,
+                        ),
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to configure git credentials in sandbox",
+                        exc_info=True,
+                    )
 
         messages = [m.model_dump() for m in body.messages]
 
@@ -643,8 +785,30 @@ async def chat_stream(
             async def _execute_tool(tool_info: dict) -> tuple[dict, str]:
                 """Execute a tool and return (tool_info, result) for identification."""
                 tool_name = tool_info["tool_name"]
+
+                # Route sandbox tools to the Daytona service
+                if tool_name in SANDBOX_TOOL_NAMES and sandbox_id and daytona_service:
+                    logger.info(
+                        "Executing sandbox tool '%s' with args: %s",
+                        tool_name,
+                        json.dumps(tool_info["args"])[:200],
+                    )
+                    _creds = git_credentials
+                    result = await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        lambda: execute_sandbox_tool(
+                            daytona_service,
+                            sandbox_id,
+                            tool_name,
+                            tool_info["args"],
+                            git_credentials=_creds,
+                        ),
+                    )
+                    return tool_info, result
+
+                # Route MCP tools to the MCP client
                 logger.info(
-                    "Executing tool '%s' with args: %s",
+                    "Executing MCP tool '%s' with args: %s",
                     tool_name,
                     json.dumps(tool_info["args"])[:200],
                 )
@@ -662,7 +826,7 @@ async def chat_stream(
                     tool_name,
                     tool_info["args"],
                     body.harness.mcp_servers,
-                    user_id=user_id,
+                    user_ctx=user_ctx,
                 )
                 return tool_info, result
 

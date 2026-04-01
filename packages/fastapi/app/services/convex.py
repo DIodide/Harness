@@ -144,3 +144,111 @@ async def patch_message_usage(
         logger.exception(
             "Failed to patch usage for conversation '%s'", conversation_id
         )
+
+
+async def verify_sandbox_owner(
+    daytona_sandbox_id: str,
+    user_id: str,
+) -> bool:
+    """Check that the sandbox belongs to the given user via Convex.
+
+    Returns True if the user owns the sandbox, False otherwise.
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        if settings.convex_url or settings.convex_deploy_key:
+            # Partially configured — likely a misconfiguration, deny access
+            logger.error(
+                "Convex partially configured (url=%s, key=%s) — denying ownership check",
+                bool(settings.convex_url), bool(settings.convex_deploy_key),
+            )
+            return False
+        logger.warning("Convex not configured — skipping ownership check (dev only)")
+        return True
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{settings.convex_url}/api/query",
+                headers={
+                    "Authorization": f"Convex {settings.convex_deploy_key}",
+                },
+                json={
+                    "path": "sandboxes:getOwnerByDaytonaId",
+                    "args": {"daytonaSandboxId": daytona_sandbox_id},
+                    "format": "json",
+                },
+                timeout=5.0,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            owner_id = result.get("value")
+            if owner_id is None:
+                logger.warning(
+                    "Sandbox '%s' not found in Convex", daytona_sandbox_id
+                )
+                return False
+            return owner_id == user_id
+    except Exception:
+        logger.exception(
+            "Failed to verify sandbox ownership for '%s'", daytona_sandbox_id
+        )
+        return False
+
+
+async def create_sandbox_record(
+    http_client: httpx.AsyncClient,
+    user_id: str,
+    harness_id: str | None,
+    daytona_sandbox_id: str,
+    name: str,
+    language: str,
+    ephemeral: bool,
+    resources: dict,
+) -> str | None:
+    """Create a sandbox record in Convex and link it to the harness.
+
+    Returns the Convex sandbox document ID, or None on failure.
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        logger.warning("Convex not configured — skipping sandbox record creation")
+        return None
+
+    args: dict = {
+        "userId": user_id,
+        "daytonaSandboxId": daytona_sandbox_id,
+        "name": name,
+        "status": "running",
+        "language": language,
+        "ephemeral": ephemeral,
+        "resources": resources,
+    }
+    if harness_id:
+        args["harnessId"] = harness_id
+
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/mutation",
+            headers={
+                "Authorization": f"Convex {settings.convex_deploy_key}",
+            },
+            json={
+                "path": "sandboxes:createInternal",
+                "args": args,
+                "format": "json",
+            },
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        sandbox_doc_id = result.get("value")
+        logger.info(
+            "Created sandbox record '%s' (daytona_id=%s) for harness '%s'",
+            sandbox_doc_id, daytona_sandbox_id, harness_id,
+        )
+        return sandbox_doc_id
+    except Exception:
+        logger.exception(
+            "Failed to create sandbox record for daytona_id '%s'",
+            daytona_sandbox_id,
+        )
+        return None

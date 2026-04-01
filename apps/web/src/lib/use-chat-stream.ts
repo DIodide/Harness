@@ -55,6 +55,10 @@ interface UseChatStreamCallbacks {
 		conversationId: string,
 		event: { server_name: string; server_url: string; reason: string },
 	) => void;
+	onSandboxStatus?: (
+		conversationId: string,
+		event: { sandbox_id: string; status: string },
+	) => void;
 	onError: (conversationId: string, error: string) => void;
 	onAbort?: (conversationId: string) => void;
 }
@@ -68,11 +72,20 @@ export interface ChatStreamRequest {
 		mcp_servers: Array<{
 			name: string;
 			url: string;
-			auth_type: "none" | "bearer" | "oauth";
+			auth_type: "none" | "bearer" | "oauth" | "tiger_junction";
 			auth_token?: string;
 		}>;
 		skills: Array<{ name: string; description: string }>;
 		name: string;
+		harness_id?: string;
+		sandbox_enabled?: boolean;
+		sandbox_id?: string;
+		sandbox_config?: {
+			persistent: boolean;
+			auto_start: boolean;
+			default_language: string;
+			resource_tier: string;
+		};
 	};
 	conversation_id: string;
 }
@@ -155,6 +168,9 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 										break;
 									case "mcp_error":
 										cbRef.current.onMcpError(convoId, data);
+										break;
+									case "sandbox_status":
+										cbRef.current.onSandboxStatus?.(convoId, data);
 										break;
 									case "done":
 										cbRef.current.onDone(

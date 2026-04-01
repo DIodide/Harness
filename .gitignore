@@ -42,3 +42,6 @@ dist
 # Misc
 .DS_Store
 *.pem
+docs/chat-loop-runtime-and-mcp-gateway-proposal.md
+docs/claudedaytonaplan.md
+docs/daytona-integration-proposal.md
