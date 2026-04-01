@@ -908,30 +908,27 @@ function StepSandbox({
 				file management, terminal commands, and git operations.
 			</p>
 
-			<label
-				htmlFor="sandbox-enabled"
-				className="flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30"
-				onClick={() => setEnabled(!enabled)}
-				onKeyDown={(e) => {
-					if (e.key === "Enter" || e.key === " ") {
-						e.preventDefault();
-						setEnabled(!enabled);
-					}
-				}}
-			>
+			<div className="flex items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30">
 				<Checkbox
 					id="sandbox-enabled"
 					checked={enabled}
 					onCheckedChange={(checked) => setEnabled(checked === true)}
 				/>
-				<div className="flex-1">
-					<p className="text-xs font-medium text-foreground">Enable sandbox</p>
-					<p className="text-[11px] text-muted-foreground">
-						A sandbox will be auto-provisioned when you start chatting
-					</p>
-				</div>
-				<Box size={14} className="shrink-0 text-muted-foreground" />
-			</label>
+				<label
+					htmlFor="sandbox-enabled"
+					className="flex min-w-0 flex-1 cursor-pointer items-center gap-3"
+				>
+					<div className="flex-1">
+						<p className="text-xs font-medium text-foreground">
+							Enable sandbox
+						</p>
+						<p className="text-[11px] text-muted-foreground">
+							A sandbox will be auto-provisioned when you start chatting
+						</p>
+					</div>
+					<Box size={14} className="shrink-0 text-muted-foreground" />
+				</label>
+			</div>
 
 			{enabled && (
 				<motion.div
