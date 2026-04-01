@@ -82,6 +82,7 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { Input } from "../../components/ui/input"; // reuse input from components
@@ -498,11 +499,11 @@ function ChatPage() {
 		setActiveHarnessId(started?._id ?? harnesses[0]._id);
 	}, [harnesses, activeHarnessId, initialHarnessId]);
 
-	// Reset session model whenever the active harness changes
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on harness switch
+	// Reset session model whenever the active harness or conversation changes
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on harness/conversation switch
 	useEffect(() => {
 		setSessionModel(null);
-	}, [activeHarnessId]);
+	}, [activeHarnessId, activeConvoId]);
 
 	useEffect(() => {
 		if (harnesses && harnesses.length === 0) {
@@ -2877,7 +2878,7 @@ function ChatInput({
 	onSendNow: (index: number) => void;
 	pendingPrompt?: string | null;
 	sessionModel?: string | null;
-	onSessionModelChange: (model: string) => void;
+	onSessionModelChange: (model: string | null) => void;
 	onPendingPromptConsumed?: () => void;
 }) {
 	const [text, setText] = useState("");
@@ -3349,16 +3350,35 @@ function ChatInput({
 									<DropdownMenuTrigger asChild>
 										<button
 											type="button"
-											className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+											className={`flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs transition-colors hover:bg-foreground/10 hover:text-foreground ${sessionModel ? "text-foreground" : "text-muted-foreground"}`}
 										>
+											{sessionModel && (
+												<span className="size-1.5 shrink-0 rounded-full bg-primary" />
+											)}
 											<span className="max-w-[90px] truncate">{currentModelLabel}</span>
 											<ChevronDown size={10} />
 										</button>
 									</DropdownMenuTrigger>
 								</TooltipTrigger>
-								<TooltipContent>Switch model for this session</TooltipContent>
+								<TooltipContent>
+									{sessionModel
+										? `Session override: ${currentModelLabel}`
+										: "Switch model for this session"}
+								</TooltipContent>
 							</Tooltip>
 							<DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+								{sessionModel && (
+									<>
+										<DropdownMenuItem
+											onClick={() => onSessionModelChange(null)}
+											className="flex items-center gap-2 text-muted-foreground italic"
+										>
+											<span className="w-3 shrink-0" />
+											Use harness default
+										</DropdownMenuItem>
+										<DropdownMenuSeparator />
+									</>
+								)}
 								{MODELS.map((model) => (
 									<DropdownMenuItem
 										key={model.value}
