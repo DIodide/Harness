@@ -39,6 +39,7 @@ import { RecommendedSkillsGrid } from "../components/recommended-skills-grid";
 import { SkillsBrowser } from "../components/skills-browser";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Checkbox } from "../components/ui/checkbox";
 import { Input } from "../components/ui/input";
 import {
 	Select,

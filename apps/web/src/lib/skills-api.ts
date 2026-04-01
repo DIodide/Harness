@@ -18,7 +18,7 @@ interface SkillsShResponse {
 
 /** Search skills.sh API and return results in our SkillRow shape. */
 export const searchSkillsSh = createServerFn({ method: "GET" })
-	.validator((data: { q: string; limit: number }) => data)
+	.inputValidator((data: { q: string; limit: number }) => data)
 	.handler(
 		async ({ data }): Promise<{ rows: SkillRow[]; raw: SkillsShResult[] }> => {
 			const url = `${SKILLS_SH_SEARCH}?q=${encodeURIComponent(data.q)}&limit=${data.limit}`;

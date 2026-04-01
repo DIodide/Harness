@@ -115,13 +115,6 @@ import {
 	SandboxPanelProvider,
 	useSandboxPanel,
 } from "../../lib/sandbox-panel-context";
-import {
-	acceptString,
-	allowedMimeTypes,
-	modelSupportsAudio,
-	modelSupportsMedia,
-} from "../../lib/models";
-import { buildMultimodalContent } from "../../lib/multimodal";
 import type { SkillEntry } from "../../lib/skills";
 import {
 	type ConvoStreamState,
@@ -2218,7 +2211,7 @@ function ChatMessages({
 									]
 								: [];
 						const editVersionIdx =
-							editAllVersionIds.length === 0
+							editAllVersionIds.length === 0 || editVersionId === undefined
 								? -1
 								: editAllVersionIds.indexOf(editVersionId);
 						return (
