@@ -36,17 +36,69 @@ class UserContext:
     princeton_netid: str | None = None
 
 
-def extract_princeton_netid(jwt_payload: dict) -> str | None:
-    """Derive Princeton netid from verified Clerk JWT claims.
+# Cache: Clerk user_id → (netid or empty string, timestamp).
+# TTL of 5 minutes so email changes propagate without a restart.
+_netid_cache: dict[str, tuple[str, float]] = {}
+_NETID_CACHE_TTL = 300.0  # seconds
 
-    Checks the email claim (cryptographically signed by Clerk) for a
-    @princeton.edu address.  This is the server-side equivalent of the
-    frontend ``getPrincetonNetid`` helper — it must never trust a
-    client-supplied value.
+
+async def resolve_princeton_netid(
+    http_client: httpx.AsyncClient,
+    jwt_payload: dict,
+) -> str | None:
+    """Derive Princeton netid from the authenticated user.
+
+    First checks the JWT email claim. If that isn't a Princeton address,
+    falls back to the Clerk Backend API to check all verified emails on
+    the account (e.g. the user signed in with Gmail but also has a verified
+    princeton.edu email). Results are cached per user_id.
     """
+    # Fast path: JWT email is Princeton
     email = jwt_payload.get("email") or ""
     if email.endswith("@princeton.edu"):
         return email.split("@")[0]
+
+    user_id = jwt_payload.get("sub")
+    if not user_id:
+        return None
+
+    # Check cache (with TTL)
+    cached = _netid_cache.get(user_id)
+    if cached is not None:
+        value, ts = cached
+        if time.monotonic() - ts < _NETID_CACHE_TTL:
+            return value or None  # empty string means "looked up, not found"
+
+    # Fetch full user profile from Clerk Backend API
+    import os
+    clerk_secret = os.environ.get("CLERK_SECRET_KEY")
+
+    if not clerk_secret:
+        _netid_cache[user_id] = ("", time.monotonic())
+        return None
+
+    try:
+        resp = await http_client.get(
+            f"https://api.clerk.com/v1/users/{user_id}",
+            headers={"Authorization": f"Bearer {clerk_secret}"},
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            for email_obj in data.get("email_addresses", []):
+                addr = email_obj.get("email_address", "")
+                verification = email_obj.get("verification", {})
+                if addr.endswith("@princeton.edu") and verification.get("status") == "verified":
+                    netid = addr.split("@")[0]
+                    _netid_cache[user_id] = (netid, time.monotonic())
+                    logger.info("Resolved Princeton netid '%s' for user '%s' via Clerk API", netid, user_id)
+                    return netid
+        else:
+            logger.warning("Clerk API returned %d for user '%s'", resp.status_code, user_id)
+    except Exception as e:
+        logger.warning("Failed to fetch Clerk user '%s': %s", user_id, e)
+
+    _netid_cache[user_id] = ("", time.monotonic())
     return None
 
 # TTL cache for tools/list results: url → (tools, timestamp).
