@@ -51,6 +51,7 @@ export const MODELS: Array<{
 		label: "Gemini 2.5 Flash",
 		modalities: ["image", "pdf", "audio"],
 	},
+	{ value: "kimi-k2", label: "Kimi K2", modalities: ["image"] },
 	{ value: "deepseek-r1", label: "DeepSeek R1", modalities: [] },
 	{ value: "deepseek-v3", label: "DeepSeek V3", modalities: [] },
 	{ value: "grok-3", label: "Grok 3", modalities: ["image"] },

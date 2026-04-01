@@ -79,6 +79,7 @@ MODEL_MAP = {
     "deepseek-v3": "deepseek/deepseek-chat",
     "grok-3": "x-ai/grok-3",
     "grok-3-mini": "x-ai/grok-3-mini",
+    "kimi-k2": "moonshotai/kimi-k2",
 }
 
 # Short model names that should send the `reasoning` parameter to OpenRouter.
