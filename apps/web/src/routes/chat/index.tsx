@@ -3343,7 +3343,7 @@ function ChatInput({
 						rows={1}
 						className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
 					/>
-					{activeHarness && (
+					{activeHarness && !(activeHarness as any).lockModel && (
 						<DropdownMenu>
 							<Tooltip>
 								<TooltipTrigger asChild>

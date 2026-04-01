@@ -22,6 +22,8 @@ export default defineSchema({
 		suggestedPrompts: v.optional(v.array(v.string())),
 		userId: v.string(),
 		lastUsedAt: v.optional(v.number()),
+		// When true, the session model switcher is hidden in chat
+		lockModel: v.optional(v.boolean()),
 		// Daytona sandbox configuration
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxId: v.optional(v.id("sandboxes")),

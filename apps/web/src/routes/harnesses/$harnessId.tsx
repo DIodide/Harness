@@ -14,6 +14,7 @@ import {
 	EyeOff,
 	Globe,
 	HardDrive,
+	Lock,
 	Loader2,
 	Pencil,
 	Play,
@@ -115,6 +116,7 @@ function HarnessEditPage() {
 
 	const [name, setName] = useState<string | null>(null);
 	const [model, setModel] = useState<string | null>(null);
+	const [lockModel, setLockModel] = useState<boolean | null>(null);
 	const [mcpServers, setMcpServers] = useState<McpServerEntry[] | null>(null);
 	const [sandboxEnabled, setSandboxEnabled] = useState<boolean | null>(null);
 	const [sandboxConfig, setSandboxConfig] = useState<{
@@ -131,6 +133,7 @@ function HarnessEditPage() {
 	const currentName = name ?? harness?.name ?? "";
 	const currentModel = model ?? harness?.model ?? "";
 	const currentMcpServers = mcpServers ?? harness?.mcpServers ?? [];
+	const currentLockModel = lockModel ?? (harness as any)?.lockModel ?? false;
 	const currentSandboxEnabled =
 		sandboxEnabled ?? (harness as any)?.sandboxEnabled ?? false;
 	const currentSandboxConfig = sandboxConfig ??
@@ -144,6 +147,7 @@ function HarnessEditPage() {
 	const hasChanges =
 		name !== null ||
 		model !== null ||
+		lockModel !== null ||
 		mcpServers !== null ||
 		sandboxEnabled !== null ||
 		sandboxConfig !== null;
@@ -199,6 +203,7 @@ function HarnessEditPage() {
 		};
 		if (name !== null) updates.name = name;
 		if (model !== null) updates.model = model;
+		if (lockModel !== null) updates.lockModel = lockModel;
 		if (mcpServers !== null) updates.mcpServers = mcpServers;
 		if (sandboxEnabled !== null) updates.sandboxEnabled = sandboxEnabled;
 		if (sandboxConfig !== null) updates.sandboxConfig = sandboxConfig;
@@ -312,6 +317,23 @@ function HarnessEditPage() {
 										))}
 									</SelectContent>
 								</Select>
+								<label className="mt-2 flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30 max-w-sm">
+									<Checkbox
+										checked={currentLockModel}
+										onCheckedChange={(checked) =>
+											setLockModel(checked === true)
+										}
+									/>
+									<div className="flex-1">
+										<p className="text-xs font-medium text-foreground">
+											Lock model for this harness
+										</p>
+										<p className="text-[11px] text-muted-foreground">
+											Prevent per-session model switching in chat
+										</p>
+									</div>
+									<Lock size={14} className="shrink-0 text-muted-foreground" />
+								</label>
 							</div>
 						</div>
 					</motion.section>
