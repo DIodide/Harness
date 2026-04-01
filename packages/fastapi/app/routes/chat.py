@@ -331,9 +331,16 @@ async def chat_stream(
     )
 
     user_id = user.get("sub")
+    netid = extract_princeton_netid(user)
+    if not netid:
+        logger.warning(
+            "No Princeton netid found in JWT for user '%s'. JWT claims: %s",
+            user_id,
+            list(user.keys()),
+        )
     user_ctx = UserContext(
         user_id=user_id,
-        princeton_netid=extract_princeton_netid(user),
+        princeton_netid=netid,
     )
 
     async def event_generator():
