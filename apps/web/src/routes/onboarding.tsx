@@ -15,7 +15,6 @@ import {
 	HardDrive,
 	Layers,
 	Link2,
-	Lock,
 	Play,
 	Plus,
 	Server,
@@ -101,7 +100,6 @@ function OnboardingPage() {
 
 	const [name, setName] = useState("");
 	const [model, setModel] = useState("");
-	const [lockModel, setLockModel] = useState(false);
 	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>(
 		[],
 	);
@@ -216,7 +214,6 @@ function OnboardingPage() {
 			mcpServers: allMcpServers,
 			skills: selectedSkills,
 			...(sandboxEnabled ? { sandboxEnabled: true, sandboxConfig } : {}),
-			...(lockModel ? { lockModel: true } : {}),
 		} as any);
 	};
 
@@ -228,7 +225,6 @@ function OnboardingPage() {
 			mcpServers: allMcpServers,
 			skills: selectedSkills,
 			...(sandboxEnabled ? { sandboxEnabled: true, sandboxConfig } : {}),
-			...(lockModel ? { lockModel: true } : {}),
 		} as any);
 	};
 
@@ -325,8 +321,6 @@ function OnboardingPage() {
 									setName={setName}
 									model={model}
 									setModel={setModel}
-									lockModel={lockModel}
-									setLockModel={setLockModel}
 								/>
 							)}
 							{currentStep === "mcps" && (
@@ -404,15 +398,11 @@ function StepNameModel({
 	setName,
 	model,
 	setModel,
-	lockModel,
-	setLockModel,
 }: {
 	name: string;
 	setName: (v: string) => void;
 	model: string;
 	setModel: (v: string) => void;
-	lockModel: boolean;
-	setLockModel: (v: boolean) => void;
 }) {
 	return (
 		<div className="space-y-6">
@@ -456,21 +446,6 @@ function StepNameModel({
 				<p className="mt-1.5 text-xs text-muted-foreground">
 					Choose the LLM that powers this harness.
 				</p>
-				<label className="mt-3 flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30">
-					<Checkbox
-						checked={lockModel}
-						onCheckedChange={(checked) => setLockModel(checked === true)}
-					/>
-					<div className="flex-1">
-						<p className="text-xs font-medium text-foreground">
-							Lock model for this harness
-						</p>
-						<p className="text-[11px] text-muted-foreground">
-							Prevent per-session model switching in chat
-						</p>
-					</div>
-					<Lock size={14} className="shrink-0 text-muted-foreground" />
-				</label>
 			</div>
 		</div>
 	);

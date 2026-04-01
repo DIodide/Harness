@@ -57,7 +57,6 @@ export const create = mutation({
 				networkRestricted: v.optional(v.boolean()),
 			}),
 		),
-		lockModel: v.optional(v.boolean()),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -94,7 +93,6 @@ export const update = mutation({
 		),
 		skills: v.optional(v.array(v.string())),
 		suggestedPrompts: v.optional(v.array(v.string())),
-		lockModel: v.optional(v.boolean()),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxId: v.optional(v.id("sandboxes")),
 		daytonaSandboxId: v.optional(v.string()),
