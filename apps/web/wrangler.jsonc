@@ -1,0 +1,16 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "harness-web",
+	"compatibility_date": "2026-03-31",
+	"compatibility_flags": ["nodejs_compat"],
+	"main": "@tanstack/react-start/server-entry",
+	"observability": { "enabled": true },
+	"env": {
+		"staging": {
+			"name": "harness-web-staging"
+		},
+		"production": {
+			"name": "harness-web"
+		}
+	}
+}

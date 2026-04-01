@@ -1,4 +1,5 @@
 import { fileURLToPath, URL } from "node:url";
+import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
@@ -16,6 +17,7 @@ const config = defineConfig({
 		include: ["use-sync-external-store/shim/index.js"],
 	},
 	plugins: [
+		cloudflare({ viteEnvironment: { name: "ssr" } }),
 		devtools(),
 		// this is the plugin that enables path aliases
 		viteTsConfigPaths({

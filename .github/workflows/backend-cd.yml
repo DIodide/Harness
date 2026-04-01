@@ -1,0 +1,58 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches: [staging, main]
+    paths:
+      - "packages/fastapi/**"
+      - ".github/workflows/backend-cd.yml"
+
+concurrency:
+  group: backend-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "deploy_path=/opt/harness-api" >> "$GITHUB_OUTPUT"
+            echo "service=harness-api" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy_path=/opt/harness-api-staging" >> "$GITHUB_OUTPUT"
+            echo "service=harness-api-staging" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/harness.pem
+          chmod 600 ~/.ssh/harness.pem
+          ssh-keyscan -H 52.45.218.243 >> ~/.ssh/known_hosts
+
+      - name: Deploy to EC2
+        run: |
+          rsync -avz --delete \
+            --exclude='.env' \
+            --exclude='.venv' \
+            --exclude='__pycache__' \
+            --exclude='.git' \
+            -e "ssh -i ~/.ssh/harness.pem" \
+            packages/fastapi/ ec2-user@52.45.218.243:${{ steps.env.outputs.deploy_path }}/
+
+      - name: Install dependencies and restart
+        run: |
+          ssh -i ~/.ssh/harness.pem ec2-user@52.45.218.243 << EOF
+            cd ${{ steps.env.outputs.deploy_path }}
+            python3.11 -m venv .venv 2>/dev/null || true
+            .venv/bin/pip install -q -r requirements.txt
+            sudo systemctl restart ${{ steps.env.outputs.service }}
+            sleep 2
+            sudo systemctl is-active ${{ steps.env.outputs.service }}
+          EOF
