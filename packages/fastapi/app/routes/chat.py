@@ -346,17 +346,25 @@ async def chat_stream(
                 tools = []
             tools.append(SKILL_TOOL_DEFINITION)
 
-            # Fetch cached SKILL.md content to build short summaries
-            skill_details_list = await query_convex(
-                http_client,
-                "skills:getByNames",
-                {"names": [s.name for s in skill_refs]},
-            )
+            # Fetch cached SKILL.md content to build short summaries.
+            # Non-essential: fall back to empty summaries on timeout so we
+            # don't block the first token on a slow Convex cold-start.
             details_by_name: dict[str, str] = {}
-            if skill_details_list:
-                for d in skill_details_list:
-                    if d and d.get("detail"):
-                        details_by_name[d["name"]] = _extract_summary(d["detail"])
+            try:
+                skill_details_list = await asyncio.wait_for(
+                    query_convex(
+                        http_client,
+                        "skills:getByNames",
+                        {"names": [s.name for s in skill_refs]},
+                    ),
+                    timeout=3.0,
+                )
+                if skill_details_list:
+                    for d in skill_details_list:
+                        if d and d.get("detail"):
+                            details_by_name[d["name"]] = _extract_summary(d["detail"])
+            except (asyncio.TimeoutError, Exception):
+                logger.warning("Skill summary fetch timed out or failed; proceeding without summaries")
 
             skill_manifest = [
                 {"name": s.name, "summary": details_by_name.get(s.name, "")}
