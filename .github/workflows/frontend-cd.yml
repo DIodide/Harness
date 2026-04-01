@@ -34,10 +34,10 @@ jobs:
         id: env
         run: |
           if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            echo "env=production" >> "$GITHUB_OUTPUT"
+            echo "worker_name=harness-web" >> "$GITHUB_OUTPUT"
             echo "fastapi_url=${{ secrets.FASTAPI_URL_PROD }}" >> "$GITHUB_OUTPUT"
           else
-            echo "env=staging" >> "$GITHUB_OUTPUT"
+            echo "worker_name=harness-web-staging" >> "$GITHUB_OUTPUT"
             echo "fastapi_url=${{ secrets.FASTAPI_URL_STAGING }}" >> "$GITHUB_OUTPUT"
           fi
 
@@ -50,6 +50,6 @@ jobs:
           VITE_FASTAPI_URL: ${{ steps.env.outputs.fastapi_url }}
 
       - name: Deploy to Cloudflare Workers
-        run: cd apps/web && npx wrangler deploy --env ${{ steps.env.outputs.env }}
+        run: cd apps/web && npx wrangler deploy --name ${{ steps.env.outputs.worker_name }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
