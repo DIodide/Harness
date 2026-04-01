@@ -17,6 +17,7 @@ import {
 	MoreHorizontal,
 	Play,
 	Plus,
+	Sparkles,
 	Square,
 	Trash2,
 	Zap,
@@ -24,6 +25,7 @@ import {
 import { motion } from "motion/react";
 import { useState } from "react";
 import toast from "react-hot-toast";
+import { HarnessCreationAssistant } from "../../components/harness-creation-assistant";
 import { HarnessMark } from "../../components/harness-mark";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -74,6 +76,7 @@ function HarnessesPage() {
 	const [deleteTarget, setDeleteTarget] = useState<Id<"harnesses"> | null>(
 		null,
 	);
+	const [creationAssistantOpen, setCreationAssistantOpen] = useState(false);
 
 	if (isLoading) {
 		return <LoadingSkeleton />;
@@ -123,17 +126,27 @@ function HarnessesPage() {
 						</p>
 					</div>
 				</div>
-				<Button size="sm" asChild>
-					<Link to="/onboarding">
-						<Plus size={14} />
-						Create New
-					</Link>
-				</Button>
+				<div className="flex items-center gap-2">
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={() => setCreationAssistantOpen(true)}
+					>
+						<Sparkles size={14} />
+						Create with AI
+					</Button>
+					<Button size="sm" asChild>
+						<Link to="/onboarding">
+							<Plus size={14} />
+							Create New
+						</Link>
+					</Button>
+				</div>
 			</header>
 
 			<div className="flex-1 p-6">
 				{harnesses?.length === 0 ? (
-					<EmptyState />
+					<EmptyState onCreateWithAI={() => setCreationAssistantOpen(true)} />
 				) : (
 					<div className="mx-auto max-w-4xl space-y-8">
 						{active.length > 0 && (
@@ -184,6 +197,11 @@ function HarnessesPage() {
 					</div>
 				)}
 			</div>
+
+			<HarnessCreationAssistant
+				open={creationAssistantOpen}
+				onOpenChange={setCreationAssistantOpen}
+			/>
 
 			<Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
 				<DialogContent>
@@ -384,7 +402,7 @@ function HarnessCard({
 	);
 }
 
-function EmptyState() {
+function EmptyState({ onCreateWithAI }: { onCreateWithAI: () => void }) {
 	return (
 		<div className="flex flex-col items-center justify-center py-24 text-center">
 			<div className="mb-6 flex h-16 w-16 items-center justify-center bg-foreground">
@@ -397,12 +415,18 @@ function EmptyState() {
 				Create your first harness to equip your AI agent with tools, MCPs, and
 				skills.
 			</p>
-			<Button size="sm" asChild>
-				<Link to="/onboarding">
-					<Plus size={14} />
-					Create Your First Harness
-				</Link>
-			</Button>
+			<div className="flex items-center gap-2">
+				<Button size="sm" onClick={onCreateWithAI}>
+					<Sparkles size={14} />
+					Create with AI
+				</Button>
+				<Button size="sm" variant="outline" asChild>
+					<Link to="/onboarding">
+						<Plus size={14} />
+						Create manually
+					</Link>
+				</Button>
+			</div>
 		</div>
 	);
 }

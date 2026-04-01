@@ -77,8 +77,24 @@ const CONNECT_STEP = { key: "connect", label: "Connect", icon: Link2 };
 function OnboardingPage() {
 	const navigate = useNavigate();
 
-	const [name, setName] = useState("");
-	const [model, setModel] = useState("");
+	// Read AI-generated prefill from sessionStorage (set by HarnessCreationAssistant)
+	const _prefill = (() => {
+		try {
+			const raw = sessionStorage.getItem("harness-prefill");
+			if (raw) {
+				sessionStorage.removeItem("harness-prefill");
+				return JSON.parse(raw) as {
+					name?: string;
+					model?: string;
+					selectedPresetMcps?: string[];
+				};
+			}
+		} catch {}
+		return null;
+	})();
+
+	const [name, setName] = useState(_prefill?.name ?? "");
+	const [model, setModel] = useState(_prefill?.model ?? "");
 	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>(
 		[],
 	);
@@ -89,7 +105,9 @@ function OnboardingPage() {
 		defaultLanguage: "python",
 		resourceTier: "basic" as "basic" | "standard" | "performance",
 	});
-	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>([]);
+	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>(
+		_prefill?.selectedPresetMcps ?? [],
+	);
 	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>([]);
 
 	const [stepIndex, setStepIndex] = useState(0);

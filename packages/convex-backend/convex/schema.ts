@@ -84,6 +84,7 @@ export default defineSchema({
 		forkedAtMessageCount: v.optional(v.number()),
 		editParentConversationId: v.optional(v.id("conversations")),
 		editParentMessageCount: v.optional(v.number()),
+		isCreationSession: v.optional(v.boolean()),
 	})
 		.index("by_user", ["userId"])
 		.index("by_user_last_message", ["userId", "lastMessageAt"])
