@@ -264,6 +264,10 @@ function ChatPage() {
 		setMcpFailures([]);
 	}, [activeConvoId]);
 
+	const updateHarness = useMutation({
+		mutationFn: useConvexMutation(api.harnesses.update),
+	});
+
 	// Save interrupted assistant message from frontend
 	const saveInterruptedMsg = useMutation({
 		mutationFn: useConvexMutation(api.messages.saveInterruptedMessage),
@@ -1026,8 +1030,24 @@ function ChatPage() {
 					<ChatInput
 						conversationId={activeConvoId}
 						activeHarness={activeHarness}
-						sessionModel={sessionModel}
-						onSessionModelChange={setSessionModel}
+						sessionModel={
+						userSettings?.modelSelectorMode === "harness" ? null : sessionModel
+					}
+					modelSelectorMode={
+						(userSettings?.modelSelectorMode as "session" | "harness") ??
+						"session"
+					}
+					onSessionModelChange={(model) => {
+						if (
+							userSettings?.modelSelectorMode === "harness" &&
+							model !== null &&
+							activeHarnessId
+						) {
+							updateHarness.mutate({ id: activeHarnessId, model });
+						} else {
+							setSessionModel(model);
+						}
+					}}
 						onConvoCreated={handleSelectConversation}
 						isStreaming={isActiveConvoStreaming}
 						onStream={chatStream.stream}
@@ -1552,6 +1572,35 @@ function SettingsDialog({
 								}}
 							/>
 						</label>
+						<div className="flex items-center justify-between gap-3 py-1.5">
+							<div>
+								<p className="text-xs font-medium text-foreground">
+									Model selector
+								</p>
+								<p className="text-[11px] text-muted-foreground">
+									Whether switching models in chat updates the session or the
+									harness.
+								</p>
+							</div>
+							<Select
+								value={
+									(userSettings?.modelSelectorMode as string) ?? "session"
+								}
+								onValueChange={(value) => {
+									updateSettings.mutate({
+										modelSelectorMode: value as "session" | "harness",
+									});
+								}}
+							>
+								<SelectTrigger className="w-[110px]">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="session">Session</SelectItem>
+									<SelectItem value="harness">Harness</SelectItem>
+								</SelectContent>
+							</Select>
+						</div>
 					</div>
 
 					<Separator />
@@ -2881,6 +2930,7 @@ function ChatInput({
 	conversationId,
 	activeHarness,
 	sessionModel,
+	modelSelectorMode = "session",
 	onSessionModelChange,
 	onConvoCreated,
 	isStreaming,
@@ -2944,6 +2994,7 @@ function ChatInput({
 	onSendNow: (index: number) => void;
 	pendingPrompt?: string | null;
 	sessionModel?: string | null;
+	modelSelectorMode?: "session" | "harness";
 	onSessionModelChange: (model: string | null) => void;
 	onPendingPromptConsumed?: () => void;
 }) {
@@ -3429,13 +3480,15 @@ function ChatInput({
 									</DropdownMenuTrigger>
 								</TooltipTrigger>
 								<TooltipContent>
-									{sessionModel
-										? `Session override: ${currentModelLabel}`
-										: "Switch model for this session"}
+									{modelSelectorMode === "harness"
+										? "Set harness model"
+										: sessionModel
+											? `Session override: ${currentModelLabel}`
+											: "Switch model for this session"}
 								</TooltipContent>
 							</Tooltip>
 							<DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
-								{sessionModel && (
+								{modelSelectorMode === "session" && sessionModel && (
 									<>
 										<DropdownMenuItem
 											onClick={() => onSessionModelChange(null)}

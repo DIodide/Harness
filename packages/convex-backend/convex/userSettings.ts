@@ -4,6 +4,7 @@ import { mutation, query } from "./_generated/server";
 const DEFAULTS = {
 	autoSwitchHarness: true,
 	displayMode: "standard" as const,
+	modelSelectorMode: "session" as const,
 } as const;
 
 export const get = query({
@@ -21,6 +22,7 @@ export const get = query({
 		return {
 			autoSwitchHarness: settings.autoSwitchHarness,
 			displayMode: settings.displayMode ?? "standard",
+			modelSelectorMode: settings.modelSelectorMode ?? "session",
 		};
 	},
 });
@@ -34,6 +36,9 @@ export const update = mutation({
 				v.literal("standard"),
 				v.literal("developer"),
 			),
+		),
+		modelSelectorMode: v.optional(
+			v.union(v.literal("session"), v.literal("harness")),
 		),
 	},
 	handler: async (ctx, args) => {

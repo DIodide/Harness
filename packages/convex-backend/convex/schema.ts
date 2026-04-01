@@ -196,5 +196,10 @@ export default defineSchema({
 				v.literal("developer"),
 			),
 		),
+		// Controls whether the in-chat model selector changes only the current
+		// session ("session") or persists the change to the harness ("harness").
+		modelSelectorMode: v.optional(
+			v.union(v.literal("session"), v.literal("harness")),
+		),
 	}).index("by_user", ["userId"]),
 });
