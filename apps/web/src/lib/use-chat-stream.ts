@@ -111,7 +111,7 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 			setStreamingConvoIds((prev) => new Set(prev).add(convoId));
 
 			try {
-				const token = await getToken();
+				const token = await getToken({ template: "convex" });
 				const response = await fetch(`${FASTAPI_URL}/api/chat/stream`, {
 					method: "POST",
 					headers: {
