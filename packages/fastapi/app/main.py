@@ -51,6 +51,8 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
         "http://127.0.0.1:57177",
+        "https://harness-web.harness-ai.workers.dev",
+        "https://harness-web-staging.harness-ai.workers.dev",
     ],
     allow_credentials=True,
     allow_methods=["*"],
