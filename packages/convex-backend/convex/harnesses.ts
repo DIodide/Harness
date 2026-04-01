@@ -40,7 +40,7 @@ export const create = mutation({
 				authToken: v.optional(v.string()),
 			}),
 		),
-		skills: v.array(v.string()),
+		skills: v.array(v.object({ name: v.string(), description: v.string() })),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxConfig: v.optional(
 			v.object({
@@ -91,7 +91,7 @@ export const update = mutation({
 				}),
 			),
 		),
-		skills: v.optional(v.array(v.string())),
+		skills: v.optional(v.array(v.object({ name: v.string(), description: v.string() }))),
 		suggestedPrompts: v.optional(v.array(v.string())),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxId: v.optional(v.id("sandboxes")),

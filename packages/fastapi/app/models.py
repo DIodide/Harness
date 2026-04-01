@@ -10,6 +10,11 @@ class McpServer(BaseModel):
     auth_token: str | None = None
 
 
+class SkillRef(BaseModel):
+    name: str
+    description: str = ""
+
+
 class SandboxConfig(BaseModel):
     persistent: bool = False
     auto_start: bool = True
@@ -23,6 +28,7 @@ class SandboxConfig(BaseModel):
 class HarnessConfig(BaseModel):
     model: str
     mcp_servers: list[McpServer] = []
+    skills: list[SkillRef] = []
     name: str
     harness_id: str | None = None
     sandbox_enabled: bool = False
