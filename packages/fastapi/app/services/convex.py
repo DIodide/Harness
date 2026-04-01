@@ -1,10 +1,41 @@
 import logging
+from typing import Any
 
 import httpx
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+async def query_convex(
+    http_client: httpx.AsyncClient,
+    path: str,
+    args: dict[str, Any],
+) -> Any:
+    """Execute a Convex query via the HTTP API using the deploy key."""
+    if not settings.convex_url or not settings.convex_deploy_key:
+        return None
+
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/query",
+            headers={
+                "Authorization": f"Convex {settings.convex_deploy_key}",
+            },
+            json={
+                "path": path,
+                "args": args,
+                "format": "json",
+            },
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("value")
+    except Exception:
+        logger.exception("Failed to query Convex path '%s'", path)
+        return None
 
 
 async def save_assistant_message(

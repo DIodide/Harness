@@ -1,5 +1,9 @@
 import { useAuth } from "@clerk/tanstack-react-start";
-import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
+import {
+	convexQuery,
+	useConvexAction,
+	useConvexMutation,
+} from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -30,9 +34,19 @@ import toast from "react-hot-toast";
 import { OAuthConnectRow } from "../../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../../components/princeton-connect-row";
+import { RecommendedSkillsGrid } from "../../components/recommended-skills-grid";
+import { SkillsBrowser } from "../../components/skills-browser";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
+	DialogTrigger,
+} from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import {
 	Select,
@@ -47,6 +61,7 @@ import { env } from "../../env";
 import type { McpServerEntry } from "../../lib/mcp";
 import { PRESET_MCPS } from "../../lib/mcp";
 import { MODELS } from "../../lib/models";
+import type { SkillEntry } from "../../lib/skills";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
@@ -69,13 +84,29 @@ function HarnessEditPage() {
 
 	const { getToken } = useAuth();
 	const updateHarnessFn = useConvexMutation(api.harnesses.update);
+	const ensureSkillDetailsFn = useConvexAction(api.skills.ensureSkillDetails);
+
 	const updateHarness = useMutation({
 		mutationFn: updateHarnessFn,
 		onSuccess: () => {
+			const savedSkills = skills;
+			const savedMcpServers = mcpServers;
+
+			setName(null);
+			setModel(null);
+			setMcpServers(null);
+			setSkills(null);
 			toast.success("Harness saved");
 
+			// Fire-and-forget: sync skill details for newly added skills
+			if (savedSkills !== null && savedSkills.length > 0) {
+				ensureSkillDetailsFn({ names: savedSkills.map((s) => s.name) }).catch(
+					() => {},
+				);
+			}
+
 			// Regenerate suggested prompts when MCP servers changed
-			if (mcpServers !== null && mcpServers.length > 0) {
+			if (savedMcpServers !== null && savedMcpServers.length > 0) {
 				(async () => {
 					try {
 						const token = await getToken();
@@ -88,7 +119,7 @@ function HarnessEditPage() {
 									...(token ? { Authorization: `Bearer ${token}` } : {}),
 								},
 								body: JSON.stringify({
-									mcp_servers: mcpServers.map((s) => ({
+									mcp_servers: savedMcpServers.map((s) => ({
 										name: s.name,
 										url: s.url,
 										auth_type: s.authType,
@@ -117,6 +148,8 @@ function HarnessEditPage() {
 	const [name, setName] = useState<string | null>(null);
 	const [model, setModel] = useState<string | null>(null);
 	const [mcpServers, setMcpServers] = useState<McpServerEntry[] | null>(null);
+	const [skills, setSkills] = useState<SkillEntry[] | null>(null);
+	const [skillsBrowserOpen, setSkillsBrowserOpen] = useState(false);
 	const [sandboxEnabled, setSandboxEnabled] = useState<boolean | null>(null);
 	const [sandboxConfig, setSandboxConfig] = useState<{
 		persistent: boolean;
@@ -132,6 +165,17 @@ function HarnessEditPage() {
 	const currentName = name ?? harness?.name ?? "";
 	const currentModel = model ?? harness?.model ?? "";
 	const currentMcpServers = mcpServers ?? harness?.mcpServers ?? [];
+	const currentSkills: SkillEntry[] = skills ?? harness?.skills ?? [];
+
+	const toggleSkill = (skill: SkillEntry) => {
+		const exists = currentSkills.some((s) => s.name === skill.name);
+		setSkills(
+			exists
+				? currentSkills.filter((s) => s.name !== skill.name)
+				: [...currentSkills, skill],
+		);
+	};
+
 	const currentSandboxEnabled =
 		sandboxEnabled ?? (harness as any)?.sandboxEnabled ?? false;
 	const currentSandboxConfig = sandboxConfig ??
@@ -146,6 +190,7 @@ function HarnessEditPage() {
 		name !== null ||
 		model !== null ||
 		mcpServers !== null ||
+		skills !== null ||
 		sandboxEnabled !== null ||
 		sandboxConfig !== null;
 
@@ -205,6 +250,7 @@ function HarnessEditPage() {
 		if (name !== null) updates.name = name;
 		if (model !== null) updates.model = model;
 		if (mcpServers !== null) updates.mcpServers = mcpServers;
+		if (skills !== null) updates.skills = skills;
 		if (sandboxEnabled !== null) updates.sandboxEnabled = sandboxEnabled;
 		if (sandboxConfig !== null) updates.sandboxConfig = sandboxConfig;
 		updateHarness.mutate(updates as Parameters<typeof updateHarness.mutate>[0]);
@@ -636,6 +682,94 @@ function HarnessEditPage() {
 							)}
 						</motion.section>
 					)}
+
+					<Separator />
+
+					{/* Skills */}
+					<motion.section
+						initial={{ opacity: 0, y: 8 }}
+						animate={{ opacity: 1, y: 0 }}
+						transition={{ delay: 0.09 }}
+					>
+						<div className="mb-4 flex items-center justify-between">
+							<h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+								Skills
+							</h2>
+							<Badge variant="secondary" className="text-[10px]">
+								{currentSkills.length} added
+							</Badge>
+						</div>
+
+						<div className="mb-3">
+							<h3 className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+								Recommended Skills
+							</h3>
+							<RecommendedSkillsGrid
+								selected={currentSkills}
+								onToggle={toggleSkill}
+							/>
+						</div>
+
+						{currentSkills.length > 0 && (
+							<div className="mb-3 space-y-1.5">
+								<h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+									Added Skills
+								</h3>
+								{currentSkills.map((skill) => {
+									const displayName = skill.name.split("/").pop() ?? skill.name;
+									return (
+										<button
+											key={skill.name}
+											type="button"
+											onClick={() => toggleSkill(skill)}
+											className="flex w-full items-start gap-3 border border-foreground bg-foreground/3 p-3 text-left transition-colors hover:border-foreground/20"
+										>
+											<Checkbox
+												checked={true}
+												className="mt-0.5 shrink-0"
+												tabIndex={-1}
+											/>
+											<div className="min-w-0 flex-1">
+												<p className="text-xs font-medium text-foreground">
+													{displayName}
+												</p>
+											</div>
+										</button>
+									);
+								})}
+							</div>
+						)}
+
+						<Dialog
+							open={skillsBrowserOpen}
+							onOpenChange={setSkillsBrowserOpen}
+						>
+							<DialogTrigger asChild>
+								<Button
+									variant="outline"
+									size="sm"
+									className="w-full border-dashed"
+								>
+									<Plus size={14} />
+									Browse Skills Catalog
+								</Button>
+							</DialogTrigger>
+							<DialogContent className="flex max-h-[80vh] flex-col overflow-hidden sm:max-w-3xl">
+								<DialogHeader>
+									<DialogTitle>Skills Catalog</DialogTitle>
+									<DialogDescription>
+										Browse and search {"\u2248"}50,000 skills from skills.sh
+									</DialogDescription>
+								</DialogHeader>
+								<div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+									<SkillsBrowser
+										currentSkills={currentSkills}
+										onToggle={toggleSkill}
+									/>
+								</div>
+							</DialogContent>
+						</Dialog>
+					</motion.section>
 
 					<Separator />
 
