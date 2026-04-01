@@ -84,7 +84,7 @@ function startOAuthPopup(
 type McpServer = {
 	name: string;
 	url: string;
-	authType: "none" | "bearer" | "oauth";
+	authType: "none" | "bearer" | "oauth" | "tiger_junction";
 	authToken?: string;
 };
 

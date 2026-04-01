@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.config import settings
 from app.models import McpServer
 
 logger = logging.getLogger(__name__)
@@ -20,11 +21,33 @@ JSONRPC_HEADERS = {
 # Monotonically increasing JSON-RPC request ID so each request is unique.
 _request_id_counter = itertools.count(1)
 
-# Cache of session IDs per MCP server URL to avoid re-initializing on every request.
-_session_cache: dict[str, str] = {}
+# Cache of session IDs per (server URL, user ID) to avoid re-initializing on every request.
+# Keyed by (url, user_id) because some MCP servers bind sessions to user identity.
+_session_cache: dict[tuple[str, str | None, str | None], str] = {}
 
 # Per-server lock to prevent concurrent session initialization races.
 _session_init_locks: dict[str, asyncio.Lock] = {}
+
+
+@dataclass
+class UserContext:
+    """User identity context threaded through MCP calls."""
+    user_id: str | None = None
+    princeton_netid: str | None = None
+
+
+def extract_princeton_netid(jwt_payload: dict) -> str | None:
+    """Derive Princeton netid from verified Clerk JWT claims.
+
+    Checks the email claim (cryptographically signed by Clerk) for a
+    @princeton.edu address.  This is the server-side equivalent of the
+    frontend ``getPrincetonNetid`` helper — it must never trust a
+    client-supplied value.
+    """
+    email = jwt_payload.get("email") or ""
+    if email.endswith("@princeton.edu"):
+        return email.split("@")[0]
+    return None
 
 # TTL cache for tools/list results: url → (tools, timestamp).
 _tools_cache: dict[str, tuple[list[dict], float]] = {}
@@ -57,26 +80,35 @@ async def _build_headers(
     client: httpx.AsyncClient,
     server: McpServer,
     session_id: str | None = None,
-    user_id: str | None = None,
+    user_ctx: UserContext | None = None,
 ) -> dict[str, str]:
     """Build request headers, including auth and session ID if available.
 
     For OAuth servers, resolves the user's access token from Convex (with auto-refresh).
+    For tiger_junction servers, injects server-side bearer token and user netid.
     """
     headers = dict(JSONRPC_HEADERS)
 
     if server.auth_type == "bearer" and server.auth_token:
         headers["Authorization"] = f"Bearer {server.auth_token}"
-    elif server.auth_type == "oauth" and user_id:
+    elif server.auth_type == "tiger_junction":
+        token = settings.tiger_junction_mcp_token
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            logger.warning("TIGER_JUNCTION_MCP_TOKEN not set for server '%s'", server.name)
+        if user_ctx and user_ctx.princeton_netid:
+            headers["x-user-netid"] = user_ctx.princeton_netid
+    elif server.auth_type == "oauth" and user_ctx and user_ctx.user_id:
         from app.services.mcp_oauth import get_valid_token
 
-        token = await get_valid_token(client, user_id, server.url)
+        token = await get_valid_token(client, user_ctx.user_id, server.url)
         if token:
             headers["Authorization"] = f"Bearer {token}"
         else:
             logger.warning(
                 "No valid OAuth token for user '%s' on MCP '%s'",
-                user_id,
+                user_ctx.user_id,
                 server.name,
             )
 
@@ -148,27 +180,42 @@ async def _post_streaming(
             return {}, resp_headers, status_code
 
 
+def _session_key(server: McpServer, user_ctx: UserContext | None) -> tuple[str, str | None, str | None]:
+    """Build a cache key for MCP sessions, scoped by server URL, user, and netid.
+
+    The netid is included because some MCP servers (tiger-junction) bind sessions
+    to the client identity derived from x-user-netid. A health-check session
+    (no netid) must not be reused for a chat session (with netid).
+    """
+    return (
+        server.url,
+        user_ctx.user_id if user_ctx else None,
+        user_ctx.princeton_netid if user_ctx else None,
+    )
+
+
 async def _initialize_session(
     client: httpx.AsyncClient,
     server: McpServer,
-    user_id: str | None = None,
+    user_ctx: UserContext | None = None,
 ) -> str | None:
     """Send the MCP initialize handshake and return the session ID.
 
     Uses a per-server lock to prevent concurrent initialization races.
     """
-    cached = _session_cache.get(server.url)
+    key = _session_key(server, user_ctx)
+    cached = _session_cache.get(key)
     if cached:
         return cached
 
     lock = _get_init_lock(server.url)
     async with lock:
         # Double-check after acquiring the lock (another task may have initialized).
-        cached = _session_cache.get(server.url)
+        cached = _session_cache.get(key)
         if cached:
             return cached
 
-        headers = await _build_headers(client, server, user_id=user_id)
+        headers = await _build_headers(client, server, user_ctx=user_ctx)
         payload = {
             "jsonrpc": "2.0",
             "id": _next_request_id(),
@@ -187,7 +234,7 @@ async def _initialize_session(
                 return None
             session_id = resp_headers.get("mcp-session-id")
             if session_id:
-                _session_cache[server.url] = session_id
+                _session_cache[key] = session_id
                 logger.debug("Initialized MCP session '%s' for '%s'", session_id, server.name)
             return session_id
         except httpx.HTTPError as e:
@@ -202,13 +249,13 @@ async def _post_jsonrpc(
     params: dict | None = None,
     timeout: float = 10.0,
     session_id: str | None = None,
-    user_id: str | None = None,
+    user_ctx: UserContext | None = None,
 ) -> dict:
     """Send a JSON-RPC 2.0 request to an MCP server and return the result.
 
     Uses streaming to handle text/event-stream responses without hanging.
     """
-    headers = await _build_headers(client, server, session_id, user_id=user_id)
+    headers = await _build_headers(client, server, session_id, user_ctx=user_ctx)
     payload = {
         "jsonrpc": "2.0",
         "id": _next_request_id(),
@@ -218,15 +265,17 @@ async def _post_jsonrpc(
 
     result, resp_headers, status = await _post_streaming(client, server.url, payload, headers, timeout)
 
+    key = _session_key(server, user_ctx)
+
     # If we get a 400 "not initialized", try initializing and retry once
     if status == 400:
         raw = result.get("_raw_text", "")
         if "not initialized" in raw.lower():
             logger.info("MCP server '%s' requires initialization, retrying...", server.name)
-            _session_cache.pop(server.url, None)
-            new_session = await _initialize_session(client, server, user_id=user_id)
+            _session_cache.pop(key, None)
+            new_session = await _initialize_session(client, server, user_ctx=user_ctx)
             if new_session:
-                headers = await _build_headers(client, server, new_session, user_id=user_id)
+                headers = await _build_headers(client, server, new_session, user_ctx=user_ctx)
                 result, resp_headers, status = await _post_streaming(
                     client, server.url, payload, headers, timeout
                 )
@@ -245,7 +294,7 @@ async def _post_jsonrpc(
     # Update cached session if server returns one
     new_session = resp_headers.get("mcp-session-id")
     if new_session:
-        _session_cache[server.url] = new_session
+        _session_cache[key] = new_session
 
     return result
 
@@ -253,16 +302,16 @@ async def _post_jsonrpc(
 async def _ensure_session(
     client: httpx.AsyncClient,
     server: McpServer,
-    user_id: str | None = None,
+    user_ctx: UserContext | None = None,
 ) -> str | None:
     """Ensure we have a valid session for this server, initializing if needed."""
-    return await _initialize_session(client, server, user_id=user_id)
+    return await _initialize_session(client, server, user_ctx=user_ctx)
 
 
 async def _list_tools_for_server(
     client: httpx.AsyncClient,
     server: McpServer,
-    user_id: str | None = None,
+    user_ctx: UserContext | None = None,
 ) -> list[dict]:
     """Fetch tools from a single MCP server, returned in OpenAI function format.
 
@@ -275,8 +324,8 @@ async def _list_tools_for_server(
             logger.debug("Using cached tools for MCP '%s' (%d tools)", server.name, len(tools))
             return tools
 
-    session_id = await _ensure_session(client, server, user_id=user_id)
-    result = await _post_jsonrpc(client, server, "tools/list", session_id=session_id, user_id=user_id)
+    session_id = await _ensure_session(client, server, user_ctx=user_ctx)
+    result = await _post_jsonrpc(client, server, "tools/list", session_id=session_id, user_ctx=user_ctx)
     server_tools = result.get("tools", [])
     tools = []
     for tool in server_tools:
@@ -308,7 +357,7 @@ class McpServerFailure:
 async def list_tools(
     client: httpx.AsyncClient,
     mcp_servers: list[McpServer],
-    user_id: str | None = None,
+    user_ctx: UserContext | None = None,
 ) -> tuple[list[dict], list[McpServerFailure]]:
     """Fetch available tools from all MCP servers in parallel.
 
@@ -316,7 +365,7 @@ async def list_tools(
     Returns (tools, failures) where failures lists servers that could not be reached.
     """
     results = await asyncio.gather(
-        *[_list_tools_for_server(client, server, user_id=user_id) for server in mcp_servers],
+        *[_list_tools_for_server(client, server, user_ctx=user_ctx) for server in mcp_servers],
         return_exceptions=True,
     )
 
@@ -346,7 +395,7 @@ async def call_tool(
     tool_name: str,
     arguments: dict,
     mcp_servers: list[McpServer],
-    user_id: str | None = None,
+    user_ctx: UserContext | None = None,
 ) -> str:
     """Execute a tool call on the appropriate MCP server.
 
@@ -354,7 +403,7 @@ async def call_tool(
         tool_name: Namespaced name in format 'servername__toolname'.
         arguments: Tool arguments dict.
         mcp_servers: List of configured MCP servers to resolve against.
-        user_id: Current user ID for OAuth token resolution.
+        user_ctx: User context for auth token resolution.
 
     Returns:
         Tool result as a string.
@@ -374,7 +423,8 @@ async def call_tool(
         return json.dumps({"error": f"Unknown MCP server: {server_name}"})
 
     try:
-        session_id = _session_cache.get(server.url)
+        key = _session_key(server, user_ctx)
+        session_id = _session_cache.get(key)
         logger.debug("Calling tool '%s' on MCP '%s' at %s", actual_tool, server_name, server.url)
         result = await _post_jsonrpc(
             client,
@@ -383,7 +433,7 @@ async def call_tool(
             {"name": actual_tool, "arguments": arguments},
             timeout=30.0,
             session_id=session_id,
-            user_id=user_id,
+            user_ctx=user_ctx,
         )
         content = result.get("content", [])
         parts: list[str] = []
@@ -429,14 +479,16 @@ class McpAuthRequiredError(Exception):
 
 
 def evict_session_cache(server_url: str) -> None:
-    """Remove a cached session so the next health check does a real handshake."""
-    _session_cache.pop(server_url, None)
+    """Remove cached sessions for a server URL (all users) so the next health check does a real handshake."""
+    keys_to_remove = [k for k in _session_cache if k[0] == server_url]
+    for k in keys_to_remove:
+        del _session_cache[k]
 
 
 async def check_server_health(
     client: httpx.AsyncClient,
     server: McpServer,
-    user_id: str | None = None,
+    user_ctx: UserContext | None = None,
 ) -> bool:
     """Check if an MCP server is reachable by attempting initialization.
 
@@ -446,7 +498,7 @@ async def check_server_health(
     Unlike _initialize_session, this treats a successful response without a
     session ID as reachable (some servers like Context7 don't use sessions).
     """
-    headers = await _build_headers(client, server, user_id=user_id)
+    headers = await _build_headers(client, server, user_ctx=user_ctx)
     payload = {
         "jsonrpc": "2.0",
         "id": _next_request_id(),
@@ -473,8 +525,9 @@ async def check_server_health(
         return False
 
     # Cache session if returned (reuse for subsequent calls)
+    key = _session_key(server, user_ctx)
     session_id = resp_headers.get("mcp-session-id")
     if session_id:
-        _session_cache[server.url] = session_id
+        _session_cache[key] = session_id
 
     return True

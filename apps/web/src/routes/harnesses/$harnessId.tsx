@@ -29,6 +29,7 @@ import { type KeyboardEvent, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { OAuthConnectRow } from "../../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../../components/preset-mcp-grid";
+import { PrincetonConnectRow } from "../../components/princeton-connect-row";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
@@ -187,9 +188,13 @@ function HarnessEditPage() {
 		);
 	};
 
-	// OAuth servers for the connections section
+	// Servers requiring connection (OAuth or Princeton)
 	const oauthServers = useMemo(
 		() => currentMcpServers.filter((s) => s.authType === "oauth"),
+		[currentMcpServers],
+	);
+	const tigerJunctionServers = useMemo(
+		() => currentMcpServers.filter((s) => s.authType === "tiger_junction"),
 		[currentMcpServers],
 	);
 
@@ -606,21 +611,29 @@ function HarnessEditPage() {
 
 					<Separator />
 
-					{/* OAuth Connections */}
-					{oauthServers.length > 0 && (
+					{/* Account Connections */}
+					{(oauthServers.length > 0 || tigerJunctionServers.length > 0) && (
 						<motion.section
 							initial={{ opacity: 0, y: 8 }}
 							animate={{ opacity: 1, y: 0 }}
 							transition={{ delay: 0.08 }}
 						>
 							<h2 className="mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-								OAuth Connections
+								Connections
 							</h2>
 							<p className="mb-4 text-xs text-muted-foreground">
-								Connect your OAuth-authenticated servers. Connections persist
-								across sessions.
+								Connect your accounts. Connections persist across sessions.
 							</p>
-							<OAuthConnectionsSection servers={oauthServers} />
+							{tigerJunctionServers.length > 0 && (
+								<div className="mb-2 space-y-2">
+									{tigerJunctionServers.map((server) => (
+										<PrincetonConnectRow key={server.url} server={server} />
+									))}
+								</div>
+							)}
+							{oauthServers.length > 0 && (
+								<OAuthConnectionsSection servers={oauthServers} />
+							)}
 						</motion.section>
 					)}
 
@@ -772,6 +785,12 @@ function McpServerRow({
 					OAuth
 				</Badge>
 			)}
+			{server.authType === "tiger_junction" && (
+				<Badge variant="secondary" className="shrink-0 text-[10px]">
+					<Shield size={8} />
+					Princeton
+				</Badge>
+			)}
 			<Button
 				variant="ghost"
 				size="icon-xs"
@@ -792,7 +811,9 @@ function AddMcpServerForm({
 	const [open, setOpen] = useState(false);
 	const [name, setName] = useState("");
 	const [url, setUrl] = useState("");
-	const [authType, setAuthType] = useState<"none" | "bearer" | "oauth">("none");
+	const [authType, setAuthType] = useState<
+		"none" | "bearer" | "oauth" | "tiger_junction"
+	>("none");
 	const [authToken, setAuthToken] = useState("");
 	const [showToken, setShowToken] = useState(false);
 
@@ -907,7 +928,9 @@ function AddMcpServerForm({
 				</label>
 				<Select
 					value={authType}
-					onValueChange={(v) => setAuthType(v as "none" | "bearer" | "oauth")}
+					onValueChange={(v) =>
+						setAuthType(v as "none" | "bearer" | "oauth" | "tiger_junction")
+					}
 				>
 					<SelectTrigger className="max-w-xs text-xs">
 						<SelectValue />

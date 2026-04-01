@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     slack_oauth_client_id: str = ""
     slack_oauth_client_secret: str = ""
 
+    # Tiger Junction engine shared bearer token (MCP_ACCESS_TOKEN on the engine side)
+    tiger_junction_mcp_token: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     def validate_startup(self) -> None:

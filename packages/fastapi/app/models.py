@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 class McpServer(BaseModel):
     name: str
     url: str
-    auth_type: Literal["none", "bearer", "oauth"] = "none"
+    auth_type: Literal["none", "bearer", "oauth", "tiger_junction"] = "none"
     auth_token: str | None = None
 
 
