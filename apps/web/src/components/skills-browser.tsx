@@ -287,15 +287,25 @@ export function SkillsBrowser({
 					{rows.map((skill) => {
 						const added = isAdded(skill.fullId);
 						return (
-							<button
+							<div
 								key={skill.fullId}
-								type="button"
+								role="button"
+								tabIndex={0}
 								onClick={() =>
 									onToggle({
 										name: skill.fullId,
 										description: skill.description,
 									})
 								}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" || e.key === " ") {
+										e.preventDefault();
+										onToggle({
+											name: skill.fullId,
+											description: skill.description,
+										});
+									}
+								}}
 								className={`flex items-start gap-3 border p-3 text-left transition-colors ${
 									added
 										? "border-foreground bg-foreground/3"
@@ -334,7 +344,7 @@ export function SkillsBrowser({
 								>
 									<Eye size={14} />
 								</button>
-							</button>
+							</div>
 						);
 					})}
 				</div>

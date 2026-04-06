@@ -34,15 +34,25 @@ export function RecommendedSkillsGrid({
 				{RECOMMENDED_SKILLS.map((rec) => {
 					const isSelected = selected.some((s) => s.name === rec.skill.fullId);
 					return (
-						<button
+						<div
 							key={rec.id}
-							type="button"
+							role="button"
+							tabIndex={0}
 							onClick={() =>
 								onToggle({
 									name: rec.skill.fullId,
 									description: rec.skill.description,
 								})
 							}
+							onKeyDown={(e) => {
+								if (e.key === "Enter" || e.key === " ") {
+									e.preventDefault();
+									onToggle({
+										name: rec.skill.fullId,
+										description: rec.skill.description,
+									});
+								}
+							}}
 							className={`flex items-start gap-3 border p-3 text-left transition-colors ${
 								isSelected
 									? "border-foreground bg-foreground/3"
@@ -81,7 +91,7 @@ export function RecommendedSkillsGrid({
 							>
 								<Eye size={14} />
 							</button>
-						</button>
+						</div>
 					);
 				})}
 			</div>
