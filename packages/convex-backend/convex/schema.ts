@@ -184,6 +184,10 @@ export default defineSchema({
 		.searchIndex("search_skills", {
 			searchField: "skillId",
 			filterFields: [],
+		})
+		.searchIndex("search_skills_description", {
+			searchField: "description",
+			filterFields: [],
 		}),
 
 	userSettings: defineTable({

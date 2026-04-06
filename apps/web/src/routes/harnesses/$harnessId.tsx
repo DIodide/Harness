@@ -7,7 +7,12 @@ import {
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	redirect,
+	useNavigate,
+} from "@tanstack/react-router";
 import {
 	ArrowLeft,
 	Box,
@@ -35,6 +40,7 @@ import { OAuthConnectRow } from "../../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../../components/princeton-connect-row";
 import { RecommendedSkillsGrid } from "../../components/recommended-skills-grid";
+import { SkillViewerDialog } from "../../components/skill-viewer-dialog";
 import { SkillsBrowser } from "../../components/skills-browser";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -75,6 +81,7 @@ export const Route = createFileRoute("/harnesses/$harnessId")({
 });
 
 function HarnessEditPage() {
+	const navigate = useNavigate();
 	const { harnessId } = Route.useParams();
 	const { data: harness, isLoading } = useQuery(
 		convexQuery(api.harnesses.get, {
@@ -97,6 +104,7 @@ function HarnessEditPage() {
 			setMcpServers(null);
 			setSkills(null);
 			toast.success("Harness saved");
+			navigate({ to: "/harnesses" });
 
 			// Fire-and-forget: sync skill details for newly added skills
 			if (savedSkills !== null && savedSkills.length > 0) {
@@ -150,6 +158,7 @@ function HarnessEditPage() {
 	const [mcpServers, setMcpServers] = useState<McpServerEntry[] | null>(null);
 	const [skills, setSkills] = useState<SkillEntry[] | null>(null);
 	const [skillsBrowserOpen, setSkillsBrowserOpen] = useState(false);
+	const [viewingSkillId, setViewingSkillId] = useState<string | null>(null);
 	const [sandboxEnabled, setSandboxEnabled] = useState<boolean | null>(null);
 	const [sandboxConfig, setSandboxConfig] = useState<{
 		persistent: boolean;
@@ -177,9 +186,9 @@ function HarnessEditPage() {
 	};
 
 	const currentSandboxEnabled =
-		sandboxEnabled ?? (harness as any)?.sandboxEnabled ?? false;
+		sandboxEnabled ?? harness?.sandboxEnabled ?? false;
 	const currentSandboxConfig = sandboxConfig ??
-		(harness as any)?.sandboxConfig ?? {
+		harness?.sandboxConfig ?? {
 			persistent: false,
 			autoStart: true,
 			defaultLanguage: "python",
@@ -452,24 +461,30 @@ function HarnessEditPage() {
 
 						<div className="space-y-4">
 							{/* Enable toggle */}
-							<label className="flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30">
+							<div className="flex items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30">
 								<Checkbox
+									id="harness-sandbox-enabled"
 									checked={currentSandboxEnabled}
 									onCheckedChange={(checked) =>
 										setSandboxEnabled(checked === true)
 									}
 								/>
-								<div className="flex-1">
-									<p className="text-xs font-medium text-foreground">
-										Enable sandbox for this harness
-									</p>
-									<p className="text-[11px] text-muted-foreground">
-										Gives this harness access to code execution, file system,
-										terminal, and git operations in an isolated environment
-									</p>
-								</div>
-								<Box size={14} className="shrink-0 text-muted-foreground" />
-							</label>
+								<label
+									htmlFor="harness-sandbox-enabled"
+									className="flex min-w-0 flex-1 cursor-pointer items-center gap-3"
+								>
+									<div className="flex-1">
+										<p className="text-xs font-medium text-foreground">
+											Enable sandbox for this harness
+										</p>
+										<p className="text-[11px] text-muted-foreground">
+											Gives this harness access to code execution, file system,
+											terminal, and git operations in an isolated environment
+										</p>
+									</div>
+									<Box size={14} className="shrink-0 text-muted-foreground" />
+								</label>
+							</div>
 
 							{currentSandboxEnabled && (
 								<motion.div
@@ -480,9 +495,9 @@ function HarnessEditPage() {
 								>
 									{/* Sandbox type */}
 									<div>
-										<label className="mb-1.5 block text-xs font-medium text-foreground">
+										<span className="mb-1.5 block text-xs font-medium text-foreground">
 											Sandbox Type
-										</label>
+										</span>
 										<div className="grid gap-2 sm:grid-cols-2">
 											<button
 												type="button"
@@ -533,9 +548,9 @@ function HarnessEditPage() {
 
 									{/* Resource tier */}
 									<div>
-										<label className="mb-1.5 block text-xs font-medium text-foreground">
+										<span className="mb-1.5 block text-xs font-medium text-foreground">
 											Resource Tier
-										</label>
+										</span>
 										<Select
 											value={currentSandboxConfig.resourceTier}
 											onValueChange={(v) =>
@@ -570,9 +585,9 @@ function HarnessEditPage() {
 
 									{/* Default language */}
 									<div>
-										<label className="mb-1.5 block text-xs font-medium text-foreground">
+										<span className="mb-1.5 block text-xs font-medium text-foreground">
 											Default Language
-										</label>
+										</span>
 										<Select
 											value={currentSandboxConfig.defaultLanguage}
 											onValueChange={(v) =>
@@ -623,8 +638,9 @@ function HarnessEditPage() {
 													className="max-w-sm text-xs"
 												/>
 											</div>
-											<label className="flex cursor-pointer items-center gap-2.5">
+											<div className="flex items-center gap-2.5">
 												<Checkbox
+													id="harness-sandbox-network-restricted"
 													checked={
 														currentSandboxConfig.networkRestricted ?? false
 													}
@@ -635,19 +651,25 @@ function HarnessEditPage() {
 														})
 													}
 												/>
-												<div>
-													<p className="text-xs text-foreground">
-														Restrict network access
-													</p>
-													<p className="text-[11px] text-muted-foreground">
-														Block all outbound network traffic from the sandbox
-													</p>
-												</div>
-												<Globe
-													size={12}
-													className="shrink-0 text-muted-foreground"
-												/>
-											</label>
+												<label
+													htmlFor="harness-sandbox-network-restricted"
+													className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5"
+												>
+													<div>
+														<p className="text-xs text-foreground">
+															Restrict network access
+														</p>
+														<p className="text-[11px] text-muted-foreground">
+															Block all outbound network traffic from the
+															sandbox
+														</p>
+													</div>
+													<Globe
+														size={12}
+														className="shrink-0 text-muted-foreground"
+													/>
+												</label>
+											</div>
 										</div>
 									</details>
 								</motion.div>
@@ -718,10 +740,17 @@ function HarnessEditPage() {
 								{currentSkills.map((skill) => {
 									const displayName = skill.name.split("/").pop() ?? skill.name;
 									return (
-										<button
+										<div
 											key={skill.name}
-											type="button"
+											role="button"
+											tabIndex={0}
 											onClick={() => toggleSkill(skill)}
+											onKeyDown={(e) => {
+												if (e.key === "Enter" || e.key === " ") {
+													e.preventDefault();
+													toggleSkill(skill);
+												}
+											}}
 											className="flex w-full items-start gap-3 border border-foreground bg-foreground/3 p-3 text-left transition-colors hover:border-foreground/20"
 										>
 											<Checkbox
@@ -734,9 +763,23 @@ function HarnessEditPage() {
 													{displayName}
 												</p>
 											</div>
-										</button>
+											<button
+												type="button"
+												onClick={(e) => {
+													e.stopPropagation();
+													setViewingSkillId(skill.name);
+												}}
+												className="mt-0.5 shrink-0 text-muted-foreground/40 transition-colors hover:text-foreground"
+											>
+												<Eye size={14} />
+											</button>
+										</div>
 									);
 								})}
+								<SkillViewerDialog
+									fullId={viewingSkillId}
+									onClose={() => setViewingSkillId(null)}
+								/>
 							</div>
 						)}
 
