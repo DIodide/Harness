@@ -79,11 +79,32 @@ export const browseSkills = query({
 export const searchSkillsIndex = query({
 	args: { query: v.string(), limit: v.number() },
 	handler: async (ctx, args) => {
-		const results = await ctx.db
-			.query("skillsIndex")
-			.withSearchIndex("search_skills", (q) => q.search("skillId", args.query))
-			.take(args.limit);
-		return results;
+		// Search both skillId and description indexes in parallel
+		const [byName, byDescription] = await Promise.all([
+			ctx.db
+				.query("skillsIndex")
+				.withSearchIndex("search_skills", (q) =>
+					q.search("skillId", args.query),
+				)
+				.take(args.limit),
+			ctx.db
+				.query("skillsIndex")
+				.withSearchIndex("search_skills_description", (q) =>
+					q.search("description", args.query),
+				)
+				.take(args.limit),
+		]);
+
+		// Merge and deduplicate, preferring name matches (listed first)
+		const seen = new Set<string>();
+		const merged = [];
+		for (const doc of [...byName, ...byDescription]) {
+			if (!seen.has(doc.fullId)) {
+				seen.add(doc.fullId);
+				merged.push(doc);
+			}
+		}
+		return merged.slice(0, args.limit);
 	},
 });
 
