@@ -740,10 +740,17 @@ function HarnessEditPage() {
 								{currentSkills.map((skill) => {
 									const displayName = skill.name.split("/").pop() ?? skill.name;
 									return (
-										<button
+										<div
 											key={skill.name}
-											type="button"
+											role="button"
+											tabIndex={0}
 											onClick={() => toggleSkill(skill)}
+											onKeyDown={(e) => {
+												if (e.key === "Enter" || e.key === " ") {
+													e.preventDefault();
+													toggleSkill(skill);
+												}
+											}}
 											className="flex w-full items-start gap-3 border border-foreground bg-foreground/3 p-3 text-left transition-colors hover:border-foreground/20"
 										>
 											<Checkbox
@@ -766,7 +773,7 @@ function HarnessEditPage() {
 											>
 												<Eye size={14} />
 											</button>
-										</button>
+										</div>
 									);
 								})}
 								<SkillViewerDialog
