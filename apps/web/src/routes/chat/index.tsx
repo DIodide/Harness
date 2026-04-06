@@ -26,6 +26,7 @@ import {
 	PanelLeftOpen,
 	Paperclip,
 	Plus,
+	RotateCcw,
 	Search, // Icon for search
 	Settings,
 	SlidersHorizontal,
@@ -449,7 +450,8 @@ function ChatPage() {
 				const partialContent = state.content ?? "";
 				// model is only sent in the "done" event which doesn't fire on abort,
 				// so fall back to the session model, then the harness model
-				const model = state.model ?? sessionModel ?? activeHarness?.model ?? null;
+				const model =
+					state.model ?? sessionModel ?? activeHarness?.model ?? null;
 
 				saveInterruptedMsg.mutate({
 					conversationId: convoId as Id<"conversations">,
@@ -708,16 +710,14 @@ function ChatPage() {
 					name: activeHarness.name,
 					harness_id: activeHarness._id,
 
-					sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
-					sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
-					sandbox_config: (activeHarness as any).sandboxConfig
+					sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+					sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
+					sandbox_config: activeHarness.sandboxConfig
 						? {
-								persistent: (activeHarness as any).sandboxConfig.persistent,
-								auto_start: (activeHarness as any).sandboxConfig.autoStart,
-								default_language: (activeHarness as any).sandboxConfig
-									.defaultLanguage,
-								resource_tier: (activeHarness as any).sandboxConfig
-									.resourceTier,
+								persistent: activeHarness.sandboxConfig.persistent,
+								auto_start: activeHarness.sandboxConfig.autoStart,
+								default_language: activeHarness.sandboxConfig.defaultLanguage,
+								resource_tier: activeHarness.sandboxConfig.resourceTier,
 							}
 						: undefined,
 				},
@@ -795,15 +795,14 @@ function ChatPage() {
 				skills: activeHarness.skills ?? [],
 				name: activeHarness.name,
 				harness_id: activeHarness._id,
-				sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
-				sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
-				sandbox_config: (activeHarness as any).sandboxConfig
+				sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+				sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
+				sandbox_config: activeHarness.sandboxConfig
 					? {
-							persistent: (activeHarness as any).sandboxConfig.persistent,
-							auto_start: (activeHarness as any).sandboxConfig.autoStart,
-							default_language: (activeHarness as any).sandboxConfig
-								.defaultLanguage,
-							resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
+							persistent: activeHarness.sandboxConfig.persistent,
+							auto_start: activeHarness.sandboxConfig.autoStart,
+							default_language: activeHarness.sandboxConfig.defaultLanguage,
+							resource_tier: activeHarness.sandboxConfig.resourceTier,
 						}
 					: undefined,
 			};
@@ -927,8 +926,8 @@ function ChatPage() {
 		? chatStream.streamingConvoIds.has(activeConvoId)
 		: false;
 
-	const sandboxEnabled = (activeHarness as any)?.sandboxEnabled ?? false;
-	const daytonaSandboxId = (activeHarness as any)?.daytonaSandboxId ?? null;
+	const sandboxEnabled = activeHarness?.sandboxEnabled ?? false;
+	const daytonaSandboxId = activeHarness?.daytonaSandboxId ?? null;
 
 	return (
 		<SandboxPanelProvider sandboxId={sandboxEnabled ? daytonaSandboxId : null}>
@@ -1031,7 +1030,9 @@ function ChatPage() {
 						conversationId={activeConvoId}
 						activeHarness={activeHarness}
 						sessionModel={
-						userSettings?.modelSelectorMode === "harness" ? null : sessionModel
+							userSettings?.modelSelectorMode === "harness"
+								? null
+								: sessionModel
 						}
 						modelSelectorMode={
 							(userSettings?.modelSelectorMode as "session" | "harness") ??
@@ -1187,12 +1188,12 @@ function ChatSidebar({
 	return (
 		<div className="flex h-full w-[280px] flex-col bg-background">
 			<div className="flex items-center justify-between px-3 py-3">
-				<div className="flex items-center gap-2">
+				<Link to="/" className="flex items-center gap-2">
 					<HarnessMark size={18} className="text-foreground" />
 					<span className="text-sm font-semibold tracking-tight text-foreground">
 						Harness
 					</span>
-				</div>
+				</Link>
 				<div className="flex items-center gap-1">
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -1584,9 +1585,7 @@ function SettingsDialog({
 								</p>
 							</div>
 							<Select
-								value={
-									(userSettings?.modelSelectorMode as string) ?? "session"
-								}
+								value={(userSettings?.modelSelectorMode as string) ?? "session"}
 								onValueChange={(value) => {
 									updateSettings.mutate({
 										modelSelectorMode: value as "session" | "harness",
@@ -1796,6 +1795,7 @@ function ChatHeader({
 			authToken?: string;
 		}>;
 		skills: SkillEntry[];
+		sandboxEnabled?: boolean;
 	};
 	harnesses: Array<{
 		_id: Id<"harnesses">;
@@ -1874,7 +1874,7 @@ function ChatHeader({
 					<SkillsStatus skills={harness.skills} />
 				)}
 
-				{harness && (harness as any).sandboxEnabled && <SandboxBadge />}
+				{harness && harness.sandboxEnabled && <SandboxBadge />}
 			</div>
 		</header>
 	);
@@ -2957,6 +2957,14 @@ function ChatInput({
 			authToken?: string;
 		}>;
 		skills: SkillEntry[];
+		sandboxEnabled?: boolean;
+		daytonaSandboxId?: string;
+		sandboxConfig?: {
+			persistent: boolean;
+			autoStart: boolean;
+			defaultLanguage: string;
+			resourceTier: string;
+		};
 	};
 	onConvoCreated: (id: Id<"conversations">) => void;
 	isStreaming: boolean;
@@ -3006,7 +3014,9 @@ function ChatInput({
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
-		MODELS.find((m) => m.value === effectiveModel)?.label ?? effectiveModel ?? "Model";
+		MODELS.find((m) => m.value === effectiveModel)?.label ??
+		effectiveModel ??
+		"Model";
 
 	const supportsMedia = modelSupportsMedia(effectiveModel);
 	const supportsAudio = modelSupportsAudio(effectiveModel);
@@ -3138,15 +3148,14 @@ function ChatInput({
 			skills: activeHarness.skills ?? [],
 			name: activeHarness.name,
 			harness_id: activeHarness._id,
-			sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
-			sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
-			sandbox_config: (activeHarness as any).sandboxConfig
+			sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+			sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
+			sandbox_config: activeHarness.sandboxConfig
 				? {
-						persistent: (activeHarness as any).sandboxConfig.persistent,
-						auto_start: (activeHarness as any).sandboxConfig.autoStart,
-						default_language: (activeHarness as any).sandboxConfig
-							.defaultLanguage,
-						resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
+						persistent: activeHarness.sandboxConfig.persistent,
+						auto_start: activeHarness.sandboxConfig.autoStart,
+						default_language: activeHarness.sandboxConfig.defaultLanguage,
+						resource_tier: activeHarness.sandboxConfig.resourceTier,
 					}
 				: undefined,
 		};
@@ -3475,7 +3484,9 @@ function ChatInput({
 											{sessionModel && (
 												<span className="size-1.5 shrink-0 rounded-full bg-primary" />
 											)}
-											<span className="max-w-[90px] truncate">{currentModelLabel}</span>
+											<span className="max-w-[90px] truncate">
+												{currentModelLabel}
+											</span>
 											<ChevronDown size={10} />
 										</button>
 									</DropdownMenuTrigger>
@@ -3488,14 +3499,17 @@ function ChatInput({
 											: "Switch model for this session"}
 								</TooltipContent>
 							</Tooltip>
-							<DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+							<DropdownMenuContent
+								align="end"
+								className="max-h-72 overflow-y-auto"
+							>
 								{modelSelectorMode === "session" && sessionModel && (
 									<>
 										<DropdownMenuItem
 											onClick={() => onSessionModelChange(null)}
-											className="flex items-center gap-2 text-muted-foreground italic"
+											className="flex items-center gap-2"
 										>
-											<span className="w-3 shrink-0" />
+											<RotateCcw size={12} className="shrink-0" />
 											Use harness default
 										</DropdownMenuItem>
 										<DropdownMenuSeparator />
