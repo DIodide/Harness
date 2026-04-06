@@ -177,11 +177,32 @@ function normalizeSkillId(id: string): string {
 	return id.replace(/:/g, "-").toLowerCase();
 }
 
+/** Build GitHub API headers, including auth token if available. */
+function ghApiHeaders(): Record<string, string> {
+	const headers: Record<string, string> = {
+		Accept: "application/vnd.github.v3+json",
+	};
+	const token = process.env.GITHUB_TOKEN;
+	if (token) {
+		headers.Authorization = `token ${token}`;
+	}
+	return headers;
+}
+
+/** Build headers for raw.githubusercontent.com requests (auth only). */
+function ghRawHeaders(): Record<string, string> | undefined {
+	const token = process.env.GITHUB_TOKEN;
+	if (token) {
+		return { Authorization: `token ${token}` };
+	}
+	return undefined;
+}
+
 /** Resolve the canonical owner/repo via GitHub API (follows renames/redirects). */
 async function resolveGitHubRepo(source: string): Promise<string | null> {
 	try {
 		const resp = await fetch(`https://api.github.com/repos/${source}`, {
-			headers: { Accept: "application/vnd.github.v3+json" },
+			headers: ghApiHeaders(),
 		});
 		if (resp.ok) {
 			const data = (await resp.json()) as { full_name?: string };
@@ -229,7 +250,7 @@ async function fetchSkillMdFromRepo(
 	const bases = ["skills", ".agents/skills", ".claude/skills"];
 	const ghApi = "https://api.github.com";
 	const ghRaw = "https://raw.githubusercontent.com";
-	const ghHeaders = { Accept: "application/vnd.github.v3+json" };
+	const rawHeaders = ghRawHeaders();
 	const normalizedId = normalizeSkillId(skillId);
 	const branches = ["main", "master"];
 
@@ -242,6 +263,7 @@ async function fetchSkillMdFromRepo(
 				try {
 					const resp = await fetch(
 						`${ghRaw}/${source}/${branch}/${base}/${id}/SKILL.md`,
+						rawHeaders ? { headers: rawHeaders } : undefined,
 					);
 					if (resp.ok) return await resp.text();
 				} catch {
@@ -252,7 +274,10 @@ async function fetchSkillMdFromRepo(
 
 		// 2. Try repo-root SKILL.md
 		try {
-			const resp = await fetch(`${ghRaw}/${source}/${branch}/SKILL.md`);
+			const resp = await fetch(
+				`${ghRaw}/${source}/${branch}/SKILL.md`,
+				rawHeaders ? { headers: rawHeaders } : undefined,
+			);
 			if (resp.ok) return await resp.text();
 		} catch {
 			// Continue
@@ -264,7 +289,7 @@ async function fetchSkillMdFromRepo(
 		try {
 			const resp = await fetch(
 				`${ghApi}/repos/${source}/git/trees/${branch}?recursive=1`,
-				{ headers: ghHeaders },
+				{ headers: ghApiHeaders() },
 			);
 			if (!resp.ok) continue;
 
@@ -295,6 +320,7 @@ async function fetchSkillMdFromRepo(
 			if (match) {
 				const mdResp = await fetch(
 					`${ghRaw}/${source}/${branch}/${match}`,
+					rawHeaders ? { headers: rawHeaders } : undefined,
 				);
 				if (mdResp.ok) return await mdResp.text();
 			}
@@ -306,6 +332,7 @@ async function fetchSkillMdFromRepo(
 			if (rootSkillMd) {
 				const mdResp = await fetch(
 					`${ghRaw}/${source}/${branch}/${rootSkillMd}`,
+					rawHeaders ? { headers: rawHeaders } : undefined,
 				);
 				if (mdResp.ok) return await mdResp.text();
 			}
@@ -377,9 +404,27 @@ export const ensureSkillDetails = action({
 			});
 			if (existing?.detail) return;
 
-			const parts = name.split("/");
-			const skillId = parts.pop() ?? name;
-			const source = parts.join("/");
+			// Look up the authoritative source from skillsIndex first,
+			// falling back to splitting the fullId (which can be wrong for
+			// skills whose fullId has more than 3 segments).
+			const indexSource = await ctx.runQuery(
+				internal.skills.getSkillSource,
+				{ fullId: name },
+			);
+
+			let source: string;
+			let skillId: string;
+			if (indexSource) {
+				source = indexSource;
+				// skillId is the portion of fullId after the source prefix
+				skillId = name.startsWith(source + "/")
+					? name.slice(source.length + 1)
+					: name.split("/").pop() ?? name;
+			} else {
+				const parts = name.split("/");
+				skillId = parts.pop() ?? name;
+				source = parts.join("/");
+			}
 
 			if (!source) return;
 
@@ -420,6 +465,18 @@ export const getDetailByName = internalQuery({
 			.query("skillDetails")
 			.withIndex("by_name", (q) => q.eq("name", args.name))
 			.first();
+	},
+});
+
+/** Look up a skill's source from the skillsIndex by its fullId. */
+export const getSkillSource = internalQuery({
+	args: { fullId: v.string() },
+	handler: async (ctx, args) => {
+		const doc = await ctx.db
+			.query("skillsIndex")
+			.withIndex("by_fullId", (q) => q.eq("fullId", args.fullId))
+			.first();
+		return doc?.source ?? null;
 	},
 });
 

@@ -2,7 +2,7 @@ import { convexQuery, useConvexAction } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useQuery } from "@tanstack/react-query";
 import { Download, Loader2 } from "lucide-react";
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MarkdownMessage } from "./markdown-message";
 import {
 	Dialog,
@@ -32,18 +32,40 @@ export function SkillViewerDialog({
 	onClose,
 }: SkillViewerDialogProps) {
 	const ensureSkillDetailsFn = useConvexAction(api.skills.ensureSkillDetails);
-	const ensuredRef = useRef(new Set<string>());
+	// Track per-skill ensure status: maps fullId → { done, error }
+	const ensureStatusRef = useRef(
+		new Map<string, { done: boolean; error: boolean }>(),
+	);
+	// Force re-render when a status changes
+	const [, forceUpdate] = useState(0);
 
 	const detailQuery = useQuery({
 		...convexQuery(api.skills.getByName, { name: fullId ?? "" }),
 		enabled: !!fullId,
 	});
 
-	// Fire-and-forget ensure on first open
-	if (fullId && !ensuredRef.current.has(fullId)) {
-		ensuredRef.current.add(fullId);
-		ensureSkillDetailsFn({ names: [fullId] }).catch(() => {});
-	}
+	const currentStatus = fullId
+		? ensureStatusRef.current.get(fullId)
+		: undefined;
+	const ensureDone = currentStatus?.done ?? false;
+	const ensureError = currentStatus?.error ?? false;
+
+	// Fetch details when a new fullId is opened
+	useEffect(() => {
+		if (!fullId) return;
+		if (ensureStatusRef.current.has(fullId)) return;
+		ensureStatusRef.current.set(fullId, { done: false, error: false });
+		forceUpdate((n) => n + 1);
+		ensureSkillDetailsFn({ names: [fullId] })
+			.then(() => {
+				ensureStatusRef.current.set(fullId, { done: true, error: false });
+				forceUpdate((n) => n + 1);
+			})
+			.catch(() => {
+				ensureStatusRef.current.set(fullId, { done: true, error: true });
+				forceUpdate((n) => n + 1);
+			});
+	}, [fullId, ensureSkillDetailsFn]);
 
 	const formatInstalls = useCallback((n: number) => {
 		if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -76,7 +98,28 @@ export function SkillViewerDialog({
 					</DialogDescription>
 				</DialogHeader>
 				<div className="max-h-[70vh] overflow-y-auto">
-					{detailQuery.isLoading || !detailQuery.data?.detail ? (
+					{detailQuery.data?.detail ? (
+						<MarkdownMessage
+							content={detailQuery.data.detail.replace(
+								/^---\s*\n[\s\S]*?\n---\s*\n?/,
+								"",
+							)}
+						/>
+					) : detailQuery.isError || ensureError ? (
+						<div className="flex items-center justify-center py-12">
+							<span className="text-sm text-muted-foreground">
+								Failed to load skill documentation.
+							</span>
+						</div>
+					) : ensureDone &&
+						!detailQuery.isLoading &&
+						!detailQuery.isFetching ? (
+						<div className="flex items-center justify-center py-12">
+							<span className="text-sm text-muted-foreground">
+								No documentation available for this skill.
+							</span>
+						</div>
+					) : (
 						<div className="flex items-center justify-center py-12">
 							<Loader2
 								size={20}
@@ -86,13 +129,6 @@ export function SkillViewerDialog({
 								Fetching skill documentation...
 							</span>
 						</div>
-					) : (
-						<MarkdownMessage
-							content={detailQuery.data.detail.replace(
-								/^---\s*\n[\s\S]*?\n---\s*\n?/,
-								"",
-							)}
-						/>
 					)}
 				</div>
 			</DialogContent>
