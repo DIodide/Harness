@@ -5,6 +5,7 @@ import {
 	ArrowLeft,
 	ArrowRight,
 	Download,
+	Eye,
 	Loader2,
 	Search,
 	X,
@@ -13,9 +14,17 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SkillEntry, SkillRow } from "../lib/skills";
 import { searchSkillsSh } from "../lib/skills-api";
+import { MarkdownMessage } from "./markdown-message";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
+} from "./ui/dialog";
 import { Input } from "./ui/input";
 
 const PAGE_SIZE = 20;
@@ -72,7 +81,31 @@ export function SkillsBrowser({
 	const [browsePageIndex, setBrowsePageIndex] = useState(0);
 	const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+	const [viewingSkill, setViewingSkill] = useState<SkillRow | null>(null);
+	const ensuredSkillsRef = useRef(new Set<string>());
+
 	const discoverSkillsFn = useConvexAction(api.skills.discoverSkillsFromSearch);
+	const ensureSkillDetailsFn = useConvexAction(api.skills.ensureSkillDetails);
+
+	// Query skill detail when viewing — Convex reactivity auto-updates when ensureSkillDetails finishes
+	const skillDetailQuery = useQuery({
+		...convexQuery(api.skills.getByName, {
+			name: viewingSkill?.fullId ?? "",
+		}),
+		enabled: !!viewingSkill,
+	});
+
+	const handleViewSkill = useCallback(
+		(skill: SkillRow) => {
+			setViewingSkill(skill);
+			// Fire-and-forget: ensure detail is cached (same pattern as harness save)
+			if (!ensuredSkillsRef.current.has(skill.fullId)) {
+				ensuredSkillsRef.current.add(skill.fullId);
+				ensureSkillDetailsFn({ names: [skill.fullId] }).catch(() => {});
+			}
+		},
+		[ensureSkillDetailsFn],
+	);
 
 	useEffect(() => {
 		clearTimeout(debounceRef.current);
@@ -319,6 +352,23 @@ export function SkillsBrowser({
 										{skill.source}
 									</p>
 								</div>
+								<span
+									role="button"
+									tabIndex={0}
+									onClick={(e) => {
+										e.stopPropagation();
+										handleViewSkill(skill);
+									}}
+									onKeyDown={(e) => {
+										if (e.key === "Enter" || e.key === " ") {
+											e.stopPropagation();
+											handleViewSkill(skill);
+										}
+									}}
+									className="mt-0.5 shrink-0 text-muted-foreground/40 transition-colors hover:text-foreground"
+								>
+									<Eye size={14} />
+								</span>
 							</button>
 						);
 					})}
@@ -356,6 +406,44 @@ export function SkillsBrowser({
 					</Button>
 				</div>
 			)}
+			<Dialog
+				open={!!viewingSkill}
+				onOpenChange={(open) => {
+					if (!open) setViewingSkill(null);
+				}}
+			>
+				<DialogContent className="sm:max-w-2xl">
+					<DialogHeader>
+						<DialogTitle className="text-sm">
+							{viewingSkill?.skillId}
+						</DialogTitle>
+						<DialogDescription className="text-xs">
+							{viewingSkill?.source}
+							{viewingSkill && viewingSkill.installs > 0 && (
+								<span className="ml-2 inline-flex items-center gap-0.5">
+									<Download size={10} />
+									{formatInstalls(viewingSkill.installs)}
+								</span>
+							)}
+						</DialogDescription>
+					</DialogHeader>
+					<div className="max-h-[70vh] overflow-y-auto">
+						{skillDetailQuery.isLoading || !skillDetailQuery.data?.detail ? (
+							<div className="flex items-center justify-center py-12">
+								<Loader2
+									size={20}
+									className="animate-spin text-muted-foreground"
+								/>
+								<span className="ml-2 text-sm text-muted-foreground">
+									Fetching skill documentation...
+								</span>
+							</div>
+						) : (
+							<MarkdownMessage content={skillDetailQuery.data.detail} />
+						)}
+					</div>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }
