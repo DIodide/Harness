@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.auth import verify_token
+from app.config import settings
 from app.services.mcp_oauth import (
     GITHUB_STANDALONE_URL,
     OAuthDiscoveryError,
