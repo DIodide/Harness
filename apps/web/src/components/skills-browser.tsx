@@ -439,7 +439,12 @@ export function SkillsBrowser({
 								</span>
 							</div>
 						) : (
-							<MarkdownMessage content={skillDetailQuery.data.detail} />
+							<MarkdownMessage
+								content={skillDetailQuery.data.detail.replace(
+									/^---\s*\n[\s\S]*?\n---\s*\n?/,
+									"",
+								)}
+							/>
 						)}
 					</div>
 				</DialogContent>

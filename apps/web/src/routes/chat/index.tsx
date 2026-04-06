@@ -449,7 +449,8 @@ function ChatPage() {
 				const partialContent = state.content ?? "";
 				// model is only sent in the "done" event which doesn't fire on abort,
 				// so fall back to the session model, then the harness model
-				const model = state.model ?? sessionModel ?? activeHarness?.model ?? null;
+				const model =
+					state.model ?? sessionModel ?? activeHarness?.model ?? null;
 
 				saveInterruptedMsg.mutate({
 					conversationId: convoId as Id<"conversations">,
@@ -1031,7 +1032,9 @@ function ChatPage() {
 						conversationId={activeConvoId}
 						activeHarness={activeHarness}
 						sessionModel={
-						userSettings?.modelSelectorMode === "harness" ? null : sessionModel
+							userSettings?.modelSelectorMode === "harness"
+								? null
+								: sessionModel
 						}
 						modelSelectorMode={
 							(userSettings?.modelSelectorMode as "session" | "harness") ??
@@ -1584,9 +1587,7 @@ function SettingsDialog({
 								</p>
 							</div>
 							<Select
-								value={
-									(userSettings?.modelSelectorMode as string) ?? "session"
-								}
+								value={(userSettings?.modelSelectorMode as string) ?? "session"}
 								onValueChange={(value) => {
 									updateSettings.mutate({
 										modelSelectorMode: value as "session" | "harness",
@@ -3006,7 +3007,9 @@ function ChatInput({
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
-		MODELS.find((m) => m.value === effectiveModel)?.label ?? effectiveModel ?? "Model";
+		MODELS.find((m) => m.value === effectiveModel)?.label ??
+		effectiveModel ??
+		"Model";
 
 	const supportsMedia = modelSupportsMedia(effectiveModel);
 	const supportsAudio = modelSupportsAudio(effectiveModel);
@@ -3475,7 +3478,9 @@ function ChatInput({
 											{sessionModel && (
 												<span className="size-1.5 shrink-0 rounded-full bg-primary" />
 											)}
-											<span className="max-w-[90px] truncate">{currentModelLabel}</span>
+											<span className="max-w-[90px] truncate">
+												{currentModelLabel}
+											</span>
 											<ChevronDown size={10} />
 										</button>
 									</DropdownMenuTrigger>
@@ -3488,7 +3493,10 @@ function ChatInput({
 											: "Switch model for this session"}
 								</TooltipContent>
 							</Tooltip>
-							<DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+							<DropdownMenuContent
+								align="end"
+								className="max-h-72 overflow-y-auto"
+							>
 								{modelSelectorMode === "session" && sessionModel && (
 									<>
 										<DropdownMenuItem
