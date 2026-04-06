@@ -496,6 +496,9 @@ export const discoverSkillsFromSearch = action({
 		),
 	},
 	handler: async (ctx, args): Promise<number> => {
+
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
 		// Check which ones we already have
 		const fullIds = args.skills.map((s) => s.fullId);
 		const existingIds = await ctx.runQuery(
