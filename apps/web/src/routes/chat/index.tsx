@@ -18,6 +18,7 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Cpu,
+	Eye,
 	Loader2,
 	LogOut,
 	MessageSquare,
@@ -65,6 +66,7 @@ import {
 import { MessageAttachments } from "../../components/message-attachments";
 import { SandboxPanel } from "../../components/sandbox/sandbox-panel";
 import { SandboxResult } from "../../components/sandbox-result";
+import { SkillViewerDialog } from "../../components/skill-viewer-dialog";
 import {
 	Avatar,
 	AvatarFallback,
@@ -1735,42 +1737,83 @@ function McpFailureBanner({
 }
 
 function SkillsStatus({ skills }: { skills: SkillEntry[] }) {
+	const [open, setOpen] = useState(false);
+	const [viewingSkillId, setViewingSkillId] = useState<string | null>(null);
+	const ref = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		if (!open) return;
+		const handler = (e: MouseEvent) => {
+			if (viewingSkillId) return;
+			if (ref.current && !ref.current.contains(e.target as Node)) {
+				setOpen(false);
+			}
+		};
+		document.addEventListener("mousedown", handler);
+		return () => document.removeEventListener("mousedown", handler);
+	}, [open, viewingSkillId]);
+
 	if (skills.length === 0) return null;
 
 	return (
-		<DropdownMenu>
-			<DropdownMenuTrigger asChild>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<button
-							type="button"
-							className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-						>
-							<Zap size={10} />
-							{skills.length} Skill{skills.length !== 1 && "s"}
-						</button>
-					</TooltipTrigger>
-					<TooltipContent>Active skills</TooltipContent>
-				</Tooltip>
-			</DropdownMenuTrigger>
+		<div ref={ref} className="relative">
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<button
+						type="button"
+						onClick={() => setOpen((prev) => !prev)}
+						className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+					>
+						<Zap size={10} />
+						{skills.length} Skill{skills.length !== 1 && "s"}
+					</button>
+				</TooltipTrigger>
+				<TooltipContent>Active skills</TooltipContent>
+			</Tooltip>
 
-			<DropdownMenuContent align="start" className="w-72">
-				<div className="border-b border-border px-3 py-2">
-					<span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-						Skills
-					</span>
-				</div>
-				<div className="max-h-48 overflow-y-auto py-1">
-					{skills.map((skill) => (
-						<DropdownMenuItem key={skill.name} className="px-3 py-1.5">
-							<span className="truncate text-xs font-medium">
-								{skill.name.split("/").pop() ?? skill.name}
+			<AnimatePresence>
+				{open && (
+					<motion.div
+						initial={{ opacity: 0, y: -4, scale: 0.97 }}
+						animate={{ opacity: 1, y: 0, scale: 1 }}
+						exit={{ opacity: 0, y: -4, scale: 0.97 }}
+						transition={{ duration: 0.15 }}
+						className="absolute left-0 top-full z-50 mt-1 w-64 border border-border bg-background shadow-lg"
+					>
+						<div className="border-b border-border px-3 py-2">
+							<span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+								Skills
 							</span>
-						</DropdownMenuItem>
-					))}
-				</div>
-			</DropdownMenuContent>
-		</DropdownMenu>
+						</div>
+						<div className="max-h-48 overflow-y-auto py-1">
+							{skills.map((skill) => (
+								<div
+									key={skill.name}
+									className="flex items-center gap-2 px-3 py-1.5"
+								>
+									<Zap size={10} className="shrink-0 text-muted-foreground" />
+									<span className="min-w-0 flex-1 truncate text-xs font-medium">
+										{skill.name.split("/").pop() ?? skill.name}
+									</span>
+									<button
+										type="button"
+										onClick={() => setViewingSkillId(skill.name)}
+										className="shrink-0 text-muted-foreground/40 transition-colors hover:text-foreground"
+									>
+										<Eye size={12} />
+									</button>
+								</div>
+							))}
+						</div>
+					</motion.div>
+				)}
+			</AnimatePresence>
+
+			<SkillViewerDialog
+				fullId={viewingSkillId}
+				onClose={() => setViewingSkillId(null)}
+			/>
+		</div>
 	);
 }
 
@@ -1874,7 +1917,7 @@ function ChatHeader({
 					<SkillsStatus skills={harness.skills} />
 				)}
 
-				{harness && harness.sandboxEnabled && <SandboxBadge />}
+				{harness?.sandboxEnabled && <SandboxBadge />}
 			</div>
 		</header>
 	);

@@ -352,23 +352,17 @@ export function SkillsBrowser({
 										{skill.source}
 									</p>
 								</div>
-								<span
-									role="button"
-									tabIndex={0}
+								<button
+									type="button"
+									aria-label={`View skill ${skill.skillId}`}
 									onClick={(e) => {
 										e.stopPropagation();
 										handleViewSkill(skill);
 									}}
-									onKeyDown={(e) => {
-										if (e.key === "Enter" || e.key === " ") {
-											e.stopPropagation();
-											handleViewSkill(skill);
-										}
-									}}
-									className="mt-0.5 shrink-0 text-muted-foreground/40 transition-colors hover:text-foreground"
+									className="mt-0.5 shrink-0 border-0 bg-transparent p-0 text-muted-foreground/40 transition-colors hover:text-foreground"
 								>
 									<Eye size={14} />
-								</span>
+								</button>
 							</button>
 						);
 					})}

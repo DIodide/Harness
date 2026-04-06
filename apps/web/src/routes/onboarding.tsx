@@ -207,7 +207,7 @@ function OnboardingPage() {
 		createHarness.mutate({
 			name: name.trim(),
 			model,
-			status: "started",
+			status: "started" as const,
 			mcpServers: allMcpServers,
 			skills: selectedSkills,
 			sandboxEnabled: sandboxEnabled || undefined,
@@ -219,7 +219,7 @@ function OnboardingPage() {
 		createHarness.mutate({
 			name: name.trim() || "Untitled Harness",
 			model: model || "gpt-4o",
-			status: "draft",
+			status: "draft" as const,
 			mcpServers: allMcpServers,
 			skills: selectedSkills,
 			sandboxEnabled: sandboxEnabled || undefined,
