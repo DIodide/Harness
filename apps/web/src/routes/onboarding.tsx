@@ -908,8 +908,19 @@ function StepSandbox({
 				file management, terminal commands, and git operations.
 			</p>
 
-			<div className="flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30">
+			<label
+				htmlFor="sandbox-enabled"
+				className="flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30"
+				onClick={() => setEnabled(!enabled)}
+				onKeyDown={(e) => {
+					if (e.key === "Enter" || e.key === " ") {
+						e.preventDefault();
+						setEnabled(!enabled);
+					}
+				}}
+			>
 				<Checkbox
+					id="sandbox-enabled"
 					checked={enabled}
 					onCheckedChange={(checked) => setEnabled(checked === true)}
 				/>
@@ -920,7 +931,7 @@ function StepSandbox({
 					</p>
 				</div>
 				<Box size={14} className="shrink-0 text-muted-foreground" />
-			</div>
+			</label>
 
 			{enabled && (
 				<motion.div
