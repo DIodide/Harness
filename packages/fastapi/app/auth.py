@@ -4,6 +4,8 @@ import httpx
 import jwt
 from fastapi import HTTPException, Request
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 _jwks_cache: dict | None = None
@@ -41,11 +43,8 @@ async def verify_token(request: Request) -> dict:
         if not kid:
             raise HTTPException(status_code=401, detail="Token missing key ID")
 
-        # Get issuer from unverified claims to fetch JWKS
-        unverified_claims = jwt.decode(token, options={"verify_signature": False})
-        issuer = unverified_claims.get("iss", "")
-        if not issuer:
-            raise HTTPException(status_code=401, detail="Token missing issuer")
+        # Pin the expected issuer — never trust the iss claim to pick a JWKS URL.
+        issuer = settings.clerk_issuer
 
         # Fetch JWKS and find matching key
         jwks = await _get_jwks(http_client, issuer)
@@ -73,6 +72,7 @@ async def verify_token(request: Request) -> dict:
             token,
             key,
             algorithms=["RS256"],
+            issuer=issuer,
             options={"verify_aud": False},
         )
         return payload
