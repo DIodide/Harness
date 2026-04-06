@@ -47,12 +47,10 @@ async def oauth_start(
 
     http_client = request.app.state.http_client
 
-    # Derive redirect URI from the incoming request so it works behind proxies/ngrok.
-    # X-Forwarded-* headers are set by Vite's proxy and ngrok.
-    forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
-    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host", "localhost:8000")
-    base_url = f"{forwarded_proto}://{forwarded_host}"
-    redirect_uri = f"{base_url}/api/mcp/oauth/callback"
+    # Redirect URI must be pinned to a trusted base URL — never derived from
+    # client-controlled headers (X-Forwarded-*, Host). Set FASTAPI_BASE_URL to
+    # your ngrok subdomain in dev or your public API URL in prod.
+    redirect_uri = f"{settings.fastapi_base_url}/api/mcp/oauth/callback"
 
     try:
         authorization_url, state = await start_oauth_flow(
@@ -162,7 +160,6 @@ async def oauth_revoke(
 
 @router.get("/github/start")
 async def github_oauth_start(
-    request: Request,
     token: dict = Depends(verify_token),
 ):
     """Initiate the GitHub OAuth flow for sandbox git operations."""
@@ -170,10 +167,7 @@ async def github_oauth_start(
     if not user_id:
         raise HTTPException(status_code=401, detail="Missing user ID in token")
 
-    forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
-    forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host", "localhost:8000")
-    base_url = f"{forwarded_proto}://{forwarded_host}"
-    redirect_uri = f"{base_url}/api/mcp/oauth/callback"
+    redirect_uri = f"{settings.fastapi_base_url}/api/mcp/oauth/callback"
 
     try:
         authorization_url, state = start_github_oauth_flow(

@@ -23,6 +23,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
+const BACKEND_ORIGIN = new URL(API_URL).origin;
 
 interface SandboxResultProps {
 	result: string;
@@ -763,6 +764,8 @@ function GitHubAuthRequiredError({ message }: { message: string }) {
 			);
 
 			const handler = (event: MessageEvent) => {
+				if (event.origin !== BACKEND_ORIGIN) return;
+				if (popup && event.source !== popup) return;
 				if (event.data?.type === "mcp-oauth-callback") {
 					window.removeEventListener("message", handler);
 					setStatus(event.data.success ? "connected" : "idle");
