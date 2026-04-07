@@ -175,7 +175,6 @@ function CodeExecutionResult({
 									{highlightedCode ? (
 										<pre className="hljs max-h-60 overflow-auto px-3 py-2 text-xs leading-relaxed">
 											<code
-												// biome-ignore lint/security/noDangerouslySetInnerHtml: highlight.js output for read-only code display
 												dangerouslySetInnerHTML={{
 													__html: highlightedCode,
 												}}
@@ -232,14 +231,8 @@ function CodeExecutionResult({
 					{/* Chart images from execution artifacts */}
 					{charts && charts.length > 0 && (
 						<div className="border-t border-border p-2 space-y-2">
-							{charts.map((chart) => (
-								<div
-									key={
-										chart.png
-											? `chart-png-${chart.png.slice(0, 48)}`
-											: (chart.title ?? "chart")
-									}
-								>
+							{charts.map((chart, i) => (
+								<div key={i}>
 									{chart.title && (
 										<p className="mb-1 px-1 text-[10px] font-medium text-muted-foreground">
 											{chart.title}
@@ -248,7 +241,7 @@ function CodeExecutionResult({
 									{chart.png && (
 										<img
 											src={`data:image/png;base64,${chart.png}`}
-											alt={chart.title || "Chart"}
+											alt={chart.title || `Chart ${i + 1}`}
 											className="max-w-full rounded border border-border"
 										/>
 									)}
@@ -364,10 +357,7 @@ function FileContentResult({ data }: { data: Record<string, unknown> }) {
 				<div className="relative border-t border-border">
 					{highlighted ? (
 						<pre className="hljs max-h-80 overflow-auto px-3 py-2 text-xs leading-relaxed">
-							<code
-								// biome-ignore lint/security/noDangerouslySetInnerHtml: highlight.js output for read-only code display
-								dangerouslySetInnerHTML={{ __html: highlighted }}
-							/>
+							<code dangerouslySetInnerHTML={{ __html: highlighted }} />
 						</pre>
 					) : (
 						<pre className="max-h-80 overflow-auto bg-muted/20 px-3 py-2 text-xs leading-relaxed">
@@ -629,7 +619,7 @@ function GitDiffResult({ data }: { data: Record<string, unknown> }) {
 					<pre className="max-h-80 overflow-auto px-3 py-2 text-xs leading-relaxed">
 						{diff.split("\n").map((line, i) => (
 							<span
-								key={`${i}:${line}`}
+								key={i}
 								className={cn(
 									"block",
 									line.startsWith("+") &&
@@ -695,9 +685,9 @@ function SearchResult({ data }: { data: Record<string, unknown> }) {
 			{items.length > 0 && (
 				<div className="max-h-60 overflow-auto border-t border-border">
 					{matches.length > 0
-						? matches.map((m) => (
+						? matches.map((m, i) => (
 								<div
-									key={`${String(m.file ?? "")}:${String(m.line ?? "")}:${String(m.content ?? "")}`}
+									key={i}
 									className="flex gap-2 px-3 py-1 text-xs hover:bg-muted/20"
 								>
 									<span className="shrink-0 text-muted-foreground">
