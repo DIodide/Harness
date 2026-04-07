@@ -7,18 +7,12 @@ import {
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import {
-	createFileRoute,
-	Link,
-	redirect,
-	useNavigate,
-} from "@tanstack/react-router";
+import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import {
 	ArrowLeft,
 	ArrowRight,
 	Box,
 	Check,
-	ChevronDown,
 	Cpu,
 	Eye,
 	EyeOff,
@@ -37,6 +31,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useMemo, useState } from "react";
+import { HarnessMark } from "../components/harness-mark";
 import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../components/princeton-connect-row";
@@ -55,10 +50,9 @@ import {
 } from "../components/ui/select";
 import { env } from "../env";
 import type { McpServerEntry } from "../lib/mcp";
-import { PRESET_MCPS, presetIdsToServerEntries } from "../lib/mcp";
+import { presetIdsToServerEntries } from "../lib/mcp";
 import { MODELS } from "../lib/models";
 import type { SkillEntry } from "../lib/skills";
-import { RECOMMENDED_SKILLS } from "../lib/skills";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
@@ -207,24 +201,22 @@ function OnboardingPage() {
 		createHarness.mutate({
 			name: name.trim(),
 			model,
-			status: "started" as const,
+			status: "started",
 			mcpServers: allMcpServers,
 			skills: selectedSkills,
-			sandboxEnabled: sandboxEnabled || undefined,
-			sandboxConfig: sandboxEnabled ? sandboxConfig : undefined,
-		});
+			...(sandboxEnabled ? { sandboxEnabled: true, sandboxConfig } : {}),
+		} as any);
 	};
 
 	const handleSaveDraft = () => {
 		createHarness.mutate({
 			name: name.trim() || "Untitled Harness",
 			model: model || "gpt-4o",
-			status: "draft" as const,
+			status: "draft",
 			mcpServers: allMcpServers,
 			skills: selectedSkills,
-			sandboxEnabled: sandboxEnabled || undefined,
-			sandboxConfig: sandboxEnabled ? sandboxConfig : undefined,
-		});
+			...(sandboxEnabled ? { sandboxEnabled: true, sandboxConfig } : {}),
+		} as any);
 	};
 
 	const handleAddServer = (server: McpServerEntry) => {
@@ -244,20 +236,11 @@ function OnboardingPage() {
 	return (
 		<div className="flex min-h-screen flex-col bg-background">
 			<header className="flex items-center justify-between border-b border-border px-6 py-4">
-				<div className="flex items-center gap-4">
-					<Button variant="ghost" size="icon-xs" asChild>
-						<Link to="/harnesses">
-							<ArrowLeft size={14} />
-						</Link>
-					</Button>
-					<div>
-						<h1 className="text-lg font-medium tracking-tight text-foreground">
-							Create Harness
-						</h1>
-						<p className="text-xs text-muted-foreground">
-							Configure a new AI agent harness
-						</p>
-					</div>
+				<div className="flex items-center gap-2">
+					<HarnessMark size={22} className="text-foreground" />
+					<span className="text-lg font-semibold tracking-tight text-foreground">
+						Harness
+					</span>
 				</div>
 				<Button
 					variant="ghost"
@@ -420,9 +403,6 @@ function StepNameModel({
 }) {
 	return (
 		<div className="space-y-6">
-			<p className="text-xs text-muted-foreground">
-				Give your harness a name and select a model to get started.
-			</p>
 			<div>
 				<label
 					htmlFor="harness-name"
@@ -464,65 +444,6 @@ function StepNameModel({
 					Choose the LLM that powers this harness.
 				</p>
 			</div>
-
-			<details className="group border-t border-border pt-4">
-				<summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground">
-					<ChevronDown
-						size={12}
-						className="transition-transform group-open:rotate-180"
-					/>
-					What can I add in the next steps?
-				</summary>
-				<div className="mt-4 space-y-4 opacity-60">
-					<div>
-						<div className="mb-2 flex items-center gap-1.5">
-							<Layers size={12} className="text-muted-foreground" />
-							<p className="text-[11px] font-medium text-muted-foreground">
-								MCP Servers
-							</p>
-						</div>
-						<div className="pointer-events-none flex flex-wrap gap-1.5">
-							{PRESET_MCPS.map((mcp) => (
-								<span
-									key={mcp.id}
-									className="inline-flex items-center gap-1.5 border border-border/60 px-2.5 py-1 text-[11px] text-muted-foreground"
-								>
-									<Server size={10} className="shrink-0" />
-									{mcp.server.name}
-								</span>
-							))}
-							<span className="inline-flex items-center gap-1 border border-dashed border-border/60 px-2.5 py-1 text-[11px] text-muted-foreground">
-								<Plus size={10} />
-								Custom
-							</span>
-						</div>
-					</div>
-
-					<div>
-						<div className="mb-2 flex items-center gap-1.5">
-							<Zap size={12} className="text-muted-foreground" />
-							<p className="text-[11px] font-medium text-muted-foreground">
-								Skills
-							</p>
-						</div>
-						<div className="pointer-events-none flex flex-wrap gap-1.5">
-							{RECOMMENDED_SKILLS.map((rec) => (
-								<span
-									key={rec.id}
-									className="inline-flex items-center gap-1.5 border border-border/60 px-2.5 py-1 text-[11px] text-muted-foreground"
-								>
-									<Zap size={10} className="shrink-0" />
-									{rec.skill.skillId}
-								</span>
-							))}
-							<span className="inline-flex items-center gap-1 border border-dashed border-border/60 px-2.5 py-1 text-[11px] text-muted-foreground">
-								<Plus size={10} />
-								Browse more
-							</span>
-						</div>
-					</div>
-				</div>
-			</details>
 		</div>
 	);
 }
@@ -908,19 +829,8 @@ function StepSandbox({
 				file management, terminal commands, and git operations.
 			</p>
 
-			<label
-				htmlFor="sandbox-enabled"
-				className="flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30"
-				onClick={() => setEnabled(!enabled)}
-				onKeyDown={(e) => {
-					if (e.key === "Enter" || e.key === " ") {
-						e.preventDefault();
-						setEnabled(!enabled);
-					}
-				}}
-			>
+			<label className="flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30">
 				<Checkbox
-					id="sandbox-enabled"
 					checked={enabled}
 					onCheckedChange={(checked) => setEnabled(checked === true)}
 				/>
@@ -942,9 +852,9 @@ function StepSandbox({
 				>
 					{/* Sandbox type */}
 					<div>
-						<span className="mb-1.5 block text-xs font-medium text-foreground">
+						<label className="mb-1.5 block text-xs font-medium text-foreground">
 							Sandbox Type
-						</span>
+						</label>
 						<div className="grid gap-2 sm:grid-cols-2">
 							<button
 								type="button"
@@ -985,9 +895,9 @@ function StepSandbox({
 
 					{/* Resource tier */}
 					<div>
-						<span className="mb-1.5 block text-xs font-medium text-foreground">
+						<label className="mb-1.5 block text-xs font-medium text-foreground">
 							Resource Tier
-						</span>
+						</label>
 						<Select
 							value={config.resourceTier}
 							onValueChange={(v) =>
@@ -1019,9 +929,9 @@ function StepSandbox({
 
 					{/* Default language */}
 					<div>
-						<span className="mb-1.5 block text-xs font-medium text-foreground">
+						<label className="mb-1.5 block text-xs font-medium text-foreground">
 							Default Language
-						</span>
+						</label>
 						<Select
 							value={config.defaultLanguage}
 							onValueChange={(v) =>

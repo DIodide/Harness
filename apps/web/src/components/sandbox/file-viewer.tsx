@@ -297,8 +297,8 @@ function FileContent({
 						className="sticky left-0 shrink-0 select-none border-r border-border/60 bg-muted/15 px-2 py-1.5 text-right font-mono text-[10.5px] leading-[1.65] text-muted-foreground/20"
 						aria-hidden
 					>
-						{lines.map((line, i) => (
-							<div key={`${i + 1}:${line}`}>{i + 1}</div>
+						{lines.map((_, i) => (
+							<div key={i}>{i + 1}</div>
 						))}
 					</div>
 
@@ -316,10 +316,7 @@ function FileContent({
 							/>
 						) : highlighted ? (
 							<pre className="hljs whitespace-pre-wrap break-words py-1.5 pl-3 pr-3 font-mono text-[11.5px] leading-[1.65]">
-								<code
-									// biome-ignore lint/security/noDangerouslySetInnerHtml: highlight.js output for read-only file display
-									dangerouslySetInnerHTML={{ __html: highlighted }}
-								/>
+								<code dangerouslySetInnerHTML={{ __html: highlighted }} />
 							</pre>
 						) : (
 							<pre className="whitespace-pre-wrap break-words py-1.5 pl-3 pr-3 font-mono text-[11.5px] leading-[1.65] text-foreground/80">
