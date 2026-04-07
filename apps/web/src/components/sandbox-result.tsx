@@ -232,12 +232,12 @@ function CodeExecutionResult({
 					{/* Chart images from execution artifacts */}
 					{charts && charts.length > 0 && (
 						<div className="border-t border-border p-2 space-y-2">
-							{charts.map((chart) => (
+							{charts.map((chart, i) => (
 								<div
 									key={
 										chart.png
 											? `chart-png-${chart.png.slice(0, 48)}`
-											: (chart.title ?? "chart")
+											: (chart.title ?? `chart-${i}`)
 									}
 								>
 									{chart.title && (

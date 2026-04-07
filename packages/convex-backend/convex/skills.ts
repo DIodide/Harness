@@ -396,21 +396,27 @@ export const ensureSkillDetails = action({
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
 
+		// Batch-fetch cached details and sources in two queries instead of 2N
+		const [cachedNames, sourceMap] = await Promise.all([
+			ctx.runQuery(internal.skills.getExistingDetailNames, {
+				names: args.names,
+			}),
+			ctx.runQuery(internal.skills.getSkillSources, {
+				fullIds: args.names,
+			}),
+		]);
+		const cachedSet = new Set(cachedNames);
+
+		const namesToProcess = args.names.filter((n) => !cachedSet.has(n));
+		if (namesToProcess.length === 0) return;
+
 		const CONCURRENCY = 3;
 
 		async function processSkill(name: string) {
-			const existing = await ctx.runQuery(internal.skills.getDetailByName, {
-				name,
-			});
-			if (existing?.detail) return;
-
 			// Look up the authoritative source from skillsIndex first,
 			// falling back to splitting the fullId (which can be wrong for
 			// skills whose fullId has more than 3 segments).
-			const indexSource = await ctx.runQuery(
-				internal.skills.getSkillSource,
-				{ fullId: name },
-			);
+			const indexSource = sourceMap[name] ?? null;
 
 			let source: string;
 			let skillId: string;
@@ -450,8 +456,8 @@ export const ensureSkillDetails = action({
 		}
 
 		// Process in bounded-concurrency batches
-		for (let i = 0; i < args.names.length; i += CONCURRENCY) {
-			const batch = args.names.slice(i, i + CONCURRENCY);
+		for (let i = 0; i < namesToProcess.length; i += CONCURRENCY) {
+			const batch = namesToProcess.slice(i, i + CONCURRENCY);
 			await Promise.all(batch.map(processSkill));
 		}
 	},
@@ -468,6 +474,23 @@ export const getDetailByName = internalQuery({
 	},
 });
 
+/** Batch check which names already have cached details */
+export const getExistingDetailNames = internalQuery({
+	args: { names: v.array(v.string()) },
+	handler: async (ctx, args) => {
+		const results = await Promise.all(
+			args.names.map(async (name) => {
+				const doc = await ctx.db
+					.query("skillDetails")
+					.withIndex("by_name", (q) => q.eq("name", name))
+					.first();
+				return doc?.detail ? name : null;
+			}),
+		);
+		return results.filter((n): n is string => n !== null);
+	},
+});
+
 /** Look up a skill's source from the skillsIndex by its fullId. */
 export const getSkillSource = internalQuery({
 	args: { fullId: v.string() },
@@ -477,6 +500,23 @@ export const getSkillSource = internalQuery({
 			.withIndex("by_fullId", (q) => q.eq("fullId", args.fullId))
 			.first();
 		return doc?.source ?? null;
+	},
+});
+
+/** Batch look up sources for multiple fullIds from the skillsIndex. */
+export const getSkillSources = internalQuery({
+	args: { fullIds: v.array(v.string()) },
+	handler: async (ctx, args) => {
+		const entries = await Promise.all(
+			args.fullIds.map(async (fullId) => {
+				const doc = await ctx.db
+					.query("skillsIndex")
+					.withIndex("by_fullId", (q) => q.eq("fullId", fullId))
+					.first();
+				return [fullId, doc?.source ?? null] as const;
+			}),
+		);
+		return Object.fromEntries(entries) as Record<string, string | null>;
 	},
 });
 
@@ -498,7 +538,7 @@ export const discoverSkillsFromSearch = action({
 	handler: async (ctx, args): Promise<number> => {
 
 		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Unauthenticated");
+		if (!identity) return 0;
 		// Check which ones we already have
 		const fullIds = args.skills.map((s) => s.fullId);
 		const existingIds = await ctx.runQuery(
