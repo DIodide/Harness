@@ -79,11 +79,32 @@ export const browseSkills = query({
 export const searchSkillsIndex = query({
 	args: { query: v.string(), limit: v.number() },
 	handler: async (ctx, args) => {
-		const results = await ctx.db
-			.query("skillsIndex")
-			.withSearchIndex("search_skills", (q) => q.search("skillId", args.query))
-			.take(args.limit);
-		return results;
+		// Search both skillId and description indexes in parallel
+		const [byName, byDescription] = await Promise.all([
+			ctx.db
+				.query("skillsIndex")
+				.withSearchIndex("search_skills", (q) =>
+					q.search("skillId", args.query),
+				)
+				.take(args.limit),
+			ctx.db
+				.query("skillsIndex")
+				.withSearchIndex("search_skills_description", (q) =>
+					q.search("description", args.query),
+				)
+				.take(args.limit),
+		]);
+
+		// Merge and deduplicate, preferring name matches (listed first)
+		const seen = new Set<string>();
+		const merged = [];
+		for (const doc of [...byName, ...byDescription]) {
+			if (!seen.has(doc.fullId)) {
+				seen.add(doc.fullId);
+				merged.push(doc);
+			}
+		}
+		return merged.slice(0, args.limit);
 	},
 });
 
@@ -156,11 +177,32 @@ function normalizeSkillId(id: string): string {
 	return id.replace(/:/g, "-").toLowerCase();
 }
 
+/** Build GitHub API headers, including auth token if available. */
+function ghApiHeaders(): Record<string, string> {
+	const headers: Record<string, string> = {
+		Accept: "application/vnd.github.v3+json",
+	};
+	const token = process.env.GITHUB_TOKEN;
+	if (token) {
+		headers.Authorization = `token ${token}`;
+	}
+	return headers;
+}
+
+/** Build headers for raw.githubusercontent.com requests (auth only). */
+function ghRawHeaders(): Record<string, string> | undefined {
+	const token = process.env.GITHUB_TOKEN;
+	if (token) {
+		return { Authorization: `token ${token}` };
+	}
+	return undefined;
+}
+
 /** Resolve the canonical owner/repo via GitHub API (follows renames/redirects). */
 async function resolveGitHubRepo(source: string): Promise<string | null> {
 	try {
 		const resp = await fetch(`https://api.github.com/repos/${source}`, {
-			headers: { Accept: "application/vnd.github.v3+json" },
+			headers: ghApiHeaders(),
 		});
 		if (resp.ok) {
 			const data = (await resp.json()) as { full_name?: string };
@@ -208,7 +250,7 @@ async function fetchSkillMdFromRepo(
 	const bases = ["skills", ".agents/skills", ".claude/skills"];
 	const ghApi = "https://api.github.com";
 	const ghRaw = "https://raw.githubusercontent.com";
-	const ghHeaders = { Accept: "application/vnd.github.v3+json" };
+	const rawHeaders = ghRawHeaders();
 	const normalizedId = normalizeSkillId(skillId);
 	const branches = ["main", "master"];
 
@@ -221,6 +263,7 @@ async function fetchSkillMdFromRepo(
 				try {
 					const resp = await fetch(
 						`${ghRaw}/${source}/${branch}/${base}/${id}/SKILL.md`,
+						rawHeaders ? { headers: rawHeaders } : undefined,
 					);
 					if (resp.ok) return await resp.text();
 				} catch {
@@ -231,7 +274,10 @@ async function fetchSkillMdFromRepo(
 
 		// 2. Try repo-root SKILL.md
 		try {
-			const resp = await fetch(`${ghRaw}/${source}/${branch}/SKILL.md`);
+			const resp = await fetch(
+				`${ghRaw}/${source}/${branch}/SKILL.md`,
+				rawHeaders ? { headers: rawHeaders } : undefined,
+			);
 			if (resp.ok) return await resp.text();
 		} catch {
 			// Continue
@@ -243,7 +289,7 @@ async function fetchSkillMdFromRepo(
 		try {
 			const resp = await fetch(
 				`${ghApi}/repos/${source}/git/trees/${branch}?recursive=1`,
-				{ headers: ghHeaders },
+				{ headers: ghApiHeaders() },
 			);
 			if (!resp.ok) continue;
 
@@ -274,6 +320,7 @@ async function fetchSkillMdFromRepo(
 			if (match) {
 				const mdResp = await fetch(
 					`${ghRaw}/${source}/${branch}/${match}`,
+					rawHeaders ? { headers: rawHeaders } : undefined,
 				);
 				if (mdResp.ok) return await mdResp.text();
 			}
@@ -285,6 +332,7 @@ async function fetchSkillMdFromRepo(
 			if (rootSkillMd) {
 				const mdResp = await fetch(
 					`${ghRaw}/${source}/${branch}/${rootSkillMd}`,
+					rawHeaders ? { headers: rawHeaders } : undefined,
 				);
 				if (mdResp.ok) return await mdResp.text();
 			}
@@ -348,17 +396,41 @@ export const ensureSkillDetails = action({
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
 
+		// Batch-fetch cached details and sources in two queries instead of 2N
+		const [cachedNames, sourceMap] = await Promise.all([
+			ctx.runQuery(internal.skills.getExistingDetailNames, {
+				names: args.names,
+			}),
+			ctx.runQuery(internal.skills.getSkillSources, {
+				fullIds: args.names,
+			}),
+		]);
+		const cachedSet = new Set(cachedNames);
+
+		const namesToProcess = args.names.filter((n) => !cachedSet.has(n));
+		if (namesToProcess.length === 0) return;
+
 		const CONCURRENCY = 3;
 
 		async function processSkill(name: string) {
-			const existing = await ctx.runQuery(internal.skills.getDetailByName, {
-				name,
-			});
-			if (existing?.detail) return;
+			// Look up the authoritative source from skillsIndex first,
+			// falling back to splitting the fullId (which can be wrong for
+			// skills whose fullId has more than 3 segments).
+			const indexSource = sourceMap[name] ?? null;
 
-			const parts = name.split("/");
-			const skillId = parts.pop() ?? name;
-			const source = parts.join("/");
+			let source: string;
+			let skillId: string;
+			if (indexSource) {
+				source = indexSource;
+				// skillId is the portion of fullId after the source prefix
+				skillId = name.startsWith(source + "/")
+					? name.slice(source.length + 1)
+					: name.split("/").pop() ?? name;
+			} else {
+				const parts = name.split("/");
+				skillId = parts.pop() ?? name;
+				source = parts.join("/");
+			}
 
 			if (!source) return;
 
@@ -384,8 +456,8 @@ export const ensureSkillDetails = action({
 		}
 
 		// Process in bounded-concurrency batches
-		for (let i = 0; i < args.names.length; i += CONCURRENCY) {
-			const batch = args.names.slice(i, i + CONCURRENCY);
+		for (let i = 0; i < namesToProcess.length; i += CONCURRENCY) {
+			const batch = namesToProcess.slice(i, i + CONCURRENCY);
 			await Promise.all(batch.map(processSkill));
 		}
 	},
@@ -399,6 +471,52 @@ export const getDetailByName = internalQuery({
 			.query("skillDetails")
 			.withIndex("by_name", (q) => q.eq("name", args.name))
 			.first();
+	},
+});
+
+/** Batch check which names already have cached details */
+export const getExistingDetailNames = internalQuery({
+	args: { names: v.array(v.string()) },
+	handler: async (ctx, args) => {
+		const results = await Promise.all(
+			args.names.map(async (name) => {
+				const doc = await ctx.db
+					.query("skillDetails")
+					.withIndex("by_name", (q) => q.eq("name", name))
+					.first();
+				return doc?.detail ? name : null;
+			}),
+		);
+		return results.filter((n): n is string => n !== null);
+	},
+});
+
+/** Look up a skill's source from the skillsIndex by its fullId. */
+export const getSkillSource = internalQuery({
+	args: { fullId: v.string() },
+	handler: async (ctx, args) => {
+		const doc = await ctx.db
+			.query("skillsIndex")
+			.withIndex("by_fullId", (q) => q.eq("fullId", args.fullId))
+			.first();
+		return doc?.source ?? null;
+	},
+});
+
+/** Batch look up sources for multiple fullIds from the skillsIndex. */
+export const getSkillSources = internalQuery({
+	args: { fullIds: v.array(v.string()) },
+	handler: async (ctx, args) => {
+		const entries = await Promise.all(
+			args.fullIds.map(async (fullId) => {
+				const doc = await ctx.db
+					.query("skillsIndex")
+					.withIndex("by_fullId", (q) => q.eq("fullId", fullId))
+					.first();
+				return [fullId, doc?.source ?? null] as const;
+			}),
+		);
+		return Object.fromEntries(entries) as Record<string, string | null>;
 	},
 });
 
@@ -418,6 +536,9 @@ export const discoverSkillsFromSearch = action({
 		),
 	},
 	handler: async (ctx, args): Promise<number> => {
+
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return 0;
 		// Check which ones we already have
 		const fullIds = args.skills.map((s) => s.fullId);
 		const existingIds = await ctx.runQuery(

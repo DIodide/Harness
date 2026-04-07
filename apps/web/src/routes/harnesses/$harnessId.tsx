@@ -40,6 +40,7 @@ import { OAuthConnectRow } from "../../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../../components/princeton-connect-row";
 import { RecommendedSkillsGrid } from "../../components/recommended-skills-grid";
+import { SkillViewerDialog } from "../../components/skill-viewer-dialog";
 import { SkillsBrowser } from "../../components/skills-browser";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -157,6 +158,7 @@ function HarnessEditPage() {
 	const [mcpServers, setMcpServers] = useState<McpServerEntry[] | null>(null);
 	const [skills, setSkills] = useState<SkillEntry[] | null>(null);
 	const [skillsBrowserOpen, setSkillsBrowserOpen] = useState(false);
+	const [viewingSkillId, setViewingSkillId] = useState<string | null>(null);
 	const [sandboxEnabled, setSandboxEnabled] = useState<boolean | null>(null);
 	const [sandboxConfig, setSandboxConfig] = useState<{
 		persistent: boolean;
@@ -184,9 +186,9 @@ function HarnessEditPage() {
 	};
 
 	const currentSandboxEnabled =
-		sandboxEnabled ?? (harness as any)?.sandboxEnabled ?? false;
+		sandboxEnabled ?? harness?.sandboxEnabled ?? false;
 	const currentSandboxConfig = sandboxConfig ??
-		(harness as any)?.sandboxConfig ?? {
+		harness?.sandboxConfig ?? {
 			persistent: false,
 			autoStart: true,
 			defaultLanguage: "python",
@@ -459,33 +461,29 @@ function HarnessEditPage() {
 
 						<div className="space-y-4">
 							{/* Enable toggle */}
-							<div
-								className="flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30"
-								onClick={() => setSandboxEnabled(!currentSandboxEnabled)}
-								onKeyDown={(e) => {
-									if (e.key === "Enter" || e.key === " ")
-										setSandboxEnabled(!currentSandboxEnabled);
-								}}
-								role="checkbox"
-								aria-checked={currentSandboxEnabled}
-								tabIndex={0}
-							>
+							<div className="flex items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30">
 								<Checkbox
+									id="harness-sandbox-enabled"
 									checked={currentSandboxEnabled}
 									onCheckedChange={(checked) =>
 										setSandboxEnabled(checked === true)
 									}
 								/>
-								<div className="flex-1">
-									<p className="text-xs font-medium text-foreground">
-										Enable sandbox for this harness
-									</p>
-									<p className="text-[11px] text-muted-foreground">
-										Gives this harness access to code execution, file system,
-										terminal, and git operations in an isolated environment
-									</p>
-								</div>
-								<Box size={14} className="shrink-0 text-muted-foreground" />
+								<label
+									htmlFor="harness-sandbox-enabled"
+									className="flex min-w-0 flex-1 cursor-pointer items-center gap-3"
+								>
+									<div className="flex-1">
+										<p className="text-xs font-medium text-foreground">
+											Enable sandbox for this harness
+										</p>
+										<p className="text-[11px] text-muted-foreground">
+											Gives this harness access to code execution, file system,
+											terminal, and git operations in an isolated environment
+										</p>
+									</div>
+									<Box size={14} className="shrink-0 text-muted-foreground" />
+								</label>
 							</div>
 
 							{currentSandboxEnabled && (
@@ -640,32 +638,9 @@ function HarnessEditPage() {
 													className="max-w-sm text-xs"
 												/>
 											</div>
-											<div
-												className="flex cursor-pointer items-center gap-2.5"
-												onClick={() =>
-													setSandboxConfig({
-														...currentSandboxConfig,
-														networkRestricted: !(
-															currentSandboxConfig.networkRestricted ?? false
-														),
-													})
-												}
-												onKeyDown={(e) => {
-													if (e.key === "Enter" || e.key === " ")
-														setSandboxConfig({
-															...currentSandboxConfig,
-															networkRestricted: !(
-																currentSandboxConfig.networkRestricted ?? false
-															),
-														});
-												}}
-												role="checkbox"
-												aria-checked={
-													currentSandboxConfig.networkRestricted ?? false
-												}
-												tabIndex={0}
-											>
+											<div className="flex items-center gap-2.5">
 												<Checkbox
+													id="harness-sandbox-network-restricted"
 													checked={
 														currentSandboxConfig.networkRestricted ?? false
 													}
@@ -676,18 +651,24 @@ function HarnessEditPage() {
 														})
 													}
 												/>
-												<div>
-													<p className="text-xs text-foreground">
-														Restrict network access
-													</p>
-													<p className="text-[11px] text-muted-foreground">
-														Block all outbound network traffic from the sandbox
-													</p>
-												</div>
-												<Globe
-													size={12}
-													className="shrink-0 text-muted-foreground"
-												/>
+												<label
+													htmlFor="harness-sandbox-network-restricted"
+													className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5"
+												>
+													<div>
+														<p className="text-xs text-foreground">
+															Restrict network access
+														</p>
+														<p className="text-[11px] text-muted-foreground">
+															Block all outbound network traffic from the
+															sandbox
+														</p>
+													</div>
+													<Globe
+														size={12}
+														className="shrink-0 text-muted-foreground"
+													/>
+												</label>
 											</div>
 										</div>
 									</details>
@@ -759,10 +740,17 @@ function HarnessEditPage() {
 								{currentSkills.map((skill) => {
 									const displayName = skill.name.split("/").pop() ?? skill.name;
 									return (
-										<button
+										<div
 											key={skill.name}
-											type="button"
+											role="button"
+											tabIndex={0}
 											onClick={() => toggleSkill(skill)}
+											onKeyDown={(e) => {
+												if (e.key === "Enter" || e.key === " ") {
+													e.preventDefault();
+													toggleSkill(skill);
+												}
+											}}
 											className="flex w-full items-start gap-3 border border-foreground bg-foreground/3 p-3 text-left transition-colors hover:border-foreground/20"
 										>
 											<Checkbox
@@ -775,9 +763,23 @@ function HarnessEditPage() {
 													{displayName}
 												</p>
 											</div>
-										</button>
+											<button
+												type="button"
+												onClick={(e) => {
+													e.stopPropagation();
+													setViewingSkillId(skill.name);
+												}}
+												className="mt-0.5 shrink-0 text-muted-foreground/40 transition-colors hover:text-foreground"
+											>
+												<Eye size={14} />
+											</button>
+										</div>
 									);
 								})}
+								<SkillViewerDialog
+									fullId={viewingSkillId}
+									onClose={() => setViewingSkillId(null)}
+								/>
 							</div>
 						)}
 
