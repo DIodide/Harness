@@ -39,7 +39,7 @@ class UserContext:
 # Cache: Clerk user_id → (netid or empty string, timestamp).
 # TTL of 5 minutes so email changes propagate without a restart.
 _netid_cache: dict[str, tuple[str, float]] = {}
-_NETID_CACHE_TTL = 300.0  # seconds
+_NETID_CACHE_TTL = 60.0  # seconds
 
 
 async def resolve_princeton_netid(
@@ -70,8 +70,7 @@ async def resolve_princeton_netid(
             return value or None  # empty string means "looked up, not found"
 
     # Fetch full user profile from Clerk Backend API
-    import os
-    clerk_secret = os.environ.get("CLERK_SECRET_KEY")
+    clerk_secret = settings.clerk_secret_key
 
     if not clerk_secret:
         _netid_cache[user_id] = ("", time.monotonic())
@@ -85,13 +84,23 @@ async def resolve_princeton_netid(
         )
         if resp.status_code == 200:
             data = resp.json()
+            # Check verified email addresses
             for email_obj in data.get("email_addresses", []):
                 addr = email_obj.get("email_address", "")
                 verification = email_obj.get("verification", {})
                 if addr.endswith("@princeton.edu") and verification.get("status") == "verified":
                     netid = addr.split("@")[0]
                     _netid_cache[user_id] = (netid, time.monotonic())
-                    logger.info("Resolved Princeton netid '%s' for user '%s' via Clerk API", netid, user_id)
+                    logger.info("Resolved Princeton netid '%s' for user '%s' via Clerk API (email)", netid, user_id)
+                    return netid
+            # Check verified external accounts (Google, Microsoft Entra ID, etc.)
+            for ext in data.get("external_accounts", []):
+                addr = ext.get("email_address", "")
+                verification = ext.get("verification", {})
+                if addr.endswith("@princeton.edu") and verification.get("status") == "verified":
+                    netid = addr.split("@")[0]
+                    _netid_cache[user_id] = (netid, time.monotonic())
+                    logger.info("Resolved Princeton netid '%s' for user '%s' via Clerk API (external account)", netid, user_id)
                     return netid
         else:
             logger.warning("Clerk API returned %d for user '%s'", resp.status_code, user_id)
