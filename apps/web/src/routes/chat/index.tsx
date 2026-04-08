@@ -105,6 +105,8 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "../../components/ui/tooltip";
+import { UsageDialog } from "../../components/usage-dialog";
+import { formatResetTime, UsageBadge } from "../../components/usage-display";
 import { env } from "../../env";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
 import type { McpAuthType } from "../../lib/mcp";
@@ -122,6 +124,7 @@ import {
 } from "../../lib/sandbox-panel-context";
 import type { SkillEntry } from "../../lib/skills";
 import {
+	type BudgetExceededInfo,
 	type ConvoStreamState,
 	type StreamPart,
 	type ToolCallEvent,
@@ -187,6 +190,10 @@ function ChatPage() {
 	const [editingMessageId, setEditingMessageId] =
 		useState<Id<"messages"> | null>(null);
 	const [editingContent, setEditingContent] = useState("");
+
+	// Budget exceeded state
+	const [budgetExceeded, setBudgetExceeded] =
+		useState<BudgetExceededInfo | null>(null);
 
 	// Per-conversation streaming state
 	const [streamStates, setStreamStates] = useState<
@@ -394,6 +401,13 @@ function ChatPage() {
 					model: model ?? prev[convoId]?.model ?? null,
 				},
 			}));
+		},
+		onBudgetExceeded: (_convoId, info) => {
+			setBudgetExceeded(info);
+			const which = info.dailyPct >= 100 ? "daily" : "weekly";
+			toast.error(
+				`${which.charAt(0).toUpperCase() + which.slice(1)} usage limit reached`,
+			);
 		},
 		onError: (convoId, error) => {
 			toast.error(error);
@@ -979,6 +993,31 @@ function ChatPage() {
 						onDismissAll={() => setMcpFailures([])}
 					/>
 
+					{budgetExceeded && (
+						<div className="mx-4 mt-2 flex items-center justify-between rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+							<div>
+								<p className="font-medium">
+									{budgetExceeded.dailyPct >= 100 ? "Daily" : "Weekly"} usage
+									limit reached
+								</p>
+								<p className="text-xs text-red-300/70 mt-0.5">
+									Resets in{" "}
+									{budgetExceeded.dailyPct >= 100
+										? formatResetTime(budgetExceeded.dailyReset)
+										: formatResetTime(budgetExceeded.weeklyReset)}
+								</p>
+							</div>
+							<Button
+								variant="ghost"
+								size="sm"
+								className="text-red-300 hover:text-red-200"
+								onClick={() => setBudgetExceeded(null)}
+							>
+								<X size={14} />
+							</Button>
+						</div>
+					)}
+
 					{activeConvoId ? (
 						<ChatMessages
 							conversationId={activeConvoId}
@@ -1063,6 +1102,7 @@ function ChatPage() {
 						onSendNow={handleSendNow}
 						pendingPrompt={pendingPrompt}
 						onPendingPromptConsumed={() => setPendingPrompt(null)}
+						budgetExceeded={!!budgetExceeded}
 					/>
 				</div>
 
@@ -1186,6 +1226,7 @@ function ChatSidebar({
 	const grouped = groupByDate(conversations);
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [usageOpen, setUsageOpen] = useState(false);
 
 	return (
 		<div className="flex h-full w-[280px] flex-col bg-background">
@@ -1457,6 +1498,10 @@ function ChatSidebar({
 			</ScrollArea>
 
 			<Separator />
+			<div className="px-2 py-1">
+				<UsageBadge onClick={() => setUsageOpen(true)} />
+			</div>
+			<Separator />
 			<div className="space-y-0.5 p-2">
 				<Button
 					variant="ghost"
@@ -1481,6 +1526,7 @@ function ChatSidebar({
 			</div>
 
 			<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+			<UsageDialog open={usageOpen} onOpenChange={setUsageOpen} />
 		</div>
 	);
 }
@@ -2987,6 +3033,7 @@ function ChatInput({
 	onSendNow,
 	pendingPrompt,
 	onPendingPromptConsumed,
+	budgetExceeded,
 }: {
 	conversationId: Id<"conversations"> | null;
 	activeHarness?: {
@@ -3049,6 +3096,7 @@ function ChatInput({
 	modelSelectorMode?: "session" | "harness";
 	onSessionModelChange: (model: string | null) => void;
 	onPendingPromptConsumed?: () => void;
+	budgetExceeded?: boolean;
 }) {
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -3166,7 +3214,7 @@ function ChatInput({
 
 	const handleSend = async () => {
 		const content = text.trim();
-		if (!content || !activeHarness) return;
+		if (!content || !activeHarness || budgetExceeded) return;
 
 		setText("");
 		setHistoryIndex(-1);
@@ -3588,7 +3636,8 @@ function ChatInput({
 								}}
 								disabled={
 									!showStopButton &&
-									(!text.trim() ||
+									(budgetExceeded ||
+										!text.trim() ||
 										hasUploading ||
 										sendMessage.isPending ||
 										createConvo.isPending)

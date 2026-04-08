@@ -48,6 +48,7 @@ jobs:
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           VITE_FASTAPI_URL: ${{ steps.env.outputs.fastapi_url }}
+          ARCJET_KEY: ${{ secrets.ARCJET_KEY }}
 
       - name: Deploy to Cloudflare Workers
         run: cd apps/web && npx wrangler deploy --name ${{ steps.env.outputs.worker_name }}

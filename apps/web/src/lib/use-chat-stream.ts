@@ -1,6 +1,7 @@
-import { useAuth } from "@clerk/tanstack-react-start";
+import { useAuth, useUser } from "@clerk/tanstack-react-start";
 import { useCallback, useRef, useState } from "react";
 import { env } from "../env";
+import { checkChatRateLimit } from "./chat-ratelimit";
 
 const FASTAPI_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
@@ -37,6 +38,13 @@ export interface ConvoStreamState {
 	model: string | null;
 }
 
+export interface BudgetExceededInfo {
+	dailyPct: number;
+	weeklyPct: number;
+	dailyReset: string;
+	weeklyReset: string;
+}
+
 interface UseChatStreamCallbacks {
 	onToken: (conversationId: string, content: string) => void;
 	onThinking: (conversationId: string, content: string) => void;
@@ -60,6 +68,7 @@ interface UseChatStreamCallbacks {
 		event: { sandbox_id: string; status: string },
 	) => void;
 	onError: (conversationId: string, error: string) => void;
+	onBudgetExceeded?: (conversationId: string, info: BudgetExceededInfo) => void;
 	onAbort?: (conversationId: string) => void;
 }
 
@@ -96,6 +105,7 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 	);
 	const abortControllers = useRef<Map<string, AbortController>>(new Map());
 	const { getToken } = useAuth();
+	const { user } = useUser();
 	const cbRef = useRef(callbacks);
 	cbRef.current = callbacks;
 
@@ -111,6 +121,25 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 			setStreamingConvoIds((prev) => new Set(prev).add(convoId));
 
 			try {
+				// Arcjet pre-flight request rate check (fail-open: Arcjet outage must not block chat)
+				if (user?.id) {
+					try {
+						const rateCheck = await checkChatRateLimit({
+							data: { userId: user.id },
+						});
+						if (!rateCheck.allowed) {
+							cbRef.current.onError(
+								convoId,
+								`Too many requests. Please wait ${rateCheck.retryAfter ?? "a few"} seconds.`,
+							);
+							return;
+						}
+					} catch {
+						// Arcjet unreachable — allow the request through.
+						// Budget enforcement in FastAPI/Convex is the hard gate.
+					}
+				}
+
 				const token = await getToken({ template: "convex" });
 				const response = await fetch(`${FASTAPI_URL}/api/chat/stream`, {
 					method: "POST",
@@ -181,7 +210,18 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 										);
 										break;
 									case "error":
-										cbRef.current.onError(convoId, data.message);
+										if (
+											data.code === "BUDGET_EXCEEDED" &&
+											data.usage &&
+											cbRef.current.onBudgetExceeded
+										) {
+											cbRef.current.onBudgetExceeded(
+												convoId,
+												data.usage as BudgetExceededInfo,
+											);
+										} else {
+											cbRef.current.onError(convoId, data.message);
+										}
 										break;
 								}
 							} catch {
@@ -206,7 +246,7 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 				});
 			}
 		},
-		[getToken],
+		[getToken, user?.id],
 	);
 
 	const cancel = useCallback((conversationId: string) => {
