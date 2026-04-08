@@ -48,6 +48,10 @@ class Settings(BaseSettings):
             logger.warning(
                 "CONVEX_DEPLOY_KEY is not set — backend cannot save messages to Convex"
             )
+        if not self.clerk_secret_key:
+            raise RuntimeError(
+                "CLERK_SECRET_KEY is required — Princeton netid resolution needs the Clerk Backend API key"
+            )
         if not self.clerk_issuer:
             raise RuntimeError(
                 "CLERK_ISSUER is required — JWT verification cannot pin the issuer without it"
