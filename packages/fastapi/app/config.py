@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Tiger Junction engine shared bearer token (MCP_ACCESS_TOKEN on the engine side)
     tiger_junction_mcp_token: str = ""
 
+    # Clerk secret key for Backend API calls (e.g. resolving Princeton netid from verified emails).
+    clerk_secret_key: str = ""
+
     # Clerk JWT verification — pinned issuer prevents attacker-controlled JWKS.
     clerk_issuer: str = ""
 

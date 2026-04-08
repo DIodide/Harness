@@ -55,6 +55,18 @@ export const PRESET_MCPS: PresetMcpDefinition[] = [
 		},
 	},
 	{
+		id: "tigerpath",
+		description:
+			"Plan your 4-year course schedule, explore major requirements, and see when students typically take courses.",
+		iconName: "https://www.google.com/s2/favicons?domain=princeton.edu&sz=64",
+		category: "student",
+		server: {
+			name: "TigerPath",
+			url: "https://junction-engine.tigerapps.org/path/mcp",
+			authType: "tiger_junction",
+		},
+	},
+	{
 		id: "github",
 		description:
 			"Browse repos, manage issues and pull requests, and search code.",
