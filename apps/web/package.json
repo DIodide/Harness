@@ -17,6 +17,10 @@
     "check-types": "tsc --noEmit"
   },
   "dependencies": {
+    "@arcjet/headers": "^1.3.1",
+    "@arcjet/ip": "^1.3.1",
+    "@arcjet/protocol": "^1.3.1",
+    "@arcjet/transport": "^1.3.1",
     "@clerk/tanstack-react-start": "^0.29.1",
     "@convex-dev/react-query": "^0.1.0",
     "@harness/convex-backend": "workspace:*",
@@ -33,6 +37,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
+    "arcjet": "^1.3.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "convex": "^1.31.7",
@@ -51,6 +56,7 @@
     "tailwindcss": "^4.1.18",
     "tw-animate-css": "^1.3.6",
     "use-sync-external-store": "^1.6.0",
+    "vinxi": "^0.5.11",
     "vite-tsconfig-paths": "^6.0.2",
     "zod": "^4.1.11"
   },

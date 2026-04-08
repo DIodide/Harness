@@ -1,0 +1,34 @@
+import { createClient } from "@arcjet/protocol/client.js";
+import { createTransport } from "@arcjet/transport";
+import arcjetCore, { shield, tokenBucket } from "arcjet";
+
+import { env } from "@/env";
+
+const BASE_URL = "https://decide.arcjet.com";
+
+const client = createClient({
+	baseUrl: BASE_URL,
+	// biome-ignore lint/suspicious/noExplicitAny: Arcjet SDK doesn't export the sdkStack enum type
+	sdkStack: "NODEJS" as any,
+	sdkVersion: "1.3.1",
+	timeout: 500,
+	transport: createTransport(BASE_URL),
+});
+
+export const aj = arcjetCore({
+	client,
+	key: env.ARCJET_KEY,
+	log: console,
+	rules: [
+		// Per-user request rate limit: 20 requests/min, burst capacity 30
+		tokenBucket({
+			mode: "LIVE",
+			characteristics: ["userId"],
+			refillRate: 20,
+			interval: "1m",
+			capacity: 30,
+		}),
+		// WAF-like protection
+		shield({ mode: "LIVE" }),
+	],
+});

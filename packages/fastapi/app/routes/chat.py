@@ -13,6 +13,7 @@ from app.services.convex import query_convex, save_assistant_message, patch_mess
 from app.services.mcp_client import UserContext, call_tool, resolve_princeton_netid, list_tools
 from app.services.mcp_oauth import get_valid_token, GITHUB_STANDALONE_URL
 from app.services.openrouter import stream_chat
+from app.services.usage import check_user_budget, record_usage
 from app.services.sandbox_tools import (
     SANDBOX_TOOL_DEFINITIONS,
     SANDBOX_TOOL_NAMES,
@@ -344,6 +345,24 @@ async def chat_stream(
     )
 
     async def event_generator():
+        # Check cost budget before processing
+        budget = await check_user_budget(http_client, user_id)
+        if not budget.allowed:
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "message": "Usage limit reached",
+                    "code": "BUDGET_EXCEEDED",
+                    "usage": {
+                        "dailyPct": budget.daily_pct,
+                        "weeklyPct": budget.weekly_pct,
+                        "dailyReset": budget.daily_reset,
+                        "weeklyReset": budget.weekly_reset,
+                    },
+                }),
+            }
+            return
+
         # Fetch available MCP tools for this harness
         tools: list[dict] | None = None
         if body.harness.mcp_servers:
@@ -650,6 +669,16 @@ async def chat_stream(
                             usage_for_update,
                             collected_model,
                         )
+                        # Record usage for budget tracking even on disconnect
+                        await record_usage(
+                            http_client,
+                            user_id=user_id,
+                            conversation_id=body.conversation_id,
+                            harness_id=body.harness.harness_id,
+                            harness_name=body.harness.name,
+                            model=collected_model or body.harness.model,
+                            usage_data=collected_usage,
+                        )
                     return
 
             except httpx.HTTPStatusError as e:
@@ -726,6 +755,18 @@ async def chat_stream(
                     usage=usage_for_convex,
                     model=collected_model,
                 )
+
+                # Record usage for budget tracking
+                if collected_usage:
+                    await record_usage(
+                        http_client,
+                        user_id=user_id,
+                        conversation_id=body.conversation_id,
+                        harness_id=body.harness.harness_id,
+                        harness_name=body.harness.name,
+                        model=collected_model or body.harness.model,
+                        usage_data=collected_usage,
+                    )
 
                 done_data: dict = {"content": collected_content}
                 if usage_for_convex:
