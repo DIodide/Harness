@@ -8,6 +8,11 @@ import { defineConfig } from "vite";
 import viteTsConfigPaths from "vite-tsconfig-paths";
 
 const config = defineConfig({
+	// Inline server-only env vars at build time for Cloudflare Workers.
+	// process.env is empty on Workers, so these must be baked into the bundle.
+	define: {
+		"process.env.ARCJET_KEY": JSON.stringify(process.env.ARCJET_KEY ?? ""),
+	},
 	resolve: {
 		alias: {
 			"@": fileURLToPath(new URL("./src", import.meta.url)),

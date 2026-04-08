@@ -27,9 +27,8 @@ export const env = createEnv({
 	runtimeEnv: {
 		...import.meta.env,
 		SERVER_URL: process.env.SERVER_URL,
-		// Inlined by Vite at build time (CD passes ARCJET_KEY as a build env var).
-		// process.env doesn't work on Cloudflare Workers for secrets.
-		ARCJET_KEY: import.meta.env.ARCJET_KEY ?? process.env.ARCJET_KEY,
+		// Inlined by Vite's `define` in vite.config.ts at build time.
+		ARCJET_KEY: process.env.ARCJET_KEY,
 	},
 
 	/**
