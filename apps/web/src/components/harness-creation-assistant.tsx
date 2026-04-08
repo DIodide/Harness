@@ -1,7 +1,6 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
-import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ArrowRight, Lock, X } from "lucide-react";
@@ -68,16 +67,11 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 		model: "claude-sonnet-4",
 		mcpIds: [],
 	});
-	const [convexConvoId, setConvexConvoId] =
-		useState<Id<"conversations"> | null>(null);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
 
-	const createSession = useMutation({
-		mutationFn: useConvexMutation(api.conversations.createCreationSession),
-	});
-	const linkToHarness = useMutation({
-		mutationFn: useConvexMutation(api.conversations.linkToHarness),
+	const createConversation = useMutation({
+		mutationFn: useConvexMutation(api.conversations.create),
 	});
 	const sendMessage = useMutation({
 		mutationFn: useConvexMutation(api.messages.send),
@@ -112,23 +106,6 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 		setStreamingContent("");
 
 		try {
-			// On first user message: create the Convex conversation and seed messages
-			let convoId = convexConvoId;
-			if (!convoId) {
-				convoId = await createSession.mutateAsync({ title: "Harness Setup" });
-				setConvexConvoId(convoId);
-				await sendMessage.mutateAsync({
-					conversationId: convoId,
-					role: "assistant",
-					content: INITIAL_MESSAGE,
-				});
-			}
-			await sendMessage.mutateAsync({
-				conversationId: convoId,
-				role: "user",
-				content: userText,
-			});
-
 			// Stream suggestion from FastAPI
 			const token = await getToken();
 			const response = await fetch(
@@ -140,7 +117,6 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 						...(token ? { Authorization: `Bearer ${token}` } : {}),
 					},
 					body: JSON.stringify({
-						conversation_id: convoId,
 						messages: updatedMessages.map((m) => ({
 							role: m.role,
 							content: m.content,
@@ -241,10 +217,16 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 				skills: [],
 			});
 
-			if (convexConvoId) {
-				linkToHarness.mutate({
-					id: convexConvoId,
-					harnessId: harnessId as Id<"harnesses">,
+			// Save conversation + all messages now that a harness was created
+			const convoId = await createConversation.mutateAsync({
+				title: "Harness Setup",
+				harnessId,
+			});
+			for (const msg of messages) {
+				await sendMessage.mutateAsync({
+					conversationId: convoId,
+					role: msg.role,
+					content: msg.content,
 				});
 			}
 
@@ -287,7 +269,6 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 			setStreamingContent("");
 			setHarnessConfig(null);
 			setEditedConfig({ name: "", model: "claude-sonnet-4", mcpIds: [] });
-			setConvexConvoId(null);
 		}
 		onOpenChange(nextOpen);
 	};

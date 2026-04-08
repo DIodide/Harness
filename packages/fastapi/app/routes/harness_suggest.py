@@ -8,7 +8,6 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.config import MODEL_MAP
 from app.dependencies import get_current_user, get_http_client
-from app.services.convex import save_assistant_message
 from app.services.openrouter import stream_chat
 
 router = APIRouter()
@@ -90,7 +89,6 @@ class _Message(BaseModel):
 
 
 class SuggestRequest(BaseModel):
-    conversation_id: str
     messages: list[_Message]
 
 
@@ -128,11 +126,10 @@ async def suggest_harness_stream(
                     }
 
         except Exception:
-            logger.exception("Error in harness suggestion stream for conversation '%s'", body.conversation_id)
+            logger.exception("Error in harness suggestion stream")
             yield {"event": "error", "data": json.dumps({"message": "Internal server error"})}
             return
 
-        await save_assistant_message(http_client, body.conversation_id, collected_content)
         yield {"event": "done", "data": json.dumps({"content": collected_content})}
 
     return EventSourceResponse(event_generator())
