@@ -121,17 +121,22 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 			setStreamingConvoIds((prev) => new Set(prev).add(convoId));
 
 			try {
-				// Arcjet pre-flight request rate check
+				// Arcjet pre-flight request rate check (fail-open: Arcjet outage must not block chat)
 				if (user?.id) {
-					const rateCheck = await checkChatRateLimit({
-						data: { userId: user.id },
-					});
-					if (!rateCheck.allowed) {
-						cbRef.current.onError(
-							convoId,
-							`Too many requests. Please wait ${rateCheck.retryAfter ?? "a few"} seconds.`,
-						);
-						return;
+					try {
+						const rateCheck = await checkChatRateLimit({
+							data: { userId: user.id },
+						});
+						if (!rateCheck.allowed) {
+							cbRef.current.onError(
+								convoId,
+								`Too many requests. Please wait ${rateCheck.retryAfter ?? "a few"} seconds.`,
+							);
+							return;
+						}
+					} catch {
+						// Arcjet unreachable — allow the request through.
+						// Budget enforcement in FastAPI/Convex is the hard gate.
 					}
 				}
 
