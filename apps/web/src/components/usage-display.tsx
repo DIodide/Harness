@@ -141,7 +141,17 @@ export function formatResetTime(isoString: string): string {
 }
 
 export function UsageDisplay() {
-	const { data: usage } = useQuery(convexQuery(api.usage.getUserUsage, {}));
+	const { data: usage, error } = useQuery(
+		convexQuery(api.usage.getUserUsage, {}),
+	);
+
+	if (error) {
+		return (
+			<p className="px-4 py-2 text-xs text-destructive">
+				Could not load usage.
+			</p>
+		);
+	}
 
 	if (!usage) {
 		return (

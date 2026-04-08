@@ -123,19 +123,15 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 			try {
 				// Arcjet pre-flight request rate check
 				if (user?.id) {
-					try {
-						const rateCheck = await checkChatRateLimit({
-							data: { userId: user.id },
-						});
-						if (!rateCheck.allowed) {
-							cbRef.current.onError(
-								convoId,
-								`Too many requests. Please wait ${rateCheck.retryAfter ?? "a few"} seconds.`,
-							);
-							return;
-						}
-					} catch {
-						// Graceful degradation: proceed if rate check fails
+					const rateCheck = await checkChatRateLimit({
+						data: { userId: user.id },
+					});
+					if (!rateCheck.allowed) {
+						cbRef.current.onError(
+							convoId,
+							`Too many requests. Please wait ${rateCheck.retryAfter ?? "a few"} seconds.`,
+						);
+						return;
 					}
 				}
 

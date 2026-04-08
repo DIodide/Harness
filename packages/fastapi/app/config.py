@@ -36,10 +36,6 @@ class Settings(BaseSettings):
     # Clerk JWT verification — pinned issuer prevents attacker-controlled JWKS.
     clerk_issuer: str = ""
 
-    # Usage budget limits (USD)
-    default_daily_cost_limit: float = 2.00
-    default_weekly_cost_limit: float = 10.00
-
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     def validate_startup(self) -> None:

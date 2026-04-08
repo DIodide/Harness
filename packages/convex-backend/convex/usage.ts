@@ -1,7 +1,9 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery, query } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 
-// Default cost limits (USD)
+// Single source of truth for default cost limits (USD).
+// Per-user overrides are stored in usageBudgets.costLimit via adminSetLimits.
 const DEFAULT_DAILY_COST_LIMIT = 2.0;
 const DEFAULT_WEEKLY_COST_LIMIT = 10.0;
 
@@ -64,7 +66,11 @@ export const checkBudget = internalQuery({
 
 /**
  * Record usage after a chat stream completes. Called by FastAPI via the HTTP API.
- * Inserts a ledger row and upserts both daily and weekly budget documents atomically.
+ * Inserts a ledger row and upserts both daily and weekly budget documents.
+ *
+ * Concurrency note: upsertBudget uses a read-then-patch pattern. Under concurrent
+ * requests for the same user, Convex's OCC (optimistic concurrency control) will
+ * detect the conflict and automatically retry the mutation, so increments are not lost.
  */
 export const recordUsage = internalMutation({
 	args: {
@@ -126,7 +132,7 @@ export const recordUsage = internalMutation({
 });
 
 async function upsertBudget(
-	ctx: { db: any },
+	ctx: Pick<MutationCtx, "db">,
 	params: {
 		userId: string;
 		periodType: "daily" | "weekly";
@@ -141,7 +147,7 @@ async function upsertBudget(
 ) {
 	const existing = await ctx.db
 		.query("usageBudgets")
-		.withIndex("by_user_period", (q: any) =>
+		.withIndex("by_user_period", (q) =>
 			q
 				.eq("userId", params.userId)
 				.eq("periodType", params.periodType)
@@ -152,7 +158,7 @@ async function upsertBudget(
 	if (existing) {
 		// Update per-model usage
 		const perModelUsage = [...existing.perModelUsage];
-		const modelIdx = perModelUsage.findIndex((m: any) => m.model === params.model);
+		const modelIdx = perModelUsage.findIndex((m) => m.model === params.model);
 		if (modelIdx >= 0) {
 			perModelUsage[modelIdx] = {
 				...perModelUsage[modelIdx],
@@ -171,7 +177,7 @@ async function upsertBudget(
 		const perHarnessUsage = [...existing.perHarnessUsage];
 		if (params.harnessId) {
 			const harnessIdx = perHarnessUsage.findIndex(
-				(h: any) => h.harnessId === params.harnessId,
+				(h) => h.harnessId === params.harnessId,
 			);
 			if (harnessIdx >= 0) {
 				perHarnessUsage[harnessIdx] = {
@@ -305,51 +311,6 @@ export const getUserUsage = query({
 });
 
 /**
- * Get detailed per-model cost breakdown (for future "detailed view" toggle).
- */
-export const getUserUsageDetailed = query({
-	args: {},
-	handler: async (ctx) => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) return null;
-		const userId = identity.subject;
-
-		const now = new Date();
-		const day = formatDay(now);
-		const week = formatWeek(now);
-
-		const daily = await ctx.db
-			.query("usageBudgets")
-			.withIndex("by_user_period", (q) =>
-				q.eq("userId", userId).eq("periodType", "daily").eq("period", day),
-			)
-			.unique();
-
-		const weekly = await ctx.db
-			.query("usageBudgets")
-			.withIndex("by_user_period", (q) =>
-				q.eq("userId", userId).eq("periodType", "weekly").eq("period", week),
-			)
-			.unique();
-
-		return {
-			daily: {
-				perModelUsage: daily?.perModelUsage ?? [],
-				perHarnessUsage: daily?.perHarnessUsage ?? [],
-				totalCostUsed: daily?.totalCostUsed ?? 0,
-				totalTokensUsed: daily?.totalTokensUsed ?? 0,
-			},
-			weekly: {
-				perModelUsage: weekly?.perModelUsage ?? [],
-				perHarnessUsage: weekly?.perHarnessUsage ?? [],
-				totalCostUsed: weekly?.totalCostUsed ?? 0,
-				totalTokensUsed: weekly?.totalTokensUsed ?? 0,
-			},
-		};
-	},
-});
-
-/**
  * Get usage aggregated for a specific conversation.
  */
 export const getConversationUsage = query({
@@ -457,8 +418,16 @@ function formatDay(date: Date): string {
 	return date.toISOString().slice(0, 10); // "YYYY-MM-DD"
 }
 
+/**
+ * ISO 8601 week number. Uses the Thursday-based algorithm: the week containing
+ * the year's first Thursday is week 1.
+ *
+ * IMPORTANT: The Python counterpart in fastapi/app/services/usage.py uses
+ * datetime.isocalendar() which implements the same ISO 8601 standard. Both must
+ * produce identical week keys — if they drift, Python-written records become
+ * invisible to TypeScript queries. Test at year boundaries if modifying.
+ */
 function formatWeek(date: Date): string {
-	// ISO week number calculation
 	const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 	d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
 	const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
