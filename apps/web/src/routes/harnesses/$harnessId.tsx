@@ -69,6 +69,7 @@ import type { McpServerEntry } from "../../lib/mcp";
 import { PRESET_MCPS } from "../../lib/mcp";
 import { MODELS } from "../../lib/models";
 import type { SkillEntry } from "../../lib/skills";
+import { SYSTEM_PROMPT_MAX_LENGTH } from "../../lib/system-prompt";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
@@ -104,6 +105,7 @@ function HarnessEditPage() {
 			setModel(null);
 			setMcpServers(null);
 			setSkills(null);
+			setSystemPrompt(null);
 			toast.success("Harness saved");
 			navigate({ to: "/harnesses" });
 
@@ -393,11 +395,13 @@ function HarnessEditPage() {
 									id="system-prompt"
 									placeholder="e.g. You are a helpful coding assistant that always explains your reasoning."
 									value={currentSystemPrompt}
+									maxLength={SYSTEM_PROMPT_MAX_LENGTH}
 									onChange={(e) => setSystemPrompt(e.target.value)}
 									className="h-24 max-w-lg resize-y"
 								/>
 								<p className="mt-1.5 text-xs text-muted-foreground">
-									Custom instructions prepended to every conversation.
+									Custom instructions prepended to every conversation (max{" "}
+									{SYSTEM_PROMPT_MAX_LENGTH.toLocaleString()} characters).
 								</p>
 							</div>
 						</div>

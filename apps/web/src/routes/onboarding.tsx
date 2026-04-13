@@ -60,6 +60,7 @@ import { PRESET_MCPS, presetIdsToServerEntries } from "../lib/mcp";
 import { MODELS } from "../lib/models";
 import type { SkillEntry } from "../lib/skills";
 import { RECOMMENDED_SKILLS } from "../lib/skills";
+import { SYSTEM_PROMPT_MAX_LENGTH } from "../lib/system-prompt";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
@@ -486,11 +487,13 @@ function StepNameModel({
 					id="system-prompt"
 					placeholder="e.g. You are a helpful coding assistant that always explains your reasoning."
 					value={systemPrompt}
+					maxLength={SYSTEM_PROMPT_MAX_LENGTH}
 					onChange={(e) => setSystemPrompt(e.target.value)}
 					className="h-24 resize-y"
 				/>
 				<p className="mt-1.5 text-xs text-muted-foreground">
-					Custom instructions prepended to every conversation.
+					Custom instructions prepended to every conversation (max{" "}
+					{SYSTEM_PROMPT_MAX_LENGTH.toLocaleString()} characters).
 				</p>
 			</div>
 

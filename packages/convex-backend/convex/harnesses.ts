@@ -1,6 +1,17 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 
+/** Match apps/web `SYSTEM_PROMPT_MAX_LENGTH` and FastAPI `HarnessConfig.system_prompt`. */
+const SYSTEM_PROMPT_MAX_CHARS = 4000;
+
+function assertSystemPromptLength(systemPrompt: string | undefined) {
+	if (systemPrompt !== undefined && systemPrompt.length > SYSTEM_PROMPT_MAX_CHARS) {
+		throw new Error(
+			`System prompt must be at most ${SYSTEM_PROMPT_MAX_CHARS} characters`,
+		);
+	}
+}
+
 export const list = query({
 	handler: async (ctx) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -62,6 +73,7 @@ export const create = mutation({
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
+		assertSystemPromptLength(args.systemPrompt);
 		return await ctx.db.insert("harnesses", {
 			...args,
 			userId: identity.subject,
@@ -122,6 +134,7 @@ export const update = mutation({
 			throw new Error("Not found");
 		}
 		const { id, ...updates } = args;
+		assertSystemPromptLength(updates.systemPrompt);
 		const filtered = Object.fromEntries(
 			Object.entries(updates).filter(([, v]) => v !== undefined),
 		);
