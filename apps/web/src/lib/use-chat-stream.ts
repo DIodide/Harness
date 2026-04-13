@@ -87,6 +87,7 @@ export interface ChatStreamRequest {
 		skills: Array<{ name: string; description: string }>;
 		name: string;
 		harness_id?: string;
+		system_prompt?: string;
 		sandbox_enabled?: boolean;
 		sandbox_id?: string;
 		sandbox_config?: {

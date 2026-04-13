@@ -725,6 +725,7 @@ function ChatPage() {
 					skills: activeHarness.skills ?? [],
 					name: activeHarness.name,
 					harness_id: activeHarness._id,
+					system_prompt: activeHarness.systemPrompt ?? undefined,
 
 					sandbox_enabled: activeHarness.sandboxEnabled ?? false,
 					sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
@@ -811,6 +812,7 @@ function ChatPage() {
 				skills: activeHarness.skills ?? [],
 				name: activeHarness.name,
 				harness_id: activeHarness._id,
+				system_prompt: activeHarness.systemPrompt ?? undefined,
 				sandbox_enabled: activeHarness.sandboxEnabled ?? false,
 				sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
 				sandbox_config: activeHarness.sandboxConfig
@@ -908,6 +910,7 @@ function ChatPage() {
 						})),
 						skills: activeHarness.skills ?? [],
 						name: activeHarness.name,
+						system_prompt: activeHarness.systemPrompt ?? undefined,
 					},
 					conversation_id: newConvoId,
 				});
@@ -3047,6 +3050,7 @@ function ChatInput({
 			authToken?: string;
 		}>;
 		skills: SkillEntry[];
+		systemPrompt?: string;
 		sandboxEnabled?: boolean;
 		daytonaSandboxId?: string;
 		sandboxConfig?: {
@@ -3073,6 +3077,7 @@ function ChatInput({
 			}>;
 			skills: SkillEntry[];
 			name: string;
+			system_prompt?: string;
 		};
 		conversation_id: string;
 	}) => Promise<void>;
@@ -3239,6 +3244,7 @@ function ChatInput({
 			skills: activeHarness.skills ?? [],
 			name: activeHarness.name,
 			harness_id: activeHarness._id,
+			system_prompt: activeHarness.systemPrompt ?? undefined,
 			sandbox_enabled: activeHarness.sandboxEnabled ?? false,
 			sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
 			sandbox_config: activeHarness.sandboxConfig

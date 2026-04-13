@@ -53,12 +53,14 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../components/ui/select";
+import { Textarea } from "../components/ui/textarea";
 import { env } from "../env";
 import type { McpServerEntry } from "../lib/mcp";
 import { PRESET_MCPS, presetIdsToServerEntries } from "../lib/mcp";
 import { MODELS } from "../lib/models";
 import type { SkillEntry } from "../lib/skills";
 import { RECOMMENDED_SKILLS } from "../lib/skills";
+import { SYSTEM_PROMPT_MAX_LENGTH } from "../lib/system-prompt";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
@@ -85,6 +87,7 @@ function OnboardingPage() {
 
 	const [name, setName] = useState("");
 	const [model, setModel] = useState("");
+	const [systemPrompt, setSystemPrompt] = useState("");
 	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>(
 		[],
 	);
@@ -210,6 +213,7 @@ function OnboardingPage() {
 			status: "started" as const,
 			mcpServers: allMcpServers,
 			skills: selectedSkills,
+			systemPrompt: systemPrompt.trim() || undefined,
 			sandboxEnabled: sandboxEnabled || undefined,
 			sandboxConfig: sandboxEnabled ? sandboxConfig : undefined,
 		});
@@ -222,6 +226,7 @@ function OnboardingPage() {
 			status: "draft" as const,
 			mcpServers: allMcpServers,
 			skills: selectedSkills,
+			systemPrompt: systemPrompt.trim() || undefined,
 			sandboxEnabled: sandboxEnabled || undefined,
 			sandboxConfig: sandboxEnabled ? sandboxConfig : undefined,
 		});
@@ -323,6 +328,8 @@ function OnboardingPage() {
 									setName={setName}
 									model={model}
 									setModel={setModel}
+									systemPrompt={systemPrompt}
+									setSystemPrompt={setSystemPrompt}
 								/>
 							)}
 							{currentStep === "mcps" && (
@@ -412,11 +419,15 @@ function StepNameModel({
 	setName,
 	model,
 	setModel,
+	systemPrompt,
+	setSystemPrompt,
 }: {
 	name: string;
 	setName: (v: string) => void;
 	model: string;
 	setModel: (v: string) => void;
+	systemPrompt: string;
+	setSystemPrompt: (v: string) => void;
 }) {
 	return (
 		<div className="space-y-6">
@@ -462,6 +473,27 @@ function StepNameModel({
 				</Select>
 				<p className="mt-1.5 text-xs text-muted-foreground">
 					Choose the LLM that powers this harness.
+				</p>
+			</div>
+			<div>
+				<label
+					htmlFor="system-prompt"
+					className="mb-2 block text-xs font-medium text-foreground"
+				>
+					System Prompt{" "}
+					<span className="font-normal text-muted-foreground">(Optional)</span>
+				</label>
+				<Textarea
+					id="system-prompt"
+					placeholder="e.g. You are a helpful coding assistant that always explains your reasoning."
+					value={systemPrompt}
+					maxLength={SYSTEM_PROMPT_MAX_LENGTH}
+					onChange={(e) => setSystemPrompt(e.target.value)}
+					className="h-24 resize-y"
+				/>
+				<p className="mt-1.5 text-xs text-muted-foreground">
+					Custom instructions prepended to every conversation (max{" "}
+					{SYSTEM_PROMPT_MAX_LENGTH.toLocaleString()} characters).
 				</p>
 			</div>
 

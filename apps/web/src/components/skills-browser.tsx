@@ -286,27 +286,14 @@ export function SkillsBrowser({
 				<div className="grid gap-2 sm:grid-cols-2">
 					{rows.map((skill) => {
 						const added = isAdded(skill.fullId);
+						const skillPayload = {
+							name: skill.fullId,
+							description: skill.description,
+						};
 						return (
 							<div
 								key={skill.fullId}
-								role="button"
-								tabIndex={0}
-								onClick={() =>
-									onToggle({
-										name: skill.fullId,
-										description: skill.description,
-									})
-								}
-								onKeyDown={(e) => {
-									if (e.key === "Enter" || e.key === " ") {
-										e.preventDefault();
-										onToggle({
-											name: skill.fullId,
-											description: skill.description,
-										});
-									}
-								}}
-								className={`flex items-start gap-3 border p-3 text-left transition-colors ${
+								className={`flex items-start gap-3 border p-3 transition-colors ${
 									added
 										? "border-foreground bg-foreground/3"
 										: "border-border hover:border-foreground/20"
@@ -315,9 +302,14 @@ export function SkillsBrowser({
 								<Checkbox
 									checked={added}
 									className="mt-0.5 shrink-0"
-									tabIndex={-1}
+									onCheckedChange={() => onToggle(skillPayload)}
 								/>
-								<div className="min-w-0 flex-1">
+								<button
+									type="button"
+									aria-label={`Toggle skill ${skill.skillId}`}
+									onClick={() => onToggle(skillPayload)}
+									className="min-w-0 flex-1 border-0 bg-transparent p-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+								>
 									<div className="flex items-center gap-2">
 										<p className="text-xs font-medium text-foreground">
 											{skill.skillId}
@@ -332,14 +324,11 @@ export function SkillsBrowser({
 									<p className="text-[10px] leading-tight text-muted-foreground/50">
 										{skill.source}
 									</p>
-								</div>
+								</button>
 								<button
 									type="button"
 									aria-label={`View skill ${skill.skillId}`}
-									onClick={(e) => {
-										e.stopPropagation();
-										setViewingSkill(skill);
-									}}
+									onClick={() => setViewingSkill(skill)}
 									className="mt-0.5 shrink-0 border-0 bg-transparent p-0 text-muted-foreground/40 transition-colors hover:text-foreground"
 								>
 									<Eye size={14} />

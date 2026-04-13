@@ -33,27 +33,14 @@ export function RecommendedSkillsGrid({
 			<div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
 				{RECOMMENDED_SKILLS.map((rec) => {
 					const isSelected = selected.some((s) => s.name === rec.skill.fullId);
+					const skillPayload = {
+						name: rec.skill.fullId,
+						description: rec.skill.description,
+					};
 					return (
 						<div
 							key={rec.id}
-							role="button"
-							tabIndex={0}
-							onClick={() =>
-								onToggle({
-									name: rec.skill.fullId,
-									description: rec.skill.description,
-								})
-							}
-							onKeyDown={(e) => {
-								if (e.key === "Enter" || e.key === " ") {
-									e.preventDefault();
-									onToggle({
-										name: rec.skill.fullId,
-										description: rec.skill.description,
-									});
-								}
-							}}
-							className={`flex items-start gap-3 border p-3 text-left transition-colors ${
+							className={`flex items-start gap-3 border p-3 transition-colors ${
 								isSelected
 									? "border-foreground bg-foreground/3"
 									: "border-border hover:border-foreground/20"
@@ -62,9 +49,13 @@ export function RecommendedSkillsGrid({
 							<Checkbox
 								checked={isSelected}
 								className="mt-0.5 shrink-0"
-								tabIndex={-1}
+								onCheckedChange={() => onToggle(skillPayload)}
 							/>
-							<div className="min-w-0 flex-1">
+							<button
+								type="button"
+								onClick={() => onToggle(skillPayload)}
+								className="min-w-0 flex-1 border-0 bg-transparent p-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+							>
 								<div className="flex items-center gap-1.5">
 									<Zap size={14} className="shrink-0 text-muted-foreground" />
 									<p className="text-xs font-medium text-foreground">
@@ -80,13 +71,10 @@ export function RecommendedSkillsGrid({
 								<p className="text-[10px] leading-tight text-muted-foreground/50">
 									{rec.skill.source}
 								</p>
-							</div>
+							</button>
 							<button
 								type="button"
-								onClick={(e) => {
-									e.stopPropagation();
-									setViewingSkill(rec);
-								}}
+								onClick={() => setViewingSkill(rec)}
 								className="mt-0.5 shrink-0 text-muted-foreground/40 transition-colors hover:text-foreground"
 							>
 								<Eye size={14} />
