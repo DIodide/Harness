@@ -267,7 +267,7 @@ function HarnessEditPage() {
 		if (model !== null) updates.model = model;
 		if (mcpServers !== null) updates.mcpServers = mcpServers;
 		if (skills !== null) updates.skills = skills;
-		if (systemPrompt !== null) updates.systemPrompt = systemPrompt;
+		if (systemPrompt !== null) updates.systemPrompt = systemPrompt.trim();
 		if (sandboxEnabled !== null) updates.sandboxEnabled = sandboxEnabled;
 		if (sandboxConfig !== null) updates.sandboxConfig = sandboxConfig;
 		updateHarness.mutate(updates as Parameters<typeof updateHarness.mutate>[0]);
