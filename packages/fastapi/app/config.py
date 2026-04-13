@@ -22,11 +22,6 @@ class Settings(BaseSettings):
     daytona_api_url: str = "https://app.daytona.io/api"
     daytona_target: str = "us"
 
-    # Pre-registered Slack OAuth App credentials (for Slack MCP server).
-    # Create one at https://api.slack.com/apps
-    slack_oauth_client_id: str = ""
-    slack_oauth_client_secret: str = ""
-
     # Tiger Junction engine shared bearer token (MCP_ACCESS_TOKEN on the engine side)
     tiger_junction_mcp_token: str = ""
 

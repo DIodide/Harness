@@ -102,18 +102,6 @@ export const PRESET_MCPS: PresetMcpDefinition[] = [
 			authType: "oauth",
 		},
 	},
-	{
-		id: "slack",
-		description:
-			"(wait until deployed)Send messages, read channel history, and search conversations.",
-		iconName: "slack",
-		category: "comms",
-		server: {
-			name: "Slack",
-			url: "https://mcp.slack.com/mcp",
-			authType: "oauth",
-		},
-	},
 	// Not supported for none VIPs yet
 	// {
 	// 	id: "figma",
@@ -150,17 +138,6 @@ export const PRESET_MCPS: PresetMcpDefinition[] = [
 	// 		authType: "oauth",
 	// 	},
 	// },
-	{
-		id: "jira",
-		description: "Create tickets, track sprints, and manage Agile releases.",
-		iconName: "jira",
-		category: "productivity",
-		server: {
-			name: "Jira",
-			url: "https://mcp.atlassian.com/v1/mcp",
-			authType: "oauth",
-		},
-	},
 	{
 		id: "awsknowledge",
 		description:
