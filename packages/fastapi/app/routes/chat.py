@@ -546,6 +546,10 @@ async def chat_stream(
             skills_block = _build_skills_system_block(skill_manifest)
             messages.insert(0, {"role": "system", "content": skills_block})
 
+        # Prepend the user's custom system prompt (before skills so it appears first)
+        if body.harness.system_prompt:
+            messages.insert(0, {"role": "system", "content": body.harness.system_prompt})
+
         # Accumulate across all iterations so reasoning/tool history isn't lost
         all_reasoning = ""
         all_tool_calls_history: list[dict] = []  # [{tool, arguments, call_id, result}]

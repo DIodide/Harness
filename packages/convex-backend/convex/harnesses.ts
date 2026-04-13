@@ -41,6 +41,7 @@ export const create = mutation({
 			}),
 		),
 		skills: v.array(v.object({ name: v.string(), description: v.string() })),
+		systemPrompt: v.optional(v.string()),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxConfig: v.optional(
 			v.object({
@@ -92,6 +93,7 @@ export const update = mutation({
 			),
 		),
 		skills: v.optional(v.array(v.object({ name: v.string(), description: v.string() }))),
+		systemPrompt: v.optional(v.string()),
 		suggestedPrompts: v.optional(v.array(v.string())),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxId: v.optional(v.id("sandboxes")),
@@ -142,6 +144,7 @@ export const duplicate = mutation({
 			status: harness.status,
 			mcpServers: harness.mcpServers,
 			skills: harness.skills,
+			systemPrompt: harness.systemPrompt,
 			userId: identity.subject,
 			lastUsedAt: Date.now(),
 		});

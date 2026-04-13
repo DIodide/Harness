@@ -63,6 +63,7 @@ import {
 } from "../../components/ui/select";
 import { Separator } from "../../components/ui/separator";
 import { Skeleton } from "../../components/ui/skeleton";
+import { Textarea } from "../../components/ui/textarea";
 import { env } from "../../env";
 import type { McpServerEntry } from "../../lib/mcp";
 import { PRESET_MCPS } from "../../lib/mcp";
@@ -159,6 +160,7 @@ function HarnessEditPage() {
 	const [skills, setSkills] = useState<SkillEntry[] | null>(null);
 	const [skillsBrowserOpen, setSkillsBrowserOpen] = useState(false);
 	const [viewingSkillId, setViewingSkillId] = useState<string | null>(null);
+	const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
 	const [sandboxEnabled, setSandboxEnabled] = useState<boolean | null>(null);
 	const [sandboxConfig, setSandboxConfig] = useState<{
 		persistent: boolean;
@@ -195,11 +197,14 @@ function HarnessEditPage() {
 			resourceTier: "basic" as const,
 		};
 
+	const currentSystemPrompt = systemPrompt ?? harness?.systemPrompt ?? "";
+
 	const hasChanges =
 		name !== null ||
 		model !== null ||
 		mcpServers !== null ||
 		skills !== null ||
+		systemPrompt !== null ||
 		sandboxEnabled !== null ||
 		sandboxConfig !== null;
 
@@ -260,6 +265,7 @@ function HarnessEditPage() {
 		if (model !== null) updates.model = model;
 		if (mcpServers !== null) updates.mcpServers = mcpServers;
 		if (skills !== null) updates.skills = skills;
+		if (systemPrompt !== null) updates.systemPrompt = systemPrompt;
 		if (sandboxEnabled !== null) updates.sandboxEnabled = sandboxEnabled;
 		if (sandboxConfig !== null) updates.sandboxConfig = sandboxConfig;
 		updateHarness.mutate(updates as Parameters<typeof updateHarness.mutate>[0]);
@@ -372,6 +378,27 @@ function HarnessEditPage() {
 										))}
 									</SelectContent>
 								</Select>
+							</div>
+							<div>
+								<label
+									htmlFor="system-prompt"
+									className="mb-1.5 block text-xs font-medium text-foreground"
+								>
+									System Prompt{" "}
+									<span className="font-normal text-muted-foreground">
+										(Optional)
+									</span>
+								</label>
+								<Textarea
+									id="system-prompt"
+									placeholder="e.g. You are a helpful coding assistant that always explains your reasoning."
+									value={currentSystemPrompt}
+									onChange={(e) => setSystemPrompt(e.target.value)}
+									className="h-24 max-w-lg resize-y"
+								/>
+								<p className="mt-1.5 text-xs text-muted-foreground">
+									Custom instructions prepended to every conversation.
+								</p>
 							</div>
 						</div>
 					</motion.section>
@@ -742,33 +769,26 @@ function HarnessEditPage() {
 									return (
 										<div
 											key={skill.name}
-											role="button"
-											tabIndex={0}
-											onClick={() => toggleSkill(skill)}
-											onKeyDown={(e) => {
-												if (e.key === "Enter" || e.key === " ") {
-													e.preventDefault();
-													toggleSkill(skill);
-												}
-											}}
-											className="flex w-full items-start gap-3 border border-foreground bg-foreground/3 p-3 text-left transition-colors hover:border-foreground/20"
+											className="flex w-full items-start gap-3 border border-foreground bg-foreground/3 p-3 transition-colors hover:border-foreground/20"
 										>
 											<Checkbox
 												checked={true}
 												className="mt-0.5 shrink-0"
-												tabIndex={-1}
+												onCheckedChange={() => toggleSkill(skill)}
 											/>
-											<div className="min-w-0 flex-1">
+											<button
+												type="button"
+												onClick={() => toggleSkill(skill)}
+												className="min-w-0 flex-1 border-0 bg-transparent p-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+											>
 												<p className="text-xs font-medium text-foreground">
 													{displayName}
 												</p>
-											</div>
+											</button>
 											<button
 												type="button"
-												onClick={(e) => {
-													e.stopPropagation();
-													setViewingSkillId(skill.name);
-												}}
+												aria-label={`View skill ${displayName}`}
+												onClick={() => setViewingSkillId(skill.name)}
 												className="mt-0.5 shrink-0 text-muted-foreground/40 transition-colors hover:text-foreground"
 											>
 												<Eye size={14} />
