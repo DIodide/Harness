@@ -16,6 +16,7 @@ async def stream_chat(
     messages: list[dict],
     model: str,
     tools: list[dict] | None = None,
+    tool_choice: dict | str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Stream chat completion from OpenRouter. Yields parsed SSE chunks.
 
@@ -24,6 +25,7 @@ async def stream_chat(
         messages: OpenAI-format message list.
         model: Short model name (e.g. "claude-sonnet-4") or full OpenRouter ID.
         tools: Optional OpenAI-format tool definitions.
+        tool_choice: Optional tool_choice override (e.g. to force a specific tool).
     """
     resolved_model = MODEL_MAP.get(model, model)
     logger.debug(
@@ -45,7 +47,7 @@ async def stream_chat(
         payload["reasoning"] = {"effort": "high"}
     if tools:
         payload["tools"] = tools
-        payload["tool_choice"] = "auto"
+        payload["tool_choice"] = tool_choice or "auto"
 
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",

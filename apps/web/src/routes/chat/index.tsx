@@ -68,6 +68,10 @@ import { SandboxPanel } from "../../components/sandbox/sandbox-panel";
 import { SandboxResult } from "../../components/sandbox-result";
 import { SkillViewerDialog } from "../../components/skill-viewer-dialog";
 import {
+	SlashCommandMenu,
+	useSlashCommandInput,
+} from "../../components/slash-commands";
+import {
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
@@ -109,7 +113,8 @@ import { UsageDialog } from "../../components/usage-dialog";
 import { formatResetTime, UsageBadge } from "../../components/usage-display";
 import { env } from "../../env";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
-import type { McpAuthType } from "../../lib/mcp";
+import type { McpAuthType, McpServerCommand } from "../../lib/mcp";
+import { fetchCommandsFromApi, sanitizeServerName } from "../../lib/mcp";
 import {
 	acceptString,
 	allowedMimeTypes,
@@ -219,6 +224,13 @@ function ChatPage() {
 		Record<string, HealthStatus>
 	>({});
 
+	// Bump to force a slash-command refetch (after OAuth, harness edit, etc.)
+	const [commandRefreshKey, setCommandRefreshKey] = useState(0);
+	const refreshCommands = useCallback(
+		() => setCommandRefreshKey((k) => k + 1),
+		[],
+	);
+
 	// Track conversations that just finished streaming (show green checkmark briefly)
 	const [doneConvoIds, setDoneConvoIds] = useState<Set<string>>(new Set());
 	const prevStreamingRef = useRef<Set<string>>(new Set());
@@ -276,6 +288,9 @@ function ChatPage() {
 
 	const updateHarness = useMutation({
 		mutationFn: useConvexMutation(api.harnesses.update),
+	});
+	const upsertCommandsMut = useMutation({
+		mutationFn: useConvexMutation(api.commands.upsert),
 	});
 
 	// Save interrupted assistant message from frontend
@@ -577,6 +592,18 @@ function ChatPage() {
 
 	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
 
+	// Collect all command IDs across the active harness's MCP servers
+	const allCommandIds = useMemo(
+		() => (activeHarness?.mcpServers ?? []).flatMap((s) => s.commandIds ?? []),
+		[activeHarness?.mcpServers],
+	);
+	const { data: storedCommands } = useQuery(
+		convexQuery(
+			api.commands.getByIds,
+			allCommandIds.length > 0 ? { ids: allCommandIds } : "skip",
+		),
+	);
+
 	// Health-check MCP servers when harness changes
 	// biome-ignore lint/correctness/useExhaustiveDependencies: only re-run when harness ID changes
 	useEffect(() => {
@@ -654,6 +681,70 @@ function ChatPage() {
 			cancelled = true;
 		};
 	}, [activeHarness?._id, getToken]);
+
+	// Sync slash commands: fetch from MCP servers, upsert into commands table,
+	// and store the resulting IDs on the harness's mcpServers.
+	// Only runs on explicit triggers (OAuth reconnect, etc.) — NOT on harness
+	// switch or page load, since connecting to each MCP server is expensive.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: only fires on commandRefreshKey
+	useEffect(() => {
+		if (commandRefreshKey === 0) return; // skip initial mount
+		if (!activeHarness || activeHarness.mcpServers.length === 0) return;
+
+		let cancelled = false;
+		(async () => {
+			try {
+				const token = await getToken();
+				const cmds = await fetchCommandsFromApi(
+					FASTAPI_URL,
+					activeHarness.mcpServers,
+					token,
+				);
+				if (cancelled || !cmds || cmds.length === 0) return;
+
+				// Upsert all commands into the commands table (stringify parameters)
+				const ids: string[] = await upsertCommandsMut.mutateAsync({
+					commands: cmds.map((c) => ({
+						name: c.name,
+						server: c.server,
+						tool: c.tool,
+						description: c.description,
+						parametersJson: JSON.stringify(c.parameters),
+					})),
+				});
+
+				if (cancelled) return;
+
+				// Build a name→id map, then assign IDs to each mcpServer
+				const idByName = new Map(
+					cmds.map((c, i) => [c.name, ids[i] as Id<"commands">]),
+				);
+				const enriched = activeHarness.mcpServers.map((s) => ({
+					name: s.name,
+					url: s.url,
+					authType: s.authType,
+					...(s.authToken ? { authToken: s.authToken } : {}),
+					commandIds: [...idByName.entries()]
+						.filter(([name]) =>
+							name.startsWith(`${sanitizeServerName(s.name)}__`),
+						)
+						.map(([, id]) => id),
+				}));
+
+				if (!cancelled) {
+					updateHarness.mutate({
+						id: activeHarness._id,
+						mcpServers: enriched,
+					});
+				}
+			} catch {
+				// Non-blocking — commands are optional
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [commandRefreshKey]);
 
 	const handleInterrupt = useCallback(
 		(convoId: string) => {
@@ -986,6 +1077,7 @@ function ChatPage() {
 						onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
 						isStreaming={isActiveConvoStreaming}
 						mcpHealthStatuses={mcpHealthStatuses}
+						onRefreshCommands={refreshCommands}
 					/>
 
 					<McpFailureBanner
@@ -1073,6 +1165,13 @@ function ChatPage() {
 					<ChatInput
 						conversationId={activeConvoId}
 						activeHarness={activeHarness}
+						slashCommands={(storedCommands ?? []).filter(Boolean).map((c) => ({
+							name: c?.name,
+							server: c?.server,
+							tool: c?.tool,
+							description: c?.description,
+							parameters: JSON.parse(c?.parametersJson),
+						}))}
 						sessionModel={
 							userSettings?.modelSelectorMode === "harness"
 								? null
@@ -1874,6 +1973,7 @@ function ChatHeader({
 	onToggleSidebar,
 	isStreaming,
 	mcpHealthStatuses,
+	onRefreshCommands,
 }: {
 	harness?: {
 		_id: Id<"harnesses">;
@@ -1885,6 +1985,7 @@ function ChatHeader({
 			url: string;
 			authType: McpAuthType;
 			authToken?: string;
+			commandIds?: string[];
 		}>;
 		skills: SkillEntry[];
 		sandboxEnabled?: boolean;
@@ -1900,6 +2001,7 @@ function ChatHeader({
 	onToggleSidebar: () => void;
 	isStreaming: boolean;
 	mcpHealthStatuses?: Record<string, HealthStatus>;
+	onRefreshCommands: () => void;
 }) {
 	return (
 		<header className="flex items-center justify-between border-b border-border px-4 py-2.5">
@@ -1959,6 +2061,7 @@ function ChatHeader({
 					<McpServerStatus
 						servers={harness.mcpServers}
 						healthStatuses={mcpHealthStatuses}
+						onReconnected={onRefreshCommands}
 					/>
 				)}
 
@@ -3022,6 +3125,7 @@ function EmptyChat({
 function ChatInput({
 	conversationId,
 	activeHarness,
+	slashCommands,
 	sessionModel,
 	modelSelectorMode = "session",
 	onSessionModelChange,
@@ -3048,6 +3152,7 @@ function ChatInput({
 			url: string;
 			authType: McpAuthType;
 			authToken?: string;
+			commandIds?: string[];
 		}>;
 		skills: SkillEntry[];
 		systemPrompt?: string;
@@ -3060,6 +3165,7 @@ function ChatInput({
 			resourceTier: string;
 		};
 	};
+	slashCommands: McpServerCommand[];
 	onConvoCreated: (id: Id<"conversations">) => void;
 	isStreaming: boolean;
 	onStream: (body: {
@@ -3080,6 +3186,7 @@ function ChatInput({
 			system_prompt?: string;
 		};
 		conversation_id: string;
+		forced_tool?: string;
 	}) => Promise<void>;
 	onInterrupt: (convoId: string) => void;
 	onEnqueue: (content: string) => void;
@@ -3136,6 +3243,14 @@ function ChatInput({
 	useEffect(() => {
 		if (!supportsAnyAttachment) clearAttachments();
 	}, [supportsAnyAttachment, clearAttachments]);
+
+	// ── Slash commands ──────────────────────────────────────────────
+	const slash = useSlashCommandInput({
+		storedCommands: slashCommands,
+		text,
+		setText,
+		textareaRef,
+	});
 
 	// ── Voice recording ──────────────────────────────────────────────
 	const [isRecording, setIsRecording] = useState(false);
@@ -3221,6 +3336,18 @@ function ChatInput({
 		const content = text.trim();
 		if (!content || !activeHarness || budgetExceeded) return;
 
+		// ── Slash command interception ────────────────────────────────
+		// If it's a slash command, trySend returns the forced tool + cleaned message.
+		// We then send it through the normal chat flow with forced_tool set.
+		const slashResult = slash.trySend(content);
+		if (slashResult !== null) {
+			if (!slashResult.forcedTool) return; // validation error (e.g. no message), already toasted
+		}
+
+		// Use the cleaned message for slash commands, or the raw content for normal messages
+		const messageContent = slashResult ? slashResult.message : content;
+		const forcedTool = slashResult?.forcedTool;
+
 		setText("");
 		setHistoryIndex(-1);
 		setDraft("");
@@ -3277,7 +3404,7 @@ function ChatInput({
 				fileSize: a.fileSize,
 			}));
 
-		// Save user message to Convex
+		// Save user message to Convex (original text including /command prefix)
 		await sendMessage.mutateAsync({
 			conversationId: convoId,
 			role: "user",
@@ -3306,18 +3433,21 @@ function ChatInput({
 			}
 		}
 
+		// For slash commands, send the cleaned message (without /command prefix) to the LLM
+		const llmContent = messageContent;
+
 		// Add the new user message (with any current attachments)
 		if (readyAttachments.length > 0) {
 			history.push({
 				role: "user",
 				content: await buildMultimodalContent(
-					content,
+					llmContent,
 					readyAttachments,
 					resolveSignedUrls,
 				),
 			});
 		} else {
-			history.push({ role: "user", content });
+			history.push({ role: "user", content: llmContent });
 		}
 
 		// Start streaming from FastAPI
@@ -3325,10 +3455,14 @@ function ChatInput({
 			messages: history,
 			harness: harnessConfig,
 			conversation_id: convoId,
+			...(forcedTool ? { forced_tool: forcedTool } : {}),
 		});
 	};
 
 	const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+		// Slash command menu gets first shot at keyboard events
+		if (slash.handleKeyDown(e)) return;
+
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault();
 			handleSend();
@@ -3513,6 +3647,17 @@ function ChatInput({
 						</motion.div>
 					)}
 				</AnimatePresence>
+
+				{/* Slash command autocomplete menu */}
+				<div className="relative">
+					<SlashCommandMenu
+						isOpen={slash.menuOpen}
+						commands={slash.commands}
+						filtered={slash.filtered}
+						selectedIndex={slash.selectedIndex}
+						onSelect={slash.selectCommand}
+					/>
+				</div>
 
 				<div className="flex items-center gap-2 border border-border bg-background px-3 py-2 focus-within:border-foreground/30">
 					{/* Attach button — hidden for models that don't support media */}
