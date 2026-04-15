@@ -46,6 +46,7 @@ class ChatRequest(BaseModel):
     messages: list[MessagePayload]
     harness: HarnessConfig
     conversation_id: str
+    forced_tool: str | None = None
 
 
 class SandboxCreateRequest(BaseModel):
@@ -91,3 +92,9 @@ class GitAddRequest(BaseModel):
 class GitCommitRequest(BaseModel):
     path: str = "/home/daytona"
     message: str
+
+
+class CommandListRequest(BaseModel):
+    mcp_servers: list[McpServer] = []
+
+
