@@ -4,6 +4,7 @@ import { z } from "zod";
 export const env = createEnv({
 	server: {
 		SERVER_URL: z.string().url().optional(),
+		ARCJET_KEY: z.string().min(1),
 	},
 
 	/**
@@ -23,7 +24,12 @@ export const env = createEnv({
 	 * What object holds the environment variables at runtime. This is usually
 	 * `process.env` or `import.meta.env`.
 	 */
-	runtimeEnv: import.meta.env,
+	runtimeEnv: {
+		...import.meta.env,
+		SERVER_URL: process.env.SERVER_URL,
+		// Inlined by Vite's `define` in vite.config.ts at build time.
+		ARCJET_KEY: process.env.ARCJET_KEY,
+	},
 
 	/**
 	 * By default, this library will feed the environment variables directly to

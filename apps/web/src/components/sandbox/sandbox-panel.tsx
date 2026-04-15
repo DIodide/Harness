@@ -108,8 +108,10 @@ export function SandboxPanel() {
 			className="relative flex h-full flex-col overflow-hidden border-l border-border bg-background"
 		>
 			{/* Resize handle */}
-			<div
-				className="absolute left-0 top-0 z-10 h-full w-1 cursor-col-resize hover:bg-foreground/10 active:bg-foreground/15"
+			<button
+				type="button"
+				aria-label="Resize sandbox panel"
+				className="absolute left-0 top-0 z-10 h-full w-1 cursor-col-resize border-0 bg-transparent p-0 hover:bg-foreground/10 active:bg-foreground/15"
 				onMouseDown={handleDragStart}
 			/>
 

@@ -5,7 +5,14 @@ import {
 	Loader2,
 	TerminalSquare,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { type CommandResponse, createSandboxApi } from "../../lib/sandbox-api";
 import { useSandboxPanel } from "../../lib/sandbox-panel-context";
 import { cn } from "../../lib/utils";
@@ -198,13 +205,12 @@ export function CommandRunner() {
 
 	const isRunning = entries.some((e) => e.running);
 	const displayCwd = cwd.replace(/^\/home\/daytona/, "~");
+	const commandInputId = useId();
 
 	return (
-		<div
-			className="flex h-full flex-col"
-			onClick={() => inputRef.current?.focus()}
-			onKeyDown={() => {}}
-			role="presentation"
+		<label
+			htmlFor={commandInputId}
+			className="flex h-full cursor-text flex-col"
 		>
 			{/* Output area */}
 			<ScrollArea className="min-h-0 flex-1 overflow-hidden">
@@ -296,6 +302,7 @@ export function CommandRunner() {
 				</span>
 				<ChevronRight size={10} className="shrink-0 text-muted-foreground/35" />
 				<input
+					id={commandInputId}
 					ref={inputRef}
 					type="text"
 					value={input}
@@ -312,7 +319,7 @@ export function CommandRunner() {
 					)}
 				/>
 			</div>
-		</div>
+		</label>
 	);
 }
 

@@ -31,6 +31,7 @@ class HarnessConfig(BaseModel):
     skills: list[SkillRef] = []
     name: str
     harness_id: str | None = None
+    system_prompt: str | None = Field(default=None, max_length=4000)
     sandbox_enabled: bool = False
     sandbox_id: str | None = None
     sandbox_config: SandboxConfig | None = None

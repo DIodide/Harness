@@ -7,12 +7,18 @@ import {
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	redirect,
+	useNavigate,
+} from "@tanstack/react-router";
 import {
 	ArrowLeft,
 	ArrowRight,
 	Box,
 	Check,
+	ChevronDown,
 	Cpu,
 	Eye,
 	EyeOff,
@@ -31,7 +37,6 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useMemo, useState } from "react";
-import { HarnessMark } from "../components/harness-mark";
 import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../components/princeton-connect-row";
@@ -48,11 +53,14 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../components/ui/select";
+import { Textarea } from "../components/ui/textarea";
 import { env } from "../env";
 import type { McpServerEntry } from "../lib/mcp";
-import { presetIdsToServerEntries } from "../lib/mcp";
+import { PRESET_MCPS, presetIdsToServerEntries } from "../lib/mcp";
 import { MODELS } from "../lib/models";
 import type { SkillEntry } from "../lib/skills";
+import { RECOMMENDED_SKILLS } from "../lib/skills";
+import { SYSTEM_PROMPT_MAX_LENGTH } from "../lib/system-prompt";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
@@ -95,6 +103,7 @@ function OnboardingPage() {
 
 	const [name, setName] = useState(_prefill?.name ?? "");
 	const [model, setModel] = useState(_prefill?.model ?? "");
+	const [systemPrompt, setSystemPrompt] = useState("");
 	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>(
 		[],
 	);
@@ -219,22 +228,26 @@ function OnboardingPage() {
 		createHarness.mutate({
 			name: name.trim(),
 			model,
-			status: "started",
+			status: "started" as const,
 			mcpServers: allMcpServers,
 			skills: selectedSkills,
-			...(sandboxEnabled ? { sandboxEnabled: true, sandboxConfig } : {}),
-		} as any);
+			systemPrompt: systemPrompt.trim() || undefined,
+			sandboxEnabled: sandboxEnabled || undefined,
+			sandboxConfig: sandboxEnabled ? sandboxConfig : undefined,
+		});
 	};
 
 	const handleSaveDraft = () => {
 		createHarness.mutate({
 			name: name.trim() || "Untitled Harness",
 			model: model || "gpt-4o",
-			status: "draft",
+			status: "draft" as const,
 			mcpServers: allMcpServers,
 			skills: selectedSkills,
-			...(sandboxEnabled ? { sandboxEnabled: true, sandboxConfig } : {}),
-		} as any);
+			systemPrompt: systemPrompt.trim() || undefined,
+			sandboxEnabled: sandboxEnabled || undefined,
+			sandboxConfig: sandboxEnabled ? sandboxConfig : undefined,
+		});
 	};
 
 	const handleAddServer = (server: McpServerEntry) => {
@@ -254,11 +267,20 @@ function OnboardingPage() {
 	return (
 		<div className="flex min-h-screen flex-col bg-background">
 			<header className="flex items-center justify-between border-b border-border px-6 py-4">
-				<div className="flex items-center gap-2">
-					<HarnessMark size={22} className="text-foreground" />
-					<span className="text-lg font-semibold tracking-tight text-foreground">
-						Harness
-					</span>
+				<div className="flex items-center gap-4">
+					<Button variant="ghost" size="icon-xs" asChild>
+						<Link to="/harnesses">
+							<ArrowLeft size={14} />
+						</Link>
+					</Button>
+					<div>
+						<h1 className="text-lg font-medium tracking-tight text-foreground">
+							Create Harness
+						</h1>
+						<p className="text-xs text-muted-foreground">
+							Configure a new AI agent harness
+						</p>
+					</div>
 				</div>
 				<Button
 					variant="ghost"
@@ -324,6 +346,8 @@ function OnboardingPage() {
 									setName={setName}
 									model={model}
 									setModel={setModel}
+									systemPrompt={systemPrompt}
+									setSystemPrompt={setSystemPrompt}
 								/>
 							)}
 							{currentStep === "mcps" && (
@@ -413,14 +437,21 @@ function StepNameModel({
 	setName,
 	model,
 	setModel,
+	systemPrompt,
+	setSystemPrompt,
 }: {
 	name: string;
 	setName: (v: string) => void;
 	model: string;
 	setModel: (v: string) => void;
+	systemPrompt: string;
+	setSystemPrompt: (v: string) => void;
 }) {
 	return (
 		<div className="space-y-6">
+			<p className="text-xs text-muted-foreground">
+				Give your harness a name and select a model to get started.
+			</p>
 			<div>
 				<label
 					htmlFor="harness-name"
@@ -462,6 +493,86 @@ function StepNameModel({
 					Choose the LLM that powers this harness.
 				</p>
 			</div>
+			<div>
+				<label
+					htmlFor="system-prompt"
+					className="mb-2 block text-xs font-medium text-foreground"
+				>
+					System Prompt{" "}
+					<span className="font-normal text-muted-foreground">(Optional)</span>
+				</label>
+				<Textarea
+					id="system-prompt"
+					placeholder="e.g. You are a helpful coding assistant that always explains your reasoning."
+					value={systemPrompt}
+					maxLength={SYSTEM_PROMPT_MAX_LENGTH}
+					onChange={(e) => setSystemPrompt(e.target.value)}
+					className="h-24 resize-y"
+				/>
+				<p className="mt-1.5 text-xs text-muted-foreground">
+					Custom instructions prepended to every conversation (max{" "}
+					{SYSTEM_PROMPT_MAX_LENGTH.toLocaleString()} characters).
+				</p>
+			</div>
+
+			<details className="group border-t border-border pt-4">
+				<summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground">
+					<ChevronDown
+						size={12}
+						className="transition-transform group-open:rotate-180"
+					/>
+					What can I add in the next steps?
+				</summary>
+				<div className="mt-4 space-y-4 opacity-60">
+					<div>
+						<div className="mb-2 flex items-center gap-1.5">
+							<Layers size={12} className="text-muted-foreground" />
+							<p className="text-[11px] font-medium text-muted-foreground">
+								MCP Servers
+							</p>
+						</div>
+						<div className="pointer-events-none flex flex-wrap gap-1.5">
+							{PRESET_MCPS.map((mcp) => (
+								<span
+									key={mcp.id}
+									className="inline-flex items-center gap-1.5 border border-border/60 px-2.5 py-1 text-[11px] text-muted-foreground"
+								>
+									<Server size={10} className="shrink-0" />
+									{mcp.server.name}
+								</span>
+							))}
+							<span className="inline-flex items-center gap-1 border border-dashed border-border/60 px-2.5 py-1 text-[11px] text-muted-foreground">
+								<Plus size={10} />
+								Custom
+							</span>
+						</div>
+					</div>
+
+					<div>
+						<div className="mb-2 flex items-center gap-1.5">
+							<Zap size={12} className="text-muted-foreground" />
+							<p className="text-[11px] font-medium text-muted-foreground">
+								Skills
+							</p>
+						</div>
+						<div className="pointer-events-none flex flex-wrap gap-1.5">
+							{RECOMMENDED_SKILLS.map((rec) => (
+								<span
+									key={rec.id}
+									className="inline-flex items-center gap-1.5 border border-border/60 px-2.5 py-1 text-[11px] text-muted-foreground"
+								>
+									<Zap size={10} className="shrink-0" />
+									{rec.skill.skillId}
+								</span>
+							))}
+							<span className="inline-flex items-center gap-1 border border-dashed border-border/60 px-2.5 py-1 text-[11px] text-muted-foreground">
+								<Plus size={10} />
+								Browse more
+							</span>
+						</div>
+					</div>
+				</div>
+			</details>
 		</div>
 	);
 }
@@ -847,19 +958,27 @@ function StepSandbox({
 				file management, terminal commands, and git operations.
 			</p>
 
-			<label className="flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30">
+			<div className="flex items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30">
 				<Checkbox
+					id="sandbox-enabled"
 					checked={enabled}
 					onCheckedChange={(checked) => setEnabled(checked === true)}
 				/>
-				<div className="flex-1">
-					<p className="text-xs font-medium text-foreground">Enable sandbox</p>
-					<p className="text-[11px] text-muted-foreground">
-						A sandbox will be auto-provisioned when you start chatting
-					</p>
-				</div>
-				<Box size={14} className="shrink-0 text-muted-foreground" />
-			</label>
+				<label
+					htmlFor="sandbox-enabled"
+					className="flex min-w-0 flex-1 cursor-pointer items-center gap-3"
+				>
+					<div className="flex-1">
+						<p className="text-xs font-medium text-foreground">
+							Enable sandbox
+						</p>
+						<p className="text-[11px] text-muted-foreground">
+							A sandbox will be auto-provisioned when you start chatting
+						</p>
+					</div>
+					<Box size={14} className="shrink-0 text-muted-foreground" />
+				</label>
+			</div>
 
 			{enabled && (
 				<motion.div
@@ -870,9 +989,9 @@ function StepSandbox({
 				>
 					{/* Sandbox type */}
 					<div>
-						<label className="mb-1.5 block text-xs font-medium text-foreground">
+						<span className="mb-1.5 block text-xs font-medium text-foreground">
 							Sandbox Type
-						</label>
+						</span>
 						<div className="grid gap-2 sm:grid-cols-2">
 							<button
 								type="button"
@@ -913,9 +1032,9 @@ function StepSandbox({
 
 					{/* Resource tier */}
 					<div>
-						<label className="mb-1.5 block text-xs font-medium text-foreground">
+						<span className="mb-1.5 block text-xs font-medium text-foreground">
 							Resource Tier
-						</label>
+						</span>
 						<Select
 							value={config.resourceTier}
 							onValueChange={(v) =>
@@ -947,9 +1066,9 @@ function StepSandbox({
 
 					{/* Default language */}
 					<div>
-						<label className="mb-1.5 block text-xs font-medium text-foreground">
+						<span className="mb-1.5 block text-xs font-medium text-foreground">
 							Default Language
-						</label>
+						</span>
 						<Select
 							value={config.defaultLanguage}
 							onValueChange={(v) =>
