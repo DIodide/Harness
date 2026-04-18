@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     # Tiger Junction engine shared bearer token (MCP_ACCESS_TOKEN on the engine side)
     tiger_junction_mcp_token: str = ""
 
+    # Clerk secret key for Backend API calls (e.g. resolving Princeton netid from verified emails).
+    clerk_secret_key: str = ""
+
+    # Clerk JWT verification — pinned issuer prevents attacker-controlled JWKS.
+    clerk_issuer: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     def validate_startup(self) -> None:
@@ -41,6 +47,14 @@ class Settings(BaseSettings):
         if not self.convex_deploy_key:
             logger.warning(
                 "CONVEX_DEPLOY_KEY is not set — backend cannot save messages to Convex"
+            )
+        if not self.clerk_secret_key:
+            raise RuntimeError(
+                "CLERK_SECRET_KEY is required — Princeton netid resolution needs the Clerk Backend API key"
+            )
+        if not self.clerk_issuer:
+            raise RuntimeError(
+                "CLERK_ISSUER is required — JWT verification cannot pin the issuer without it"
             )
 
 

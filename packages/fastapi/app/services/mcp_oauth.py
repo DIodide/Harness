@@ -369,14 +369,15 @@ async def exchange_code(
     canonical_resource = _canonical_server_url(pending.mcp_server_url)
     reg = pending.registered_client
 
-    token_data = {
+    token_data: dict[str, str] = {
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": pending.redirect_uri,
         "client_id": reg.client_id,
-        "code_verifier": pending.code_verifier,
         "resource": canonical_resource,
     }
+    if pending.code_verifier:
+        token_data["code_verifier"] = pending.code_verifier
 
     # Build headers — use client_secret_basic if we have a secret
     headers: dict[str, str] = {
@@ -799,7 +800,9 @@ def start_github_oauth_flow(
         raise OAuthError("GitHub OAuth client ID not configured")
 
     state = secrets.token_urlsafe(32)
-    code_verifier, code_challenge = _generate_pkce_pair()
+
+    # GitHub OAuth Apps don't support PKCE — no code_challenge/code_verifier.
+    # Security relies on client_secret + state parameter for CSRF protection.
 
     params = {
         "client_id": client_id,
@@ -832,7 +835,7 @@ def start_github_oauth_flow(
     _pending_oauth[state] = PendingOAuth(
         user_id=user_id,
         mcp_server_url=GITHUB_STANDALONE_URL,
-        code_verifier=code_verifier,
+        code_verifier="",
         scopes="repo read:user",
         auth_server_meta=meta,
         registered_client=registered,

@@ -19,6 +19,7 @@ export default defineSchema({
 			}),
 		),
 		skills: v.array(v.object({ name: v.string(), description: v.string() })),
+		systemPrompt: v.optional(v.string()),
 		suggestedPrompts: v.optional(v.array(v.string())),
 		userId: v.string(),
 		lastUsedAt: v.optional(v.number()),
@@ -185,6 +186,10 @@ export default defineSchema({
 		.searchIndex("search_skills", {
 			searchField: "skillId",
 			filterFields: [],
+		})
+		.searchIndex("search_skills_description", {
+			searchField: "description",
+			filterFields: [],
 		}),
 
 	userSettings: defineTable({
@@ -203,4 +208,47 @@ export default defineSchema({
 			v.union(v.literal("session"), v.literal("harness")),
 		),
 	}).index("by_user", ["userId"]),
+
+	usageBudgets: defineTable({
+		userId: v.string(),
+		periodType: v.union(v.literal("daily"), v.literal("weekly")),
+		period: v.string(), // "2026-04-08" (daily) or "2026-W15" (weekly)
+		totalCostUsed: v.number(),
+		costLimit: v.number(),
+		totalTokensUsed: v.number(),
+		perModelUsage: v.array(
+			v.object({
+				model: v.string(),
+				tokensUsed: v.number(),
+				costUsed: v.number(),
+			}),
+		),
+		perHarnessUsage: v.array(
+			v.object({
+				harnessId: v.string(),
+				harnessName: v.string(),
+				tokensUsed: v.number(),
+				costUsed: v.number(),
+			}),
+		),
+		updatedAt: v.number(),
+	}).index("by_user_period", ["userId", "periodType", "period"]),
+
+	usageLedger: defineTable({
+		userId: v.string(),
+		conversationId: v.id("conversations"),
+		harnessId: v.optional(v.string()),
+		harnessName: v.optional(v.string()),
+		model: v.string(),
+		promptTokens: v.number(),
+		completionTokens: v.number(),
+		totalTokens: v.number(),
+		cost: v.number(),
+		day: v.string(),  // "2026-04-08"
+		week: v.string(), // "2026-W15"
+		recordedAt: v.number(),
+	})
+		.index("by_user_day", ["userId", "day"])
+		.index("by_user_week", ["userId", "week"])
+		.index("by_conversation", ["conversationId"]),
 });

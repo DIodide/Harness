@@ -5,6 +5,7 @@ import {
 	ArrowLeft,
 	ArrowRight,
 	Download,
+	Eye,
 	Loader2,
 	Search,
 	X,
@@ -13,12 +14,50 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SkillEntry, SkillRow } from "../lib/skills";
 import { searchSkillsSh } from "../lib/skills-api";
+import { SkillViewerDialog } from "./skill-viewer-dialog";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 
 const PAGE_SIZE = 20;
+
+/**
+ * Score a skill for search ranking.
+ * Combines text relevance (how well query matches skillId/description)
+ * with popularity (log-scaled installs). This is the standard approach
+ * used by package registries like npm, PyPI, etc.
+ */
+function scoreSkill(skill: SkillRow, query: string): number {
+	const q = query.toLowerCase();
+	const id = skill.skillId.toLowerCase();
+	const desc = skill.description.toLowerCase();
+
+	// Text relevance score (0-100)
+	let textScore = 0;
+	if (id === q) {
+		textScore = 100; // Exact match on skillId
+	} else if (id.startsWith(q)) {
+		textScore = 80; // Prefix match
+	} else if (id.includes(q)) {
+		textScore = 60; // Substring match on skillId
+	} else if (desc.includes(q)) {
+		textScore = 40; // Match in description
+	} else {
+		// Partial/fuzzy: check if all query words appear somewhere
+		const words = q.split(/\s+/);
+		const combined = `${id} ${desc}`;
+		const matchCount = words.filter((w) => combined.includes(w)).length;
+		textScore = 20 * (matchCount / Math.max(words.length, 1));
+	}
+
+	// Popularity score: log-scaled installs (0 ~50 range for typical values)
+	// log10(1) = 0, log10(1000) = 3, log10(1M) = 6
+	const popularityScore = Math.log10(skill.installs + 1) * 8;
+
+	// Weighted combination: relevance is primary, popularity is tiebreaker
+	return textScore * 0.7 + popularityScore * 0.3;
+}
 
 export function SkillsBrowser({
 	currentSkills,
@@ -34,6 +73,8 @@ export function SkillsBrowser({
 	const [cursorStack, setCursorStack] = useState<(string | null)[]>([null]);
 	const [browsePageIndex, setBrowsePageIndex] = useState(0);
 	const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+	const [viewingSkill, setViewingSkill] = useState<SkillRow | null>(null);
 
 	const discoverSkillsFn = useConvexAction(api.skills.discoverSkillsFromSearch);
 
@@ -97,7 +138,7 @@ export function SkillsBrowser({
 		}).catch(() => {});
 	}, [skillsShQuery.data, discoverSkillsFn]);
 
-	// Merge search results: prefer Convex (has descriptions) over skills.sh
+	// Merge and rank search results by relevance + popularity
 	const searchResults = (() => {
 		if (!debouncedSearch) return null;
 		const convexRows: SkillRow[] = (convexSearchQuery.data ?? []).map((d) => ({
@@ -109,15 +150,21 @@ export function SkillsBrowser({
 		}));
 		const shRows = skillsShQuery.data?.rows ?? [];
 
-		// Merge: convex results first, then skills.sh results not already in convex
-		const seen = new Set(convexRows.map((r) => r.fullId));
-		const merged = [...convexRows];
-		for (const row of shRows) {
+		// Merge and deduplicate, preferring Convex rows (have descriptions)
+		const seen = new Set<string>();
+		const merged: SkillRow[] = [];
+		for (const row of [...convexRows, ...shRows]) {
 			if (!seen.has(row.fullId)) {
 				seen.add(row.fullId);
 				merged.push(row);
 			}
 		}
+
+		// Rank by combined text relevance + popularity score
+		merged.sort(
+			(a, b) => scoreSkill(b, debouncedSearch) - scoreSkill(a, debouncedSearch),
+		);
+
 		return merged;
 	})();
 
@@ -239,17 +286,14 @@ export function SkillsBrowser({
 				<div className="grid gap-2 sm:grid-cols-2">
 					{rows.map((skill) => {
 						const added = isAdded(skill.fullId);
+						const skillPayload = {
+							name: skill.fullId,
+							description: skill.description,
+						};
 						return (
-							<button
+							<div
 								key={skill.fullId}
-								type="button"
-								onClick={() =>
-									onToggle({
-										name: skill.fullId,
-										description: skill.description,
-									})
-								}
-								className={`flex items-start gap-3 border p-3 text-left transition-colors ${
+								className={`flex items-start gap-3 border p-3 transition-colors ${
 									added
 										? "border-foreground bg-foreground/3"
 										: "border-border hover:border-foreground/20"
@@ -258,9 +302,14 @@ export function SkillsBrowser({
 								<Checkbox
 									checked={added}
 									className="mt-0.5 shrink-0"
-									tabIndex={-1}
+									onCheckedChange={() => onToggle(skillPayload)}
 								/>
-								<div className="min-w-0 flex-1">
+								<button
+									type="button"
+									aria-label={`Toggle skill ${skill.skillId}`}
+									onClick={() => onToggle(skillPayload)}
+									className="min-w-0 flex-1 border-0 bg-transparent p-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+								>
 									<div className="flex items-center gap-2">
 										<p className="text-xs font-medium text-foreground">
 											{skill.skillId}
@@ -275,8 +324,16 @@ export function SkillsBrowser({
 									<p className="text-[10px] leading-tight text-muted-foreground/50">
 										{skill.source}
 									</p>
-								</div>
-							</button>
+								</button>
+								<button
+									type="button"
+									aria-label={`View skill ${skill.skillId}`}
+									onClick={() => setViewingSkill(skill)}
+									className="mt-0.5 shrink-0 border-0 bg-transparent p-0 text-muted-foreground/40 transition-colors hover:text-foreground"
+								>
+									<Eye size={14} />
+								</button>
+							</div>
 						);
 					})}
 				</div>
@@ -313,6 +370,13 @@ export function SkillsBrowser({
 					</Button>
 				</div>
 			)}
+			<SkillViewerDialog
+				fullId={viewingSkill?.fullId ?? null}
+				skillId={viewingSkill?.skillId}
+				source={viewingSkill?.source}
+				installs={viewingSkill?.installs}
+				onClose={() => setViewingSkill(null)}
+			/>
 		</div>
 	);
 }

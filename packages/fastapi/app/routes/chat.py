@@ -10,9 +10,10 @@ from app.config import settings
 from app.dependencies import get_current_user, get_http_client
 from app.models import ChatRequest
 from app.services.convex import query_convex, save_assistant_message, patch_message_usage, create_sandbox_record
-from app.services.mcp_client import UserContext, call_tool, extract_princeton_netid, list_tools
+from app.services.mcp_client import UserContext, call_tool, resolve_princeton_netid, list_tools
 from app.services.mcp_oauth import get_valid_token, GITHUB_STANDALONE_URL
 from app.services.openrouter import stream_chat
+from app.services.usage import check_user_budget, record_usage
 from app.services.sandbox_tools import (
     SANDBOX_TOOL_DEFINITIONS,
     SANDBOX_TOOL_NAMES,
@@ -331,12 +332,37 @@ async def chat_stream(
     )
 
     user_id = user.get("sub")
+    netid = await resolve_princeton_netid(http_client, user)
+    if not netid:
+        logger.warning(
+            "No Princeton netid for user '%s' (primary email: '%s')",
+            user_id,
+            user.get("email", "<MISSING>"),
+        )
     user_ctx = UserContext(
         user_id=user_id,
-        princeton_netid=extract_princeton_netid(user),
+        princeton_netid=netid,
     )
 
     async def event_generator():
+        # Check cost budget before processing
+        budget = await check_user_budget(http_client, user_id)
+        if not budget.allowed:
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "message": "Usage limit reached",
+                    "code": "BUDGET_EXCEEDED",
+                    "usage": {
+                        "dailyPct": budget.daily_pct,
+                        "weeklyPct": budget.weekly_pct,
+                        "dailyReset": budget.daily_reset,
+                        "weeklyReset": budget.weekly_reset,
+                    },
+                }),
+            }
+            return
+
         # Fetch available MCP tools for this harness
         tools: list[dict] | None = None
         if body.harness.mcp_servers:
@@ -520,6 +546,10 @@ async def chat_stream(
             skills_block = _build_skills_system_block(skill_manifest)
             messages.insert(0, {"role": "system", "content": skills_block})
 
+        # Prepend the user's custom system prompt (before skills so it appears first)
+        if body.harness.system_prompt:
+            messages.insert(0, {"role": "system", "content": body.harness.system_prompt})
+
         # Accumulate across all iterations so reasoning/tool history isn't lost
         all_reasoning = ""
         all_tool_calls_history: list[dict] = []  # [{tool, arguments, call_id, result}]
@@ -643,6 +673,16 @@ async def chat_stream(
                             usage_for_update,
                             collected_model,
                         )
+                        # Record usage for budget tracking even on disconnect
+                        await record_usage(
+                            http_client,
+                            user_id=user_id,
+                            conversation_id=body.conversation_id,
+                            harness_id=body.harness.harness_id,
+                            harness_name=body.harness.name,
+                            model=collected_model or body.harness.model,
+                            usage_data=collected_usage,
+                        )
                     return
 
             except httpx.HTTPStatusError as e:
@@ -719,6 +759,18 @@ async def chat_stream(
                     usage=usage_for_convex,
                     model=collected_model,
                 )
+
+                # Record usage for budget tracking
+                if collected_usage:
+                    await record_usage(
+                        http_client,
+                        user_id=user_id,
+                        conversation_id=body.conversation_id,
+                        harness_id=body.harness.harness_id,
+                        harness_name=body.harness.name,
+                        model=collected_model or body.harness.model,
+                        usage_data=collected_usage,
+                    )
 
                 done_data: dict = {"content": collected_content}
                 if usage_for_convex:

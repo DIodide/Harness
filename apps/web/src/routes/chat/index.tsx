@@ -18,6 +18,7 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Cpu,
+	Eye,
 	Loader2,
 	LogOut,
 	MessageSquare,
@@ -26,6 +27,7 @@ import {
 	PanelLeftOpen,
 	Paperclip,
 	Plus,
+	RotateCcw,
 	Search, // Icon for search
 	Settings,
 	SlidersHorizontal,
@@ -65,6 +67,7 @@ import {
 import { MessageAttachments } from "../../components/message-attachments";
 import { SandboxPanel } from "../../components/sandbox/sandbox-panel";
 import { SandboxResult } from "../../components/sandbox-result";
+import { SkillViewerDialog } from "../../components/skill-viewer-dialog";
 import {
 	Avatar,
 	AvatarFallback,
@@ -103,6 +106,8 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "../../components/ui/tooltip";
+import { UsageDialog } from "../../components/usage-dialog";
+import { formatResetTime, UsageBadge } from "../../components/usage-display";
 import { env } from "../../env";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
 import type { McpAuthType } from "../../lib/mcp";
@@ -120,6 +125,7 @@ import {
 } from "../../lib/sandbox-panel-context";
 import type { SkillEntry } from "../../lib/skills";
 import {
+	type BudgetExceededInfo,
 	type ConvoStreamState,
 	type StreamPart,
 	type ToolCallEvent,
@@ -186,6 +192,10 @@ function ChatPage() {
 	const [editingMessageId, setEditingMessageId] =
 		useState<Id<"messages"> | null>(null);
 	const [editingContent, setEditingContent] = useState("");
+
+	// Budget exceeded state
+	const [budgetExceeded, setBudgetExceeded] =
+		useState<BudgetExceededInfo | null>(null);
 
 	// Per-conversation streaming state
 	const [streamStates, setStreamStates] = useState<
@@ -394,6 +404,13 @@ function ChatPage() {
 				},
 			}));
 		},
+		onBudgetExceeded: (_convoId, info) => {
+			setBudgetExceeded(info);
+			const which = info.dailyPct >= 100 ? "daily" : "weekly";
+			toast.error(
+				`${which.charAt(0).toUpperCase() + which.slice(1)} usage limit reached`,
+			);
+		},
 		onError: (convoId, error) => {
 			toast.error(error);
 			setStreamStates((prev) => {
@@ -451,7 +468,8 @@ function ChatPage() {
 				const partialContent = state.content ?? "";
 				// model is only sent in the "done" event which doesn't fire on abort,
 				// so fall back to the session model, then the harness model
-				const model = state.model ?? sessionModel ?? activeHarness?.model ?? null;
+				const model =
+					state.model ?? sessionModel ?? activeHarness?.model ?? null;
 
 				saveInterruptedMsg.mutate({
 					conversationId: convoId as Id<"conversations">,
@@ -709,17 +727,16 @@ function ChatPage() {
 					skills: activeHarness.skills ?? [],
 					name: activeHarness.name,
 					harness_id: activeHarness._id,
+					system_prompt: activeHarness.systemPrompt ?? undefined,
 
-					sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
-					sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
-					sandbox_config: (activeHarness as any).sandboxConfig
+					sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+					sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
+					sandbox_config: activeHarness.sandboxConfig
 						? {
-								persistent: (activeHarness as any).sandboxConfig.persistent,
-								auto_start: (activeHarness as any).sandboxConfig.autoStart,
-								default_language: (activeHarness as any).sandboxConfig
-									.defaultLanguage,
-								resource_tier: (activeHarness as any).sandboxConfig
-									.resourceTier,
+								persistent: activeHarness.sandboxConfig.persistent,
+								auto_start: activeHarness.sandboxConfig.autoStart,
+								default_language: activeHarness.sandboxConfig.defaultLanguage,
+								resource_tier: activeHarness.sandboxConfig.resourceTier,
 							}
 						: undefined,
 				},
@@ -797,15 +814,15 @@ function ChatPage() {
 				skills: activeHarness.skills ?? [],
 				name: activeHarness.name,
 				harness_id: activeHarness._id,
-				sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
-				sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
-				sandbox_config: (activeHarness as any).sandboxConfig
+				system_prompt: activeHarness.systemPrompt ?? undefined,
+				sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+				sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
+				sandbox_config: activeHarness.sandboxConfig
 					? {
-							persistent: (activeHarness as any).sandboxConfig.persistent,
-							auto_start: (activeHarness as any).sandboxConfig.autoStart,
-							default_language: (activeHarness as any).sandboxConfig
-								.defaultLanguage,
-							resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
+							persistent: activeHarness.sandboxConfig.persistent,
+							auto_start: activeHarness.sandboxConfig.autoStart,
+							default_language: activeHarness.sandboxConfig.defaultLanguage,
+							resource_tier: activeHarness.sandboxConfig.resourceTier,
 						}
 					: undefined,
 			};
@@ -895,6 +912,7 @@ function ChatPage() {
 						})),
 						skills: activeHarness.skills ?? [],
 						name: activeHarness.name,
+						system_prompt: activeHarness.systemPrompt ?? undefined,
 					},
 					conversation_id: newConvoId,
 				});
@@ -929,8 +947,8 @@ function ChatPage() {
 		? chatStream.streamingConvoIds.has(activeConvoId)
 		: false;
 
-	const sandboxEnabled = (activeHarness as any)?.sandboxEnabled ?? false;
-	const daytonaSandboxId = (activeHarness as any)?.daytonaSandboxId ?? null;
+	const sandboxEnabled = activeHarness?.sandboxEnabled ?? false;
+	const daytonaSandboxId = activeHarness?.daytonaSandboxId ?? null;
 
 	return (
 		<SandboxPanelProvider sandboxId={sandboxEnabled ? daytonaSandboxId : null}>
@@ -979,6 +997,31 @@ function ChatPage() {
 						}
 						onDismissAll={() => setMcpFailures([])}
 					/>
+
+					{budgetExceeded && (
+						<div className="mx-4 mt-2 flex items-center justify-between rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+							<div>
+								<p className="font-medium">
+									{budgetExceeded.dailyPct >= 100 ? "Daily" : "Weekly"} usage
+									limit reached
+								</p>
+								<p className="text-xs text-red-300/70 mt-0.5">
+									Resets in{" "}
+									{budgetExceeded.dailyPct >= 100
+										? formatResetTime(budgetExceeded.dailyReset)
+										: formatResetTime(budgetExceeded.weeklyReset)}
+								</p>
+							</div>
+							<Button
+								variant="ghost"
+								size="sm"
+								className="text-red-300 hover:text-red-200"
+								onClick={() => setBudgetExceeded(null)}
+							>
+								<X size={14} />
+							</Button>
+						</div>
+					)}
 
 					{activeConvoId ? (
 						<ChatMessages
@@ -1035,7 +1078,9 @@ function ChatPage() {
 						conversationId={activeConvoId}
 						activeHarness={activeHarness}
 						sessionModel={
-						userSettings?.modelSelectorMode === "harness" ? null : sessionModel
+							userSettings?.modelSelectorMode === "harness"
+								? null
+								: sessionModel
 						}
 						modelSelectorMode={
 							(userSettings?.modelSelectorMode as "session" | "harness") ??
@@ -1064,6 +1109,7 @@ function ChatPage() {
 						onSendNow={handleSendNow}
 						pendingPrompt={pendingPrompt}
 						onPendingPromptConsumed={() => setPendingPrompt(null)}
+						budgetExceeded={!!budgetExceeded}
 					/>
 				</div>
 
@@ -1191,16 +1237,17 @@ function ChatSidebar({
 	const grouped = groupByDate(conversations);
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [usageOpen, setUsageOpen] = useState(false);
 
 	return (
 		<div className="flex h-full w-[280px] flex-col bg-background">
 			<div className="flex items-center justify-between px-3 py-3">
-				<div className="flex items-center gap-2">
+				<Link to="/" className="flex items-center gap-2">
 					<HarnessMark size={18} className="text-foreground" />
 					<span className="text-sm font-semibold tracking-tight text-foreground">
 						Harness
 					</span>
-				</div>
+				</Link>
 				<div className="flex items-center gap-1">
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -1462,6 +1509,10 @@ function ChatSidebar({
 			</ScrollArea>
 
 			<Separator />
+			<div className="px-2 py-1">
+				<UsageBadge onClick={() => setUsageOpen(true)} />
+			</div>
+			<Separator />
 			<div className="space-y-0.5 p-2">
 				<Button
 					variant="ghost"
@@ -1486,6 +1537,7 @@ function ChatSidebar({
 			</div>
 
 			<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+			<UsageDialog open={usageOpen} onOpenChange={setUsageOpen} />
 		</div>
 	);
 }
@@ -1592,9 +1644,7 @@ function SettingsDialog({
 								</p>
 							</div>
 							<Select
-								value={
-									(userSettings?.modelSelectorMode as string) ?? "session"
-								}
+								value={(userSettings?.modelSelectorMode as string) ?? "session"}
 								onValueChange={(value) => {
 									updateSettings.mutate({
 										modelSelectorMode: value as "session" | "harness",
@@ -1744,42 +1794,83 @@ function McpFailureBanner({
 }
 
 function SkillsStatus({ skills }: { skills: SkillEntry[] }) {
+	const [open, setOpen] = useState(false);
+	const [viewingSkillId, setViewingSkillId] = useState<string | null>(null);
+	const ref = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		if (!open) return;
+		const handler = (e: MouseEvent) => {
+			if (viewingSkillId) return;
+			if (ref.current && !ref.current.contains(e.target as Node)) {
+				setOpen(false);
+			}
+		};
+		document.addEventListener("mousedown", handler);
+		return () => document.removeEventListener("mousedown", handler);
+	}, [open, viewingSkillId]);
+
 	if (skills.length === 0) return null;
 
 	return (
-		<DropdownMenu>
-			<DropdownMenuTrigger asChild>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<button
-							type="button"
-							className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-						>
-							<Zap size={10} />
-							{skills.length} Skill{skills.length !== 1 && "s"}
-						</button>
-					</TooltipTrigger>
-					<TooltipContent>Active skills</TooltipContent>
-				</Tooltip>
-			</DropdownMenuTrigger>
+		<div ref={ref} className="relative">
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<button
+						type="button"
+						onClick={() => setOpen((prev) => !prev)}
+						className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+					>
+						<Zap size={10} />
+						{skills.length} Skill{skills.length !== 1 && "s"}
+					</button>
+				</TooltipTrigger>
+				<TooltipContent>Active skills</TooltipContent>
+			</Tooltip>
 
-			<DropdownMenuContent align="start" className="w-72">
-				<div className="border-b border-border px-3 py-2">
-					<span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-						Skills
-					</span>
-				</div>
-				<div className="max-h-48 overflow-y-auto py-1">
-					{skills.map((skill) => (
-						<DropdownMenuItem key={skill.name} className="px-3 py-1.5">
-							<span className="truncate text-xs font-medium">
-								{skill.name.split("/").pop() ?? skill.name}
+			<AnimatePresence>
+				{open && (
+					<motion.div
+						initial={{ opacity: 0, y: -4, scale: 0.97 }}
+						animate={{ opacity: 1, y: 0, scale: 1 }}
+						exit={{ opacity: 0, y: -4, scale: 0.97 }}
+						transition={{ duration: 0.15 }}
+						className="absolute left-0 top-full z-50 mt-1 w-64 border border-border bg-background shadow-lg"
+					>
+						<div className="border-b border-border px-3 py-2">
+							<span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+								Skills
 							</span>
-						</DropdownMenuItem>
-					))}
-				</div>
-			</DropdownMenuContent>
-		</DropdownMenu>
+						</div>
+						<div className="max-h-48 overflow-y-auto py-1">
+							{skills.map((skill) => (
+								<div
+									key={skill.name}
+									className="flex items-center gap-2 px-3 py-1.5"
+								>
+									<Zap size={10} className="shrink-0 text-muted-foreground" />
+									<span className="min-w-0 flex-1 truncate text-xs font-medium">
+										{skill.name.split("/").pop() ?? skill.name}
+									</span>
+									<button
+										type="button"
+										onClick={() => setViewingSkillId(skill.name)}
+										className="shrink-0 text-muted-foreground/40 transition-colors hover:text-foreground"
+									>
+										<Eye size={12} />
+									</button>
+								</div>
+							))}
+						</div>
+					</motion.div>
+				)}
+			</AnimatePresence>
+
+			<SkillViewerDialog
+				fullId={viewingSkillId}
+				onClose={() => setViewingSkillId(null)}
+			/>
+		</div>
 	);
 }
 
@@ -1804,6 +1895,7 @@ function ChatHeader({
 			authToken?: string;
 		}>;
 		skills: SkillEntry[];
+		sandboxEnabled?: boolean;
 	};
 	harnesses: Array<{
 		_id: Id<"harnesses">;
@@ -1882,7 +1974,7 @@ function ChatHeader({
 					<SkillsStatus skills={harness.skills} />
 				)}
 
-				{harness && (harness as any).sandboxEnabled && <SandboxBadge />}
+				{harness?.sandboxEnabled && <SandboxBadge />}
 			</div>
 		</header>
 	);
@@ -2995,6 +3087,7 @@ function ChatInput({
 	onSendNow,
 	pendingPrompt,
 	onPendingPromptConsumed,
+	budgetExceeded,
 }: {
 	conversationId: Id<"conversations"> | null;
 	activeHarness?: {
@@ -3008,6 +3101,15 @@ function ChatInput({
 			authToken?: string;
 		}>;
 		skills: SkillEntry[];
+		systemPrompt?: string;
+		sandboxEnabled?: boolean;
+		daytonaSandboxId?: string;
+		sandboxConfig?: {
+			persistent: boolean;
+			autoStart: boolean;
+			defaultLanguage: string;
+			resourceTier: string;
+		};
 	};
 	onConvoCreated: (id: Id<"conversations">) => void;
 	isStreaming: boolean;
@@ -3026,6 +3128,7 @@ function ChatInput({
 			}>;
 			skills: SkillEntry[];
 			name: string;
+			system_prompt?: string;
 		};
 		conversation_id: string;
 	}) => Promise<void>;
@@ -3049,6 +3152,7 @@ function ChatInput({
 	modelSelectorMode?: "session" | "harness";
 	onSessionModelChange: (model: string | null) => void;
 	onPendingPromptConsumed?: () => void;
+	budgetExceeded?: boolean;
 }) {
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -3057,7 +3161,9 @@ function ChatInput({
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
-		MODELS.find((m) => m.value === effectiveModel)?.label ?? effectiveModel ?? "Model";
+		MODELS.find((m) => m.value === effectiveModel)?.label ??
+		effectiveModel ??
+		"Model";
 
 	const supportsMedia = modelSupportsMedia(effectiveModel);
 	const supportsAudio = modelSupportsAudio(effectiveModel);
@@ -3164,7 +3270,7 @@ function ChatInput({
 
 	const handleSend = async () => {
 		const content = text.trim();
-		if (!content || !activeHarness) return;
+		if (!content || !activeHarness || budgetExceeded) return;
 
 		setText("");
 		setHistoryIndex(-1);
@@ -3189,15 +3295,15 @@ function ChatInput({
 			skills: activeHarness.skills ?? [],
 			name: activeHarness.name,
 			harness_id: activeHarness._id,
-			sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
-			sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
-			sandbox_config: (activeHarness as any).sandboxConfig
+			system_prompt: activeHarness.systemPrompt ?? undefined,
+			sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+			sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
+			sandbox_config: activeHarness.sandboxConfig
 				? {
-						persistent: (activeHarness as any).sandboxConfig.persistent,
-						auto_start: (activeHarness as any).sandboxConfig.autoStart,
-						default_language: (activeHarness as any).sandboxConfig
-							.defaultLanguage,
-						resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
+						persistent: activeHarness.sandboxConfig.persistent,
+						auto_start: activeHarness.sandboxConfig.autoStart,
+						default_language: activeHarness.sandboxConfig.defaultLanguage,
+						resource_tier: activeHarness.sandboxConfig.resourceTier,
 					}
 				: undefined,
 		};
@@ -3526,7 +3632,9 @@ function ChatInput({
 											{sessionModel && (
 												<span className="size-1.5 shrink-0 rounded-full bg-primary" />
 											)}
-											<span className="max-w-[90px] truncate">{currentModelLabel}</span>
+											<span className="max-w-[90px] truncate">
+												{currentModelLabel}
+											</span>
 											<ChevronDown size={10} />
 										</button>
 									</DropdownMenuTrigger>
@@ -3539,14 +3647,17 @@ function ChatInput({
 											: "Switch model for this session"}
 								</TooltipContent>
 							</Tooltip>
-							<DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+							<DropdownMenuContent
+								align="end"
+								className="max-h-72 overflow-y-auto"
+							>
 								{modelSelectorMode === "session" && sessionModel && (
 									<>
 										<DropdownMenuItem
 											onClick={() => onSessionModelChange(null)}
-											className="flex items-center gap-2 text-muted-foreground italic"
+											className="flex items-center gap-2"
 										>
-											<span className="w-3 shrink-0" />
+											<RotateCcw size={12} className="shrink-0" />
 											Use harness default
 										</DropdownMenuItem>
 										<DropdownMenuSeparator />
@@ -3582,7 +3693,8 @@ function ChatInput({
 								}}
 								disabled={
 									!showStopButton &&
-									(!text.trim() ||
+									(budgetExceeded ||
+										!text.trim() ||
 										hasUploading ||
 										sendMessage.isPending ||
 										createConvo.isPending)

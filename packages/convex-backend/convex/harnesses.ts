@@ -1,6 +1,17 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 
+/** Match apps/web `SYSTEM_PROMPT_MAX_LENGTH` and FastAPI `HarnessConfig.system_prompt`. */
+const SYSTEM_PROMPT_MAX_CHARS = 4000;
+
+function assertSystemPromptLength(systemPrompt: string | undefined) {
+	if (systemPrompt !== undefined && systemPrompt.length > SYSTEM_PROMPT_MAX_CHARS) {
+		throw new Error(
+			`System prompt must be at most ${SYSTEM_PROMPT_MAX_CHARS} characters`,
+		);
+	}
+}
+
 export const list = query({
 	handler: async (ctx) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -41,6 +52,7 @@ export const create = mutation({
 			}),
 		),
 		skills: v.array(v.object({ name: v.string(), description: v.string() })),
+		systemPrompt: v.optional(v.string()),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxConfig: v.optional(
 			v.object({
@@ -61,6 +73,7 @@ export const create = mutation({
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
+		assertSystemPromptLength(args.systemPrompt);
 		return await ctx.db.insert("harnesses", {
 			...args,
 			userId: identity.subject,
@@ -92,6 +105,7 @@ export const update = mutation({
 			),
 		),
 		skills: v.optional(v.array(v.object({ name: v.string(), description: v.string() }))),
+		systemPrompt: v.optional(v.string()),
 		suggestedPrompts: v.optional(v.array(v.string())),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxId: v.optional(v.id("sandboxes")),
@@ -120,6 +134,7 @@ export const update = mutation({
 			throw new Error("Not found");
 		}
 		const { id, ...updates } = args;
+		assertSystemPromptLength(updates.systemPrompt);
 		const filtered = Object.fromEntries(
 			Object.entries(updates).filter(([, v]) => v !== undefined),
 		);
@@ -142,6 +157,7 @@ export const duplicate = mutation({
 			status: harness.status,
 			mcpServers: harness.mcpServers,
 			skills: harness.skills,
+			systemPrompt: harness.systemPrompt,
 			userId: identity.subject,
 			lastUsedAt: Date.now(),
 		});
