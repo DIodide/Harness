@@ -1,19 +1,34 @@
 import { v } from "convex/values";
-import { Id } from "./_generated/dataModel"
+import type { Id } from "./_generated/dataModel"
 import { mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 
 export const list = query({
-	handler: async (ctx) => {
+	args: { workspaceId: v.optional(v.id("workspaces")) },
+	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return [];
+		if (args.workspaceId) {
+			const workspace = await ctx.db.get(args.workspaceId);
+			if (!workspace || workspace.userId !== identity.subject) return [];
+			return await ctx.db
+				.query("conversations")
+				.withIndex("by_workspace_last_message", (q) =>
+					q.eq("workspaceId", args.workspaceId),
+				)
+				.order("desc")
+				.take(50);
+		}
 		return await ctx.db
 			.query("conversations")
 			.withIndex("by_user_last_message", (q) =>
 				q.eq("userId", identity.subject),
 			)
 			.order("desc")
-			.take(50);
+			.take(100)
+			.then((conversations) =>
+				conversations.filter((conversation) => !conversation.workspaceId).slice(0, 50),
+			);
 	},
 });
 
@@ -32,6 +47,7 @@ export const create = mutation({
 	args: {
 		title: v.string(),
 		harnessId: v.id("harnesses"),
+		workspaceId: v.optional(v.id("workspaces")),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -41,10 +57,20 @@ export const create = mutation({
 		if (!harness || harness.userId !== identity.subject) {
 			throw new Error("Harness not found");
 		}
+		if (args.workspaceId) {
+			const workspace = await ctx.db.get(args.workspaceId);
+			if (!workspace || workspace.userId !== identity.subject) {
+				throw new Error("Workspace not found");
+			}
+			if (workspace.harnessId !== args.harnessId) {
+				throw new Error("Workspace harness mismatch");
+			}
+		}
 
 		return await ctx.db.insert("conversations", {
 			title: args.title,
 			lastHarnessId: args.harnessId,
+			workspaceId: args.workspaceId,
 			userId: identity.subject,
 			lastMessageAt: Date.now(),
 		});
@@ -90,6 +116,7 @@ export const fork = mutation({
 		const newConvoId = await ctx.db.insert("conversations", {
 			title: `Fork of ${convo.title}`,
 			lastHarnessId: convo.lastHarnessId,
+			workspaceId: convo.workspaceId,
 			userId: identity.subject,
 			lastMessageAt: Date.now(),
 			forkedFromConversationId: args.conversationId,
@@ -101,6 +128,7 @@ export const fork = mutation({
 			await ctx.db.insert("messages", {
 				...rest,
 				conversationId: newConvoId,
+				workspaceId: convo.workspaceId,
 			});
 		}
 
@@ -179,6 +207,7 @@ export const editForkAndSend = mutation({
 		const newConvoId = await ctx.db.insert("conversations", {
 			title: convo.title,
 			lastHarnessId: args.harnessId ?? convo.lastHarnessId,
+			workspaceId: convo.workspaceId,
 			userId: identity.subject,
 			lastMessageAt: now,
 			editParentConversationId: parentId,
@@ -190,12 +219,14 @@ export const editForkAndSend = mutation({
 			await ctx.db.insert("messages", {
 				...rest,
 				conversationId: newConvoId,
+				workspaceId: convo.workspaceId,
 			});
 		}
 
 		// Insert the edited user message in the same transaction
 		await ctx.db.insert("messages", {
 			conversationId: newConvoId,
+			workspaceId: convo.workspaceId,
 			userId: identity.subject,
 			role: "user",
 			content: args.newContent,
@@ -228,32 +259,62 @@ export const remove = mutation({
 });
 
 export const searchTitles = query({
-	args: { query: v.string(), paginationOpts: paginationOptsValidator },
+	args: {
+		query: v.string(),
+		workspaceId: v.optional(v.id("workspaces")),
+		paginationOpts: paginationOptsValidator,
+	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity)
 			return { page: [], isDone: true, continueCursor: "" };
+		if (args.workspaceId) {
+			const workspace = await ctx.db.get(args.workspaceId);
+			if (!workspace || workspace.userId !== identity.subject) {
+				return { page: [], isDone: true, continueCursor: "" };
+			}
+		}
 		
 		return await ctx.db
 			.query("conversations")
 			.withSearchIndex("search_title", (q) =>
-				q.search("title", args.query).eq("userId", identity.subject)
+				args.workspaceId
+					? q
+							.search("title", args.query)
+							.eq("userId", identity.subject)
+							.eq("workspaceId", args.workspaceId)
+					: q.search("title", args.query).eq("userId", identity.subject)
 			)
 			.paginate(args.paginationOpts);
 	},
 });
 
 export const searchContent = query({
-	args: { query: v.string(), paginationOpts: paginationOptsValidator },
+	args: {
+		query: v.string(),
+		workspaceId: v.optional(v.id("workspaces")),
+		paginationOpts: paginationOptsValidator,
+	},
 	handler: async (ctx, args ) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity)
 			return { page: [], isDone: true, continueCursor: ""};
+		if (args.workspaceId) {
+			const workspace = await ctx.db.get(args.workspaceId);
+			if (!workspace || workspace.userId !== identity.subject) {
+				return { page: [], isDone: true, continueCursor: "" };
+			}
+		}
 
 		const result = await ctx.db
 			.query("messages")
 			.withSearchIndex("search_content", (q) =>
-				q.search("content", args.query).eq("userId", identity.subject)
+				args.workspaceId
+					? q
+							.search("content", args.query)
+							.eq("userId", identity.subject)
+							.eq("workspaceId", args.workspaceId)
+					: q.search("content", args.query).eq("userId", identity.subject)
 			)
 			.paginate(args.paginationOpts);
 		
@@ -309,15 +370,24 @@ export const searchContent = query({
 });
 
 export const searchTitlesCount = query({
-	args: { query: v.string() },
+	args: { query: v.string(), workspaceId: v.optional(v.id("workspaces")) },
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return 0;
+		if (args.workspaceId) {
+			const workspace = await ctx.db.get(args.workspaceId);
+			if (!workspace || workspace.userId !== identity.subject) return 0;
+		}
 
 		const results = await ctx.db
 			.query("conversations")
 			.withSearchIndex("search_title", (q) =>
-				q.search("title", args.query).eq("userId", identity.subject)
+				args.workspaceId
+					? q
+							.search("title", args.query)
+							.eq("userId", identity.subject)
+							.eq("workspaceId", args.workspaceId)
+					: q.search("title", args.query).eq("userId", identity.subject)
 			)
 			.collect();
 		return results.length;
@@ -325,16 +395,25 @@ export const searchTitlesCount = query({
 });
 
 export const searchContentCount = query({
-	args: { query: v.string() },
+	args: { query: v.string(), workspaceId: v.optional(v.id("workspaces")) },
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return 0;
+		if (args.workspaceId) {
+			const workspace = await ctx.db.get(args.workspaceId);
+			if (!workspace || workspace.userId !== identity.subject) return 0;
+		}
 
 		// Filter at the index level using userId, cap to avoid read limits
 		const results = await ctx.db
 			.query("messages")
 			.withSearchIndex("search_content", (q) =>
-				q.search("content", args.query).eq("userId", identity.subject)
+				args.workspaceId
+					? q
+							.search("content", args.query)
+							.eq("userId", identity.subject)
+							.eq("workspaceId", args.workspaceId)
+					: q.search("content", args.query).eq("userId", identity.subject)
 			)
 			.take(1000);
 

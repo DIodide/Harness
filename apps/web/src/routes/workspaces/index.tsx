@@ -13,6 +13,7 @@ import { usePaginatedQuery } from "convex/react";
 import {
 	AlertTriangle,
 	ArrowUp,
+	Box,
 	Brain,
 	Check,
 	ChevronDown,
@@ -26,6 +27,7 @@ import {
 	PanelLeftClose,
 	PanelLeftOpen,
 	Paperclip,
+	Pencil,
 	Plus,
 	RotateCcw,
 	Search, // Icon for search
@@ -136,8 +138,9 @@ import { cn } from "../../lib/utils";
 export const Route = createFileRoute("/workspaces/")({
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { workspaceId?: string } => ({
-		workspaceId: (search.harnessId as string) ?? undefined,
+	): { harnessId?: string; workspaceId?: string } => ({
+		harnessId: (search.harnessId as string) ?? undefined,
+		workspaceId: (search.workspaceId as string) ?? undefined,
 	}),
 	beforeLoad: async ({ context }) => {
 		if (!context.userId) {
@@ -174,25 +177,37 @@ const EMPTY_STREAM_STATE: ConvoStreamState = {
 	model: null,
 };
 
+type SandboxSelection = "harness" | "none" | Id<"sandboxes">;
+
 function ChatPage() {
 	const navigate = useNavigate();
 	const { getToken } = useAuth();
-	const { harnessId: initialHarnessId } = Route.useSearch();
+	const { harnessId: initialHarnessId, workspaceId: initialWorkspaceId } =
+		Route.useSearch();
 
 	const { data: harnesses, isLoading: harnessesLoading } = useQuery(
 		convexQuery(api.harnesses.list, {}),
 	);
-	const { data: conversations } = useQuery(
-		convexQuery(api.conversations.list, {}),
-	);
+	const { data: workspaces } = useQuery(convexQuery(api.workspaces.list, {}));
+	const { data: sandboxes } = useQuery(convexQuery(api.sandboxes.list, {}));
 	const { data: userSettings } = useQuery(
 		convexQuery(api.userSettings.get, {}),
 	);
 
 	const [activeHarnessId, setActiveHarnessId] =
 		useState<Id<"harnesses"> | null>(null);
+	const [activeWorkspaceId, setActiveWorkspaceId] =
+		useState<Id<"workspaces"> | null>(null);
+	const [activeSandboxSelection, setActiveSandboxSelection] =
+		useState<SandboxSelection>("harness");
 	const [activeConvoId, setActiveConvoId] =
 		useState<Id<"conversations"> | null>(null);
+	const { data: conversations } = useQuery(
+		convexQuery(
+			api.conversations.list,
+			activeWorkspaceId ? { workspaceId: activeWorkspaceId } : "skip",
+		),
+	);
 	// Session-only model override — does not persist to the harness
 	const [sessionModel, setSessionModel] = useState<string | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -516,29 +531,72 @@ function ChatPage() {
 	});
 
 	useEffect(() => {
-		if (!harnesses || harnesses.length === 0) return;
-
-		// If current selection is valid, keep it
-		if (activeHarnessId && harnesses.some((h) => h._id === activeHarnessId)) {
+		if (!workspaces || workspaces.length === 0) {
+			setActiveWorkspaceId(null);
+			setActiveConvoId(null);
 			return;
 		}
 
-		// Prefer the harness ID from the URL search param (e.g. after creating one)
-		if (initialHarnessId && harnesses.some((h) => h._id === initialHarnessId)) {
-			setActiveHarnessId(initialHarnessId as Id<"harnesses">);
+		if (
+			activeWorkspaceId &&
+			workspaces.some((workspace) => workspace._id === activeWorkspaceId)
+		) {
 			return;
 		}
 
-		// Fall back to a started harness, then the first one
-		const started = harnesses.find((h) => h.status === "started");
-		setActiveHarnessId(started?._id ?? harnesses[0]._id);
-	}, [harnesses, activeHarnessId, initialHarnessId]);
+		if (
+			initialWorkspaceId &&
+			workspaces.some((workspace) => workspace._id === initialWorkspaceId)
+		) {
+			setActiveWorkspaceId(initialWorkspaceId as Id<"workspaces">);
+			return;
+		}
+
+		setActiveWorkspaceId(workspaces[0]._id);
+	}, [workspaces, activeWorkspaceId, initialWorkspaceId]);
+
+	const activeWorkspace = workspaces?.find(
+		(workspace) => workspace._id === activeWorkspaceId,
+	);
+
+	useEffect(() => {
+		if (!activeWorkspace) {
+			if (!initialHarnessId && harnesses?.length) {
+				const started = harnesses.find((h) => h.status === "started");
+				setActiveHarnessId(started?._id ?? harnesses[0]._id);
+			}
+			setActiveSandboxSelection("harness");
+			return;
+		}
+
+		setActiveHarnessId(activeWorkspace.harnessId);
+		setActiveSandboxSelection(activeWorkspace.sandboxId);
+		navigate({
+			to: "/workspaces",
+			search: { workspaceId: activeWorkspace._id },
+			replace: true,
+		});
+	}, [activeWorkspace, harnesses, initialHarnessId, navigate]);
 
 	// Reset session model whenever the active harness or conversation changes
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on harness/conversation switch
 	useEffect(() => {
 		setSessionModel(null);
 	}, [activeHarnessId, activeConvoId]);
+
+	useEffect(() => {
+		if (
+			activeSandboxSelection === "harness" ||
+			activeSandboxSelection === "none" ||
+			!sandboxes
+		) {
+			return;
+		}
+
+		if (!sandboxes.some((sandbox) => sandbox._id === activeSandboxSelection)) {
+			setActiveSandboxSelection("harness");
+		}
+	}, [activeSandboxSelection, sandboxes]);
 
 	useEffect(() => {
 		if (harnesses && harnesses.length === 0) {
@@ -586,6 +644,55 @@ function ChatPage() {
 	);
 
 	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
+	const selectedSandbox =
+		activeSandboxSelection !== "harness" && activeSandboxSelection !== "none"
+			? sandboxes?.find((sandbox) => sandbox._id === activeSandboxSelection)
+			: undefined;
+	const effectiveSandboxDaytonaId =
+		activeSandboxSelection === "none"
+			? null
+			: (selectedSandbox?.daytonaSandboxId ??
+				activeHarness?.daytonaSandboxId ??
+				null);
+	const effectiveSandboxEnabled =
+		activeSandboxSelection === "none"
+			? false
+			: Boolean(
+					selectedSandbox?.daytonaSandboxId ?? activeHarness?.daytonaSandboxId,
+				);
+
+	const buildHarnessConfig = useCallback(() => {
+		if (!activeHarness) return null;
+
+		return {
+			model: sessionModel ?? activeHarness.model,
+			mcp_servers: activeHarness.mcpServers.map((s) => ({
+				name: s.name,
+				url: s.url,
+				auth_type: s.authType as "none" | "bearer" | "oauth" | "tiger_junction",
+				auth_token: s.authToken,
+			})),
+			skills: activeHarness.skills ?? [],
+			name: activeHarness.name,
+			harness_id: activeHarness._id,
+			system_prompt: activeHarness.systemPrompt ?? undefined,
+			sandbox_enabled: effectiveSandboxEnabled,
+			sandbox_id: effectiveSandboxDaytonaId ?? undefined,
+			sandbox_config: activeHarness.sandboxConfig
+				? {
+						persistent: activeHarness.sandboxConfig.persistent,
+						auto_start: activeHarness.sandboxConfig.autoStart,
+						default_language: activeHarness.sandboxConfig.defaultLanguage,
+						resource_tier: activeHarness.sandboxConfig.resourceTier,
+					}
+				: undefined,
+		};
+	}, [
+		activeHarness,
+		effectiveSandboxDaytonaId,
+		effectiveSandboxEnabled,
+		sessionModel,
+	]);
 
 	// Health-check MCP servers when harness changes
 	// biome-ignore lint/correctness/useExhaustiveDependencies: only re-run when harness ID changes
@@ -718,36 +825,12 @@ function ChatPage() {
 				{ role: "user", content: pending.content },
 			];
 
+			const harnessConfig = buildHarnessConfig();
+			if (!harnessConfig) return;
+
 			chatStream.stream({
 				messages: history,
-				harness: {
-					model: sessionModel ?? activeHarness.model,
-					mcp_servers: activeHarness.mcpServers.map((s) => ({
-						name: s.name,
-						url: s.url,
-						auth_type: s.authType as
-							| "none"
-							| "bearer"
-							| "oauth"
-							| "tiger_junction",
-						auth_token: s.authToken,
-					})),
-					skills: activeHarness.skills ?? [],
-					name: activeHarness.name,
-					harness_id: activeHarness._id,
-					system_prompt: activeHarness.systemPrompt ?? undefined,
-
-					sandbox_enabled: Boolean(activeHarness.daytonaSandboxId),
-					sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
-					sandbox_config: activeHarness.sandboxConfig
-						? {
-								persistent: activeHarness.sandboxConfig.persistent,
-								auto_start: activeHarness.sandboxConfig.autoStart,
-								default_language: activeHarness.sandboxConfig.defaultLanguage,
-								resource_tier: activeHarness.sandboxConfig.resourceTier,
-							}
-						: undefined,
-				},
+				harness: harnessConfig,
 				conversation_id: convoId,
 			});
 		};
@@ -758,7 +841,7 @@ function ChatPage() {
 		activeHarness,
 		chatStream,
 		sendMessageFromQueue,
-		sessionModel,
+		buildHarnessConfig,
 	]);
 
 	const handleSelectConversation = useCallback(
@@ -807,33 +890,8 @@ function ChatPage() {
 
 			await removeMessage.mutateAsync({ id: messageId });
 
-			const harnessConfig = {
-				model: sessionModel ?? activeHarness.model,
-				mcp_servers: activeHarness.mcpServers.map((s) => ({
-					name: s.name,
-					url: s.url,
-					auth_type: s.authType as
-						| "none"
-						| "bearer"
-						| "oauth"
-						| "tiger_junction",
-					auth_token: s.authToken,
-				})),
-				skills: activeHarness.skills ?? [],
-				name: activeHarness.name,
-				harness_id: activeHarness._id,
-				system_prompt: activeHarness.systemPrompt ?? undefined,
-				sandbox_enabled: Boolean(activeHarness.daytonaSandboxId),
-				sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
-				sandbox_config: activeHarness.sandboxConfig
-					? {
-							persistent: activeHarness.sandboxConfig.persistent,
-							auto_start: activeHarness.sandboxConfig.autoStart,
-							default_language: activeHarness.sandboxConfig.defaultLanguage,
-							resource_tier: activeHarness.sandboxConfig.resourceTier,
-						}
-					: undefined,
-			};
+			const harnessConfig = buildHarnessConfig();
+			if (!harnessConfig) return;
 
 			chatStream.stream({
 				messages: history,
@@ -841,7 +899,13 @@ function ChatPage() {
 				conversation_id: activeConvoId,
 			});
 		},
-		[activeHarness, activeConvoId, chatStream, removeMessage, sessionModel],
+		[
+			activeHarness,
+			activeConvoId,
+			chatStream,
+			removeMessage,
+			buildHarnessConfig,
+		],
 	);
 
 	const forkConversation = useMutation({
@@ -904,24 +968,12 @@ function ChatPage() {
 				}));
 				history.push({ role: "user", content: newContent });
 
+				const harnessConfig = buildHarnessConfig();
+				if (!harnessConfig) return;
+
 				chatStream.stream({
 					messages: history,
-					harness: {
-						model: sessionModel ?? activeHarness.model,
-						mcp_servers: activeHarness.mcpServers.map((s) => ({
-							name: s.name,
-							url: s.url,
-							auth_type: s.authType as
-								| "none"
-								| "bearer"
-								| "oauth"
-								| "tiger_junction",
-							auth_token: s.authToken,
-						})),
-						skills: activeHarness.skills ?? [],
-						name: activeHarness.name,
-						system_prompt: activeHarness.systemPrompt ?? undefined,
-					},
+					harness: harnessConfig,
 					conversation_id: newConvoId,
 				});
 
@@ -938,7 +990,7 @@ function ChatPage() {
 			editForkAndSend,
 			handleSelectConversation,
 			chatStream,
-			sessionModel,
+			buildHarnessConfig,
 		],
 	);
 
@@ -955,11 +1007,10 @@ function ChatPage() {
 		? chatStream.streamingConvoIds.has(activeConvoId)
 		: false;
 
-	const daytonaSandboxId = activeHarness?.daytonaSandboxId ?? null;
-	const sandboxEnabled = Boolean(daytonaSandboxId);
-
 	return (
-		<SandboxPanelProvider sandboxId={sandboxEnabled ? daytonaSandboxId : null}>
+		<SandboxPanelProvider
+			sandboxId={effectiveSandboxEnabled ? effectiveSandboxDaytonaId : null}
+		>
 			<div className="flex h-full overflow-hidden bg-background">
 				<AnimatePresence>
 					{sidebarOpen && (
@@ -970,7 +1021,15 @@ function ChatPage() {
 							transition={{ duration: 0.2 }}
 							className="flex h-full flex-col overflow-hidden border-r border-border"
 						>
-							<ChatSidebar
+							<WorkspaceSidebar
+								workspaces={workspaces ?? []}
+								harnesses={harnesses ?? []}
+								sandboxes={sandboxes ?? []}
+								activeWorkspaceId={activeWorkspaceId}
+								onSelectWorkspace={(workspaceId) => {
+									setActiveWorkspaceId(workspaceId);
+									setActiveConvoId(null);
+								}}
 								conversations={(conversations ?? []).filter(
 									(c) =>
 										!(c as Record<string, unknown>).editParentConversationId,
@@ -990,11 +1049,11 @@ function ChatPage() {
 				<div className="flex flex-1 flex-col overflow-hidden">
 					<ChatHeader
 						harness={activeHarness}
-						harnesses={harnesses ?? []}
-						onSwitchHarness={setActiveHarnessId}
+						sandboxes={selectedSandbox ? [selectedSandbox] : []}
+						activeSandboxSelection={activeSandboxSelection}
+						effectiveSandboxEnabled={effectiveSandboxEnabled}
 						sidebarOpen={sidebarOpen}
 						onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-						isStreaming={isActiveConvoStreaming}
 						mcpHealthStatuses={mcpHealthStatuses}
 					/>
 
@@ -1031,7 +1090,9 @@ function ChatPage() {
 						</div>
 					)}
 
-					{activeConvoId ? (
+					{!activeWorkspace ? (
+						<EmptyWorkspaceState />
+					) : activeConvoId ? (
 						<ChatMessages
 							conversationId={activeConvoId}
 							messages={activeMessages ?? []}
@@ -1082,7 +1143,7 @@ function ChatPage() {
 
 					<ChatInput
 						conversationId={activeConvoId}
-						activeHarness={activeHarness}
+						activeHarness={activeWorkspace ? activeHarness : undefined}
 						sessionModel={
 							userSettings?.modelSelectorMode === "harness"
 								? null
@@ -1105,6 +1166,9 @@ function ChatPage() {
 							}
 						}}
 						onConvoCreated={handleSelectConversation}
+						workspaceId={activeWorkspaceId ?? undefined}
+						sandboxEnabled={effectiveSandboxEnabled}
+						sandboxId={effectiveSandboxDaytonaId ?? undefined}
 						isStreaming={isActiveConvoStreaming}
 						onStream={chatStream.stream}
 						onInterrupt={handleInterrupt}
@@ -1120,7 +1184,7 @@ function ChatPage() {
 				</div>
 
 				<AnimatePresence>
-					{sandboxEnabled && <SandboxPanelToggle />}
+					{effectiveSandboxEnabled && <SandboxPanelToggle />}
 				</AnimatePresence>
 			</div>
 		</SandboxPanelProvider>
@@ -1159,7 +1223,12 @@ function HighlightText({ text, query }: { text: string; query: string }) {
 	return <>{parts}</>;
 }
 
-function ChatSidebar({
+function WorkspaceSidebar({
+	workspaces,
+	harnesses,
+	sandboxes,
+	activeWorkspaceId,
+	onSelectWorkspace,
 	conversations,
 	activeConvoId,
 	onSelect,
@@ -1169,6 +1238,26 @@ function ChatSidebar({
 	streamingConvoIds,
 	doneConvoIds,
 }: {
+	workspaces: Array<{
+		_id: Id<"workspaces">;
+		name: string;
+		harnessId: Id<"harnesses">;
+		sandboxId: Id<"sandboxes">;
+	}>;
+	harnesses: Array<{
+		_id: Id<"harnesses">;
+		name: string;
+		status: string;
+		model: string;
+	}>;
+	sandboxes: Array<{
+		_id: Id<"sandboxes">;
+		name: string;
+		status: string;
+		ephemeral: boolean;
+	}>;
+	activeWorkspaceId: Id<"workspaces"> | null;
+	onSelectWorkspace: (id: Id<"workspaces">) => void;
 	conversations: Array<{
 		_id: Id<"conversations">;
 		title: string;
@@ -1192,6 +1281,23 @@ function ChatSidebar({
 			if (activeConvoId) onSelect(null);
 		},
 	});
+	const createWorkspace = useMutation({
+		mutationFn: useConvexMutation(api.workspaces.create),
+		onSuccess: (workspaceId) => {
+			onSelectWorkspace(workspaceId as Id<"workspaces">);
+			setCreateOpen(false);
+			setNewWorkspaceName("");
+		},
+	});
+	const updateWorkspace = useMutation({
+		mutationFn: useConvexMutation(api.workspaces.update),
+		onSuccess: () => {
+			setRenameWorkspace(null);
+			setRenameWorkspaceName("");
+			setRenameWorkspaceHarnessId(null);
+			setRenameWorkspaceSandboxId(null);
+		},
+	});
 
 	const handleNew = () => {
 		if (!harnessId) return;
@@ -1212,27 +1318,35 @@ function ChatSidebar({
 
 	const titleSearch = usePaginatedQuery(
 		api.conversations.searchTitles,
-		searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		searchQuery.length > 0 && activeWorkspaceId
+			? { query: searchQuery, workspaceId: activeWorkspaceId }
+			: "skip",
 		{ initialNumItems: INITIAL_TITLE_COUNT },
 	);
 
 	const contentSearch = usePaginatedQuery(
 		api.conversations.searchContent,
-		searchQuery.length > 0 ? { query: searchQuery } : "skip",
+		searchQuery.length > 0 && activeWorkspaceId
+			? { query: searchQuery, workspaceId: activeWorkspaceId }
+			: "skip",
 		{ initialNumItems: INITIAL_CONTENT_COUNT },
 	);
 
 	const { data: titleCount } = useQuery({
 		...convexQuery(
 			api.conversations.searchTitlesCount,
-			searchQuery.length > 0 ? { query: searchQuery } : "skip",
+			searchQuery.length > 0 && activeWorkspaceId
+				? { query: searchQuery, workspaceId: activeWorkspaceId }
+				: "skip",
 		),
 	});
 
 	const { data: contentCount } = useQuery({
 		...convexQuery(
 			api.conversations.searchContentCount,
-			searchQuery.length > 0 ? { query: searchQuery } : "skip",
+			searchQuery.length > 0 && activeWorkspaceId
+				? { query: searchQuery, workspaceId: activeWorkspaceId }
+				: "skip",
 		),
 	});
 
@@ -1240,6 +1354,86 @@ function ChatSidebar({
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [usageOpen, setUsageOpen] = useState(false);
+	const [createOpen, setCreateOpen] = useState(false);
+	const [newWorkspaceName, setNewWorkspaceName] = useState("");
+	const [renameWorkspace, setRenameWorkspace] = useState<{
+		_id: Id<"workspaces">;
+		name: string;
+		harnessId: Id<"harnesses">;
+		sandboxId: Id<"sandboxes">;
+	} | null>(null);
+	const [renameWorkspaceName, setRenameWorkspaceName] = useState("");
+	const [renameWorkspaceHarnessId, setRenameWorkspaceHarnessId] =
+		useState<Id<"harnesses"> | null>(null);
+	const [renameWorkspaceSandboxId, setRenameWorkspaceSandboxId] =
+		useState<Id<"sandboxes"> | null>(null);
+	const [newWorkspaceHarnessId, setNewWorkspaceHarnessId] =
+		useState<Id<"harnesses"> | null>(null);
+	const [newWorkspaceSandboxId, setNewWorkspaceSandboxId] =
+		useState<Id<"sandboxes"> | null>(null);
+
+	useEffect(() => {
+		if (!newWorkspaceHarnessId && harnesses.length > 0) {
+			const started = harnesses.find((harness) => harness.status !== "draft");
+			setNewWorkspaceHarnessId(started?._id ?? harnesses[0]._id);
+		}
+		if (!newWorkspaceSandboxId && sandboxes.length > 0) {
+			setNewWorkspaceSandboxId(sandboxes[0]._id);
+		}
+	}, [harnesses, newWorkspaceHarnessId, newWorkspaceSandboxId, sandboxes]);
+
+	const createSelectedWorkspace = () => {
+		if (!newWorkspaceHarnessId || !newWorkspaceSandboxId) {
+			toast.error("Select a harness and sandbox");
+			return;
+		}
+		const harness = harnesses.find(
+			(item) => item._id === newWorkspaceHarnessId,
+		);
+		const sandbox = sandboxes.find(
+			(item) => item._id === newWorkspaceSandboxId,
+		);
+		createWorkspace.mutate({
+			name:
+				newWorkspaceName.trim() ||
+				(harness && sandbox
+					? `${harness.name} / ${sandbox.name}`
+					: "New workspace"),
+			harnessId: newWorkspaceHarnessId,
+			sandboxId: newWorkspaceSandboxId,
+		});
+	};
+
+	const startRenameWorkspace = (workspace: {
+		_id: Id<"workspaces">;
+		name: string;
+		harnessId: Id<"harnesses">;
+		sandboxId: Id<"sandboxes">;
+	}) => {
+		setRenameWorkspace(workspace);
+		setRenameWorkspaceName(workspace.name);
+		setRenameWorkspaceHarnessId(workspace.harnessId);
+		setRenameWorkspaceSandboxId(workspace.sandboxId);
+	};
+
+	const saveWorkspaceName = () => {
+		if (!renameWorkspace) return;
+		const name = renameWorkspaceName.trim();
+		if (!name) {
+			toast.error("Workspace name is required");
+			return;
+		}
+		if (!renameWorkspaceHarnessId || !renameWorkspaceSandboxId) {
+			toast.error("Select a harness and sandbox");
+			return;
+		}
+		updateWorkspace.mutate({
+			id: renameWorkspace._id,
+			name,
+			harnessId: renameWorkspaceHarnessId,
+			sandboxId: renameWorkspaceSandboxId,
+		});
+	};
 
 	return (
 		<div className="flex h-full w-[280px] flex-col bg-background">
@@ -1247,7 +1441,7 @@ function ChatSidebar({
 				<Link to="/" className="flex items-center gap-2">
 					<HarnessMark size={18} className="text-foreground" />
 					<span className="text-sm font-semibold tracking-tight text-foreground">
-						WORKSPACES!!!
+						Harness
 					</span>
 				</Link>
 				<div className="flex items-center gap-1">
@@ -1267,6 +1461,85 @@ function ChatSidebar({
 						</TooltipTrigger>
 						<TooltipContent>Close sidebar</TooltipContent>
 					</Tooltip>
+				</div>
+			</div>
+
+			<Separator />
+
+			<div className="px-2 py-2">
+				<div className="mb-1 flex items-center justify-between px-2">
+					<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+						Workspaces
+					</p>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant="ghost"
+								size="icon-xs"
+								onClick={() => setCreateOpen(true)}
+							>
+								<Plus size={12} />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>New workspace</TooltipContent>
+					</Tooltip>
+				</div>
+				<div className="space-y-0.5">
+					{workspaces.length === 0 ? (
+						<p className="px-2 py-2 text-[11px] text-muted-foreground">
+							Create a workspace to start.
+						</p>
+					) : (
+						workspaces.map((workspace) => {
+							const harness = harnesses.find(
+								(item) => item._id === workspace.harnessId,
+							);
+							const sandbox = sandboxes.find(
+								(item) => item._id === workspace.sandboxId,
+							);
+							return (
+								<div key={workspace._id} className="group relative">
+									<button
+										type="button"
+										onClick={() => onSelectWorkspace(workspace._id)}
+										className={cn(
+											"flex w-full items-start gap-2 rounded-md px-2 py-2 pr-8 text-left transition-colors",
+											activeWorkspaceId === workspace._id
+												? "bg-muted text-foreground"
+												: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+										)}
+									>
+										<Sparkles size={12} className="mt-0.5 shrink-0" />
+										<span className="min-w-0 flex-1">
+											<span className="block truncate text-xs font-medium">
+												{workspace.name}
+											</span>
+											<span className="block truncate text-[10px] text-muted-foreground">
+												{harness?.name ?? "Missing harness"} /{" "}
+												{sandbox?.name ?? "Missing sandbox"}
+											</span>
+										</span>
+									</button>
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button
+												variant="ghost"
+												size="icon-xs"
+												className="absolute right-1 top-1.5 opacity-0 group-hover:opacity-100"
+												onClick={(event) => {
+													event.stopPropagation();
+													startRenameWorkspace(workspace);
+												}}
+											>
+												<Pencil size={10} />
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent>Edit workspace</TooltipContent>
+									</Tooltip>
+								</div>
+							);
+						})
+					)}
 				</div>
 			</div>
 
@@ -1522,6 +1795,17 @@ function ChatSidebar({
 					className="w-full justify-start"
 					asChild
 				>
+					<Link to="/sandboxes">
+						<Box size={12} />
+						Manage Sandboxes
+					</Link>
+				</Button>
+				<Button
+					variant="ghost"
+					size="sm"
+					className="w-full justify-start"
+					asChild
+				>
 					<Link to="/harnesses">
 						<SlidersHorizontal size={12} />
 						Manage Harnesses
@@ -1538,6 +1822,186 @@ function ChatSidebar({
 				</Button>
 			</div>
 
+			<Dialog open={createOpen} onOpenChange={setCreateOpen}>
+				<DialogContent className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle className="text-sm">New Workspace</DialogTitle>
+						<DialogDescription>
+							Name this workspace and select its harness and sandbox.
+						</DialogDescription>
+					</DialogHeader>
+					<div className="space-y-4">
+						<div className="space-y-1.5">
+							<p className="text-xs font-medium text-foreground">Name</p>
+							<Input
+								value={newWorkspaceName}
+								onChange={(event) => setNewWorkspaceName(event.target.value)}
+								placeholder="Workspace name"
+								onKeyDown={(event) => {
+									if (event.key === "Enter") {
+										event.preventDefault();
+										createSelectedWorkspace();
+									}
+								}}
+							/>
+						</div>
+						<div className="space-y-1.5">
+							<p className="text-xs font-medium text-foreground">Harness</p>
+							<Select
+								value={newWorkspaceHarnessId ?? undefined}
+								onValueChange={(value) =>
+									setNewWorkspaceHarnessId(value as Id<"harnesses">)
+								}
+							>
+								<SelectTrigger>
+									<SelectValue placeholder="Select a harness" />
+								</SelectTrigger>
+								<SelectContent>
+									{harnesses
+										.filter((harness) => harness.status !== "draft")
+										.map((harness) => (
+											<SelectItem key={harness._id} value={harness._id}>
+												{harness.name}
+											</SelectItem>
+										))}
+								</SelectContent>
+							</Select>
+						</div>
+						<div className="space-y-1.5">
+							<p className="text-xs font-medium text-foreground">Sandbox</p>
+							<Select
+								value={newWorkspaceSandboxId ?? undefined}
+								onValueChange={(value) =>
+									setNewWorkspaceSandboxId(value as Id<"sandboxes">)
+								}
+							>
+								<SelectTrigger>
+									<SelectValue placeholder="Select a sandbox" />
+								</SelectTrigger>
+								<SelectContent>
+									{sandboxes.map((sandbox) => (
+										<SelectItem key={sandbox._id} value={sandbox._id}>
+											{sandbox.name}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+						<Button
+							className="w-full"
+							disabled={
+								createWorkspace.isPending ||
+								!newWorkspaceHarnessId ||
+								!newWorkspaceSandboxId
+							}
+							onClick={createSelectedWorkspace}
+						>
+							{createWorkspace.isPending ? (
+								<Loader2 size={14} className="animate-spin" />
+							) : (
+								<Plus size={14} />
+							)}
+							Create Workspace
+						</Button>
+					</div>
+				</DialogContent>
+			</Dialog>
+			<Dialog
+				open={renameWorkspace !== null}
+				onOpenChange={(open) => {
+					if (!open) {
+						setRenameWorkspace(null);
+						setRenameWorkspaceName("");
+						setRenameWorkspaceHarnessId(null);
+						setRenameWorkspaceSandboxId(null);
+					}
+				}}
+			>
+				<DialogContent className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle className="text-sm">Edit Workspace</DialogTitle>
+						<DialogDescription>
+							Update this workspace's name, harness, and sandbox.
+						</DialogDescription>
+					</DialogHeader>
+					<div className="space-y-4">
+						<div className="space-y-1.5">
+							<p className="text-xs font-medium text-foreground">Name</p>
+							<Input
+								value={renameWorkspaceName}
+								onChange={(event) => setRenameWorkspaceName(event.target.value)}
+								placeholder="Workspace name"
+								autoFocus
+								onKeyDown={(event) => {
+									if (event.key === "Enter") {
+										event.preventDefault();
+										saveWorkspaceName();
+									}
+								}}
+							/>
+						</div>
+						<div className="space-y-1.5">
+							<p className="text-xs font-medium text-foreground">Harness</p>
+							<Select
+								value={renameWorkspaceHarnessId ?? undefined}
+								onValueChange={(value) =>
+									setRenameWorkspaceHarnessId(value as Id<"harnesses">)
+								}
+							>
+								<SelectTrigger>
+									<SelectValue placeholder="Select a harness" />
+								</SelectTrigger>
+								<SelectContent>
+									{harnesses
+										.filter((harness) => harness.status !== "draft")
+										.map((harness) => (
+											<SelectItem key={harness._id} value={harness._id}>
+												{harness.name}
+											</SelectItem>
+										))}
+								</SelectContent>
+							</Select>
+						</div>
+						<div className="space-y-1.5">
+							<p className="text-xs font-medium text-foreground">Sandbox</p>
+							<Select
+								value={renameWorkspaceSandboxId ?? undefined}
+								onValueChange={(value) =>
+									setRenameWorkspaceSandboxId(value as Id<"sandboxes">)
+								}
+							>
+								<SelectTrigger>
+									<SelectValue placeholder="Select a sandbox" />
+								</SelectTrigger>
+								<SelectContent>
+									{sandboxes.map((sandbox) => (
+										<SelectItem key={sandbox._id} value={sandbox._id}>
+											{sandbox.name}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+						<Button
+							className="w-full"
+							disabled={
+								updateWorkspace.isPending ||
+								!renameWorkspaceName.trim() ||
+								!renameWorkspaceHarnessId ||
+								!renameWorkspaceSandboxId
+							}
+							onClick={saveWorkspaceName}
+						>
+							{updateWorkspace.isPending ? (
+								<Loader2 size={14} className="animate-spin" />
+							) : (
+								<Pencil size={14} />
+							)}
+							Save Workspace
+						</Button>
+					</div>
+				</DialogContent>
+			</Dialog>
 			<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 			<UsageDialog open={usageOpen} onOpenChange={setUsageOpen} />
 		</div>
@@ -1919,11 +2383,11 @@ function SkillsStatus({ skills }: { skills: SkillEntry[] }) {
 
 function ChatHeader({
 	harness,
-	harnesses,
-	onSwitchHarness,
+	sandboxes,
+	activeSandboxSelection,
+	effectiveSandboxEnabled,
 	sidebarOpen,
 	onToggleSidebar,
-	isStreaming,
 	mcpHealthStatuses,
 }: {
 	harness?: {
@@ -1939,19 +2403,30 @@ function ChatHeader({
 		}>;
 		skills: SkillEntry[];
 		sandboxEnabled?: boolean;
+		daytonaSandboxId?: string;
 	};
-	harnesses: Array<{
-		_id: Id<"harnesses">;
+	sandboxes: Array<{
+		_id: Id<"sandboxes">;
 		name: string;
-		model: string;
+		daytonaSandboxId: string;
 		status: string;
+		ephemeral: boolean;
 	}>;
-	onSwitchHarness: (id: Id<"harnesses">) => void;
+	activeSandboxSelection: SandboxSelection;
+	effectiveSandboxEnabled: boolean;
 	sidebarOpen: boolean;
 	onToggleSidebar: () => void;
-	isStreaming: boolean;
 	mcpHealthStatuses?: Record<string, HealthStatus>;
 }) {
+	const selectedSandbox =
+		activeSandboxSelection !== "harness" && activeSandboxSelection !== "none"
+			? sandboxes.find((sandbox) => sandbox._id === activeSandboxSelection)
+			: undefined;
+	const sandboxLabel =
+		activeSandboxSelection === "none"
+			? "No sandbox"
+			: (selectedSandbox?.name ?? harness?.daytonaSandboxId ?? "No sandbox");
+
 	return (
 		<header className="flex items-center justify-between border-b border-border px-4 py-2.5">
 			<div className="flex items-center gap-2">
@@ -1966,45 +2441,17 @@ function ChatHeader({
 					</Tooltip>
 				)}
 
-				<DropdownMenu>
-					<DropdownMenuTrigger asChild>
-						<Button
-							variant="ghost"
-							size="sm"
-							className="gap-1.5"
-							disabled={isStreaming}
-						>
-							<span className="text-xs font-medium">
-								{harness?.name ?? "Select Harness"}
-							</span>
-							{harness && (
-								<Badge variant="secondary" className="text-[10px]">
-									<Cpu size={8} />
-									{harness.model}
-								</Badge>
-							)}
-							<ChevronDown size={12} className="text-muted-foreground" />
-						</Button>
-					</DropdownMenuTrigger>
-					<DropdownMenuContent align="start">
-						{harnesses
-							.filter((h) => h.status !== "draft")
-							.map((h) => (
-								<DropdownMenuItem
-									key={h._id}
-									onClick={() => onSwitchHarness(h._id)}
-								>
-									<div
-										className={`h-1.5 w-1.5 ${h.status === "started" ? "bg-emerald-500" : "bg-muted-foreground/40"}`}
-									/>
-									{h.name}
-									<span className="ml-auto text-[10px] text-muted-foreground">
-										{h.model}
-									</span>
-								</DropdownMenuItem>
-							))}
-					</DropdownMenuContent>
-				</DropdownMenu>
+				<div className="flex items-center gap-1.5 px-1.5 py-1">
+					<span className="text-xs font-medium">
+						{harness?.name ?? "No harness"}
+					</span>
+					{harness && (
+						<Badge variant="secondary" className="text-[10px]">
+							<Cpu size={8} />
+							{harness.model}
+						</Badge>
+					)}
+				</div>
 
 				{harness && harness.mcpServers.length > 0 && (
 					<McpServerStatus
@@ -2017,7 +2464,14 @@ function ChatHeader({
 					<SkillsStatus skills={harness.skills} />
 				)}
 
-				{harness?.sandboxEnabled && <SandboxBadge />}
+				<div className="flex items-center gap-1.5 px-1.5 py-1 text-muted-foreground">
+					<Box size={12} />
+					<span className="max-w-[140px] truncate text-xs font-medium">
+						{sandboxLabel}
+					</span>
+				</div>
+
+				{effectiveSandboxEnabled && <SandboxBadge />}
 			</div>
 		</header>
 	);
@@ -3070,6 +3524,30 @@ function EmptyChat({
 	);
 }
 
+function EmptyWorkspaceState() {
+	return (
+		<div className="flex flex-1 flex-col items-center justify-center px-4">
+			<motion.div
+				initial={{ opacity: 0, y: 12 }}
+				animate={{ opacity: 1, y: 0 }}
+				transition={{ duration: 0.4 }}
+				className="max-w-sm text-center"
+			>
+				<div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center bg-foreground">
+					<Sparkles size={24} className="text-background" />
+				</div>
+				<h2 className="mb-2 text-lg font-medium text-foreground">
+					Create a workspace
+				</h2>
+				<p className="text-sm text-muted-foreground">
+					Choose a harness and sandbox from the sidebar to keep conversations
+					scoped to that workspace.
+				</p>
+			</motion.div>
+		</div>
+	);
+}
+
 function ChatInput({
 	conversationId,
 	activeHarness,
@@ -3077,6 +3555,9 @@ function ChatInput({
 	modelSelectorMode = "session",
 	onSessionModelChange,
 	onConvoCreated,
+	workspaceId,
+	sandboxEnabled,
+	sandboxId,
 	isStreaming,
 	onStream,
 	onInterrupt,
@@ -3113,6 +3594,9 @@ function ChatInput({
 		};
 	};
 	onConvoCreated: (id: Id<"conversations">) => void;
+	workspaceId?: Id<"workspaces">;
+	sandboxEnabled: boolean;
+	sandboxId?: string;
 	isStreaming: boolean;
 	onStream: (body: {
 		messages: Array<{
@@ -3129,7 +3613,16 @@ function ChatInput({
 			}>;
 			skills: SkillEntry[];
 			name: string;
+			harness_id?: string;
 			system_prompt?: string;
+			sandbox_enabled?: boolean;
+			sandbox_id?: string;
+			sandbox_config?: {
+				persistent: boolean;
+				auto_start: boolean;
+				default_language: string;
+				resource_tier: string;
+			};
 		};
 		conversation_id: string;
 	}) => Promise<void>;
@@ -3281,7 +3774,7 @@ function ChatInput({
 			return;
 		}
 
-		const resolvedSandboxId = activeHarness.daytonaSandboxId;
+		const resolvedSandboxId = sandboxEnabled ? sandboxId : undefined;
 
 		setText("");
 		setHistoryIndex(-1);
@@ -3302,7 +3795,7 @@ function ChatInput({
 			harness_id: activeHarness._id,
 			system_prompt: activeHarness.systemPrompt ?? undefined,
 			sandbox_enabled: Boolean(resolvedSandboxId),
-			sandbox_id: resolvedSandboxId ?? undefined,
+			sandbox_id: resolvedSandboxId,
 			sandbox_config: activeHarness.sandboxConfig
 				? {
 						persistent: activeHarness.sandboxConfig.persistent,
@@ -3318,6 +3811,7 @@ function ChatInput({
 			const newId = await createConvo.mutateAsync({
 				title: content.slice(0, 60),
 				harnessId: activeHarness._id,
+				...(workspaceId ? { workspaceId } : {}),
 			});
 			convoId = newId;
 			onConvoCreated(newId);
