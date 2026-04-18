@@ -150,9 +150,11 @@ const STATUS_LABEL: Record<ServerStatus, string> = {
 export function McpServerStatus({
 	servers,
 	healthStatuses = {},
+	onReconnected,
 }: {
 	servers: McpServer[];
 	healthStatuses?: Record<string, HealthStatus>;
+	onReconnected?: () => void;
 }) {
 	const { data: oauthStatuses } = useQuery(
 		convexQuery(api.mcpOAuthTokens.listStatuses, {}),
@@ -243,7 +245,7 @@ export function McpServerStatus({
 									key={server.url}
 									server={server}
 									status={status}
-									onReconnected={() => {}}
+									onReconnected={onReconnected}
 								/>
 							))}
 						</div>
@@ -261,7 +263,7 @@ function McpServerRow({
 }: {
 	server: McpServer;
 	status: ServerStatus;
-	onReconnected: () => void;
+	onReconnected?: () => void;
 }) {
 	const { getToken } = useAuth();
 	const [connecting, setConnecting] = useState(false);
@@ -271,7 +273,7 @@ function McpServerRow({
 		startOAuthPopup(getToken, server.url, {
 			onSuccess: () => {
 				toast.success(`Reconnected to ${server.name}`);
-				onReconnected();
+				onReconnected?.();
 			},
 			onError: (msg) => toast.error(msg),
 			onDone: () => setConnecting(false),
@@ -355,9 +357,11 @@ export function parseAuthRequiredError(
 export function OAuthReconnectPrompt({
 	serverUrl,
 	errorMessage,
+	onReconnected,
 }: {
 	serverUrl: string;
 	errorMessage: string;
+	onReconnected?: () => void;
 }) {
 	const { getToken } = useAuth();
 	const [connecting, setConnecting] = useState(false);
@@ -369,11 +373,12 @@ export function OAuthReconnectPrompt({
 			onSuccess: () => {
 				toast.success("Reconnected — you can retry the message");
 				setReconnected(true);
+				onReconnected?.();
 			},
 			onError: (msg) => toast.error(msg),
 			onDone: () => setConnecting(false),
 		});
-	}, [getToken, serverUrl]);
+	}, [getToken, serverUrl, onReconnected]);
 
 	if (reconnected) {
 		return (

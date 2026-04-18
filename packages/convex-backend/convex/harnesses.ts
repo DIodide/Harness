@@ -11,6 +11,13 @@ function assertSystemPromptLength(systemPrompt: string | undefined) {
 		);
 	}
 }
+const mcpServerValidator = v.object({
+	name: v.string(),
+	url: v.string(),
+	authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth"), v.literal("tiger_junction")),
+	authToken: v.optional(v.string()),
+	commandIds: v.optional(v.array(v.id("commands"))),
+});
 
 export const list = query({
 	handler: async (ctx) => {
@@ -43,14 +50,7 @@ export const create = mutation({
 			v.literal("stopped"),
 			v.literal("draft"),
 		),
-		mcpServers: v.array(
-			v.object({
-				name: v.string(),
-				url: v.string(),
-				authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth"), v.literal("tiger_junction")),
-				authToken: v.optional(v.string()),
-			}),
-		),
+		mcpServers: v.array(mcpServerValidator),
 		skills: v.array(v.object({ name: v.string(), description: v.string() })),
 		systemPrompt: v.optional(v.string()),
 		sandboxEnabled: v.optional(v.boolean()),
@@ -94,16 +94,7 @@ export const update = mutation({
 				v.literal("draft"),
 			),
 		),
-		mcpServers: v.optional(
-			v.array(
-				v.object({
-					name: v.string(),
-					url: v.string(),
-					authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth"), v.literal("tiger_junction")),
-					authToken: v.optional(v.string()),
-				}),
-			),
-		),
+		mcpServers: v.optional(v.array(mcpServerValidator)),
 		skills: v.optional(v.array(v.object({ name: v.string(), description: v.string() }))),
 		systemPrompt: v.optional(v.string()),
 		suggestedPrompts: v.optional(v.array(v.string())),
