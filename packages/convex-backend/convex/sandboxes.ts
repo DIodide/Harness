@@ -132,13 +132,25 @@ export const remove = mutation({
 		if (!sandbox || sandbox.userId !== identity.subject) {
 			throw new Error("Not found");
 		}
-		// Unlink from harness if linked
-		if (sandbox.harnessId) {
-			const harness = await ctx.db.get(sandbox.harnessId);
-			if (harness && harness.sandboxId === args.id) {
-				await ctx.db.patch(sandbox.harnessId, { sandboxId: undefined });
-			}
-		}
+		const userHarnesses = await ctx.db
+			.query("harnesses")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.collect();
+		await Promise.all(
+			userHarnesses
+				.filter(
+					(harness) =>
+						harness.sandboxId === args.id ||
+						harness.daytonaSandboxId === sandbox.daytonaSandboxId,
+				)
+				.map((harness) =>
+					ctx.db.patch(harness._id, {
+						sandboxEnabled: false,
+						sandboxId: undefined,
+						daytonaSandboxId: undefined,
+					}),
+				),
+		);
 		await ctx.db.delete(args.id);
 	},
 });

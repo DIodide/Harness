@@ -13,7 +13,6 @@ import { usePaginatedQuery } from "convex/react";
 import {
 	AlertTriangle,
 	ArrowUp,
-	Box,
 	Brain,
 	Check,
 	ChevronDown,
@@ -135,11 +134,11 @@ import {
 } from "../../lib/use-chat-stream";
 import { cn } from "../../lib/utils";
 
-export const Route = createFileRoute("/chat/")({
+export const Route = createFileRoute("/workspaces/")({
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { harnessId?: string } => ({
-		harnessId: (search.harnessId as string) ?? undefined,
+	): { workspaceId?: string } => ({
+		workspaceId: (search.harnessId as string) ?? undefined,
 	}),
 	beforeLoad: async ({ context }) => {
 		if (!context.userId) {
@@ -148,9 +147,9 @@ export const Route = createFileRoute("/chat/")({
 		const settings = await context.queryClient.ensureQueryData(
 			convexQuery(api.userSettings.get, {}),
 		);
-		if (settings.workspacesMode === "workspaces") {
+		if (settings.workspacesMode !== "workspaces") {
 			throw redirect({
-				to: "/workspaces",
+				to: "/chat",
 			});
 		}
 	},
@@ -176,8 +175,6 @@ const EMPTY_STREAM_STATE: ConvoStreamState = {
 	model: null,
 };
 
-type SandboxSelection = "harness" | "none" | Id<"sandboxes">;
-
 function ChatPage() {
 	const navigate = useNavigate();
 	const { getToken } = useAuth();
@@ -189,15 +186,12 @@ function ChatPage() {
 	const { data: conversations } = useQuery(
 		convexQuery(api.conversations.list, {}),
 	);
-	const { data: sandboxes } = useQuery(convexQuery(api.sandboxes.list, {}));
 	const { data: userSettings } = useQuery(
 		convexQuery(api.userSettings.get, {}),
 	);
 
 	const [activeHarnessId, setActiveHarnessId] =
 		useState<Id<"harnesses"> | null>(null);
-	const [activeSandboxSelection, setActiveSandboxSelection] =
-		useState<SandboxSelection>("harness");
 	const [activeConvoId, setActiveConvoId] =
 		useState<Id<"conversations"> | null>(null);
 	// Session-only model override — does not persist to the harness
@@ -548,20 +542,6 @@ function ChatPage() {
 	}, [activeHarnessId, activeConvoId]);
 
 	useEffect(() => {
-		if (
-			activeSandboxSelection === "harness" ||
-			activeSandboxSelection === "none" ||
-			!sandboxes
-		) {
-			return;
-		}
-
-		if (!sandboxes.some((sandbox) => sandbox._id === activeSandboxSelection)) {
-			setActiveSandboxSelection("harness");
-		}
-	}, [activeSandboxSelection, sandboxes]);
-
-	useEffect(() => {
 		if (harnesses && harnesses.length === 0) {
 			navigate({ to: "/onboarding" });
 		}
@@ -607,53 +587,6 @@ function ChatPage() {
 	);
 
 	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
-	const selectedSandbox =
-		activeSandboxSelection !== "harness" && activeSandboxSelection !== "none"
-			? sandboxes?.find((sandbox) => sandbox._id === activeSandboxSelection)
-			: undefined;
-	const effectiveSandboxDaytonaId =
-		activeSandboxSelection === "none"
-			? null
-			: (selectedSandbox?.daytonaSandboxId ??
-				activeHarness?.daytonaSandboxId ??
-				null);
-	const effectiveSandboxEnabled =
-		activeSandboxSelection === "none"
-			? false
-			: Boolean(selectedSandbox) || (activeHarness?.sandboxEnabled ?? false);
-
-	const buildHarnessConfig = useCallback(() => {
-		if (!activeHarness) return null;
-
-		return {
-			model: sessionModel ?? activeHarness.model,
-			mcp_servers: activeHarness.mcpServers.map((s) => ({
-				name: s.name,
-				url: s.url,
-				auth_type: s.authType as "none" | "bearer" | "oauth" | "tiger_junction",
-				auth_token: s.authToken,
-			})),
-			skills: activeHarness.skills ?? [],
-			name: activeHarness.name,
-			harness_id: activeHarness._id,
-			system_prompt: activeHarness.systemPrompt ?? undefined,
-			sandbox_enabled: effectiveSandboxEnabled,
-			sandbox_id: effectiveSandboxDaytonaId ?? undefined,
-			sandbox_config: activeHarness.sandboxConfig
-				? {
-						persistent: activeHarness.sandboxConfig.persistent,
-						auto_start: activeHarness.sandboxConfig.autoStart,
-						default_language: activeHarness.sandboxConfig.defaultLanguage,
-						resource_tier: activeHarness.sandboxConfig.resourceTier,
-					}
-				: undefined,
-		};
-	}, [
-		activeHarness,
-		effectiveSandboxDaytonaId,
-		effectiveSandboxEnabled,
-		sessionModel,
-	]);
 
 	// Health-check MCP servers when harness changes
 	// biome-ignore lint/correctness/useExhaustiveDependencies: only re-run when harness ID changes
@@ -786,12 +719,36 @@ function ChatPage() {
 				{ role: "user", content: pending.content },
 			];
 
-			const harnessConfig = buildHarnessConfig();
-			if (!harnessConfig) return;
-
 			chatStream.stream({
 				messages: history,
-				harness: harnessConfig,
+				harness: {
+					model: sessionModel ?? activeHarness.model,
+					mcp_servers: activeHarness.mcpServers.map((s) => ({
+						name: s.name,
+						url: s.url,
+						auth_type: s.authType as
+							| "none"
+							| "bearer"
+							| "oauth"
+							| "tiger_junction",
+						auth_token: s.authToken,
+					})),
+					skills: activeHarness.skills ?? [],
+					name: activeHarness.name,
+					harness_id: activeHarness._id,
+					system_prompt: activeHarness.systemPrompt ?? undefined,
+
+					sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+					sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
+					sandbox_config: activeHarness.sandboxConfig
+						? {
+								persistent: activeHarness.sandboxConfig.persistent,
+								auto_start: activeHarness.sandboxConfig.autoStart,
+								default_language: activeHarness.sandboxConfig.defaultLanguage,
+								resource_tier: activeHarness.sandboxConfig.resourceTier,
+							}
+						: undefined,
+				},
 				conversation_id: convoId,
 			});
 		};
@@ -802,7 +759,7 @@ function ChatPage() {
 		activeHarness,
 		chatStream,
 		sendMessageFromQueue,
-		buildHarnessConfig,
+		sessionModel,
 	]);
 
 	const handleSelectConversation = useCallback(
@@ -851,8 +808,33 @@ function ChatPage() {
 
 			await removeMessage.mutateAsync({ id: messageId });
 
-			const harnessConfig = buildHarnessConfig();
-			if (!harnessConfig) return;
+			const harnessConfig = {
+				model: sessionModel ?? activeHarness.model,
+				mcp_servers: activeHarness.mcpServers.map((s) => ({
+					name: s.name,
+					url: s.url,
+					auth_type: s.authType as
+						| "none"
+						| "bearer"
+						| "oauth"
+						| "tiger_junction",
+					auth_token: s.authToken,
+				})),
+				skills: activeHarness.skills ?? [],
+				name: activeHarness.name,
+				harness_id: activeHarness._id,
+				system_prompt: activeHarness.systemPrompt ?? undefined,
+				sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+				sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
+				sandbox_config: activeHarness.sandboxConfig
+					? {
+							persistent: activeHarness.sandboxConfig.persistent,
+							auto_start: activeHarness.sandboxConfig.autoStart,
+							default_language: activeHarness.sandboxConfig.defaultLanguage,
+							resource_tier: activeHarness.sandboxConfig.resourceTier,
+						}
+					: undefined,
+			};
 
 			chatStream.stream({
 				messages: history,
@@ -860,13 +842,7 @@ function ChatPage() {
 				conversation_id: activeConvoId,
 			});
 		},
-		[
-			activeHarness,
-			activeConvoId,
-			chatStream,
-			removeMessage,
-			buildHarnessConfig,
-		],
+		[activeHarness, activeConvoId, chatStream, removeMessage, sessionModel],
 	);
 
 	const forkConversation = useMutation({
@@ -929,12 +905,24 @@ function ChatPage() {
 				}));
 				history.push({ role: "user", content: newContent });
 
-				const harnessConfig = buildHarnessConfig();
-				if (!harnessConfig) return;
-
 				chatStream.stream({
 					messages: history,
-					harness: harnessConfig,
+					harness: {
+						model: sessionModel ?? activeHarness.model,
+						mcp_servers: activeHarness.mcpServers.map((s) => ({
+							name: s.name,
+							url: s.url,
+							auth_type: s.authType as
+								| "none"
+								| "bearer"
+								| "oauth"
+								| "tiger_junction",
+							auth_token: s.authToken,
+						})),
+						skills: activeHarness.skills ?? [],
+						name: activeHarness.name,
+						system_prompt: activeHarness.systemPrompt ?? undefined,
+					},
 					conversation_id: newConvoId,
 				});
 
@@ -951,7 +939,7 @@ function ChatPage() {
 			editForkAndSend,
 			handleSelectConversation,
 			chatStream,
-			buildHarnessConfig,
+			sessionModel,
 		],
 	);
 
@@ -968,10 +956,11 @@ function ChatPage() {
 		? chatStream.streamingConvoIds.has(activeConvoId)
 		: false;
 
+	const sandboxEnabled = activeHarness?.sandboxEnabled ?? false;
+	const daytonaSandboxId = activeHarness?.daytonaSandboxId ?? null;
+
 	return (
-		<SandboxPanelProvider
-			sandboxId={effectiveSandboxEnabled ? effectiveSandboxDaytonaId : null}
-		>
+		<SandboxPanelProvider sandboxId={sandboxEnabled ? daytonaSandboxId : null}>
 			<div className="flex h-full overflow-hidden bg-background">
 				<AnimatePresence>
 					{sidebarOpen && (
@@ -1004,10 +993,6 @@ function ChatPage() {
 						harness={activeHarness}
 						harnesses={harnesses ?? []}
 						onSwitchHarness={setActiveHarnessId}
-						sandboxes={sandboxes ?? []}
-						activeSandboxSelection={activeSandboxSelection}
-						onSwitchSandbox={setActiveSandboxSelection}
-						effectiveSandboxEnabled={effectiveSandboxEnabled}
 						sidebarOpen={sidebarOpen}
 						onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
 						isStreaming={isActiveConvoStreaming}
@@ -1121,8 +1106,6 @@ function ChatPage() {
 							}
 						}}
 						onConvoCreated={handleSelectConversation}
-						sandboxEnabled={effectiveSandboxEnabled}
-						sandboxId={effectiveSandboxDaytonaId ?? undefined}
 						isStreaming={isActiveConvoStreaming}
 						onStream={chatStream.stream}
 						onInterrupt={handleInterrupt}
@@ -1138,7 +1121,7 @@ function ChatPage() {
 				</div>
 
 				<AnimatePresence>
-					{effectiveSandboxEnabled && <SandboxPanelToggle />}
+					{sandboxEnabled && <SandboxPanelToggle />}
 				</AnimatePresence>
 			</div>
 		</SandboxPanelProvider>
@@ -1265,7 +1248,7 @@ function ChatSidebar({
 				<Link to="/" className="flex items-center gap-2">
 					<HarnessMark size={18} className="text-foreground" />
 					<span className="text-sm font-semibold tracking-tight text-foreground">
-						Harness
+						WORKSPACES!!!
 					</span>
 				</Link>
 				<div className="flex items-center gap-1">
@@ -1534,17 +1517,6 @@ function ChatSidebar({
 			</div>
 			<Separator />
 			<div className="space-y-0.5 p-2">
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					asChild
-				>
-					<Link to="/sandboxes">
-						<Box size={12} />
-						Manage Sandboxes
-					</Link>
-				</Button>
 				<Button
 					variant="ghost"
 					size="sm"
@@ -1950,10 +1922,6 @@ function ChatHeader({
 	harness,
 	harnesses,
 	onSwitchHarness,
-	sandboxes,
-	activeSandboxSelection,
-	onSwitchSandbox,
-	effectiveSandboxEnabled,
 	sidebarOpen,
 	onToggleSidebar,
 	isStreaming,
@@ -1972,7 +1940,6 @@ function ChatHeader({
 		}>;
 		skills: SkillEntry[];
 		sandboxEnabled?: boolean;
-		daytonaSandboxId?: string;
 	};
 	harnesses: Array<{
 		_id: Id<"harnesses">;
@@ -1981,16 +1948,6 @@ function ChatHeader({
 		status: string;
 	}>;
 	onSwitchHarness: (id: Id<"harnesses">) => void;
-	sandboxes: Array<{
-		_id: Id<"sandboxes">;
-		name: string;
-		daytonaSandboxId: string;
-		status: string;
-		ephemeral: boolean;
-	}>;
-	activeSandboxSelection: SandboxSelection;
-	onSwitchSandbox: (selection: SandboxSelection) => void;
-	effectiveSandboxEnabled: boolean;
 	sidebarOpen: boolean;
 	onToggleSidebar: () => void;
 	isStreaming: boolean;
@@ -2061,131 +2018,9 @@ function ChatHeader({
 					<SkillsStatus skills={harness.skills} />
 				)}
 
-				<SandboxSelector
-					harness={harness}
-					sandboxes={sandboxes}
-					activeSandboxSelection={activeSandboxSelection}
-					onSwitchSandbox={onSwitchSandbox}
-					isStreaming={isStreaming}
-				/>
-
-				{effectiveSandboxEnabled && <SandboxBadge />}
+				{harness?.sandboxEnabled && <SandboxBadge />}
 			</div>
 		</header>
-	);
-}
-
-function SandboxSelector({
-	harness,
-	sandboxes,
-	activeSandboxSelection,
-	onSwitchSandbox,
-	isStreaming,
-}: {
-	harness?: {
-		name: string;
-		sandboxEnabled?: boolean;
-		daytonaSandboxId?: string;
-	};
-	sandboxes: Array<{
-		_id: Id<"sandboxes">;
-		name: string;
-		daytonaSandboxId: string;
-		status: string;
-		ephemeral: boolean;
-	}>;
-	activeSandboxSelection: SandboxSelection;
-	onSwitchSandbox: (selection: SandboxSelection) => void;
-	isStreaming: boolean;
-}) {
-	const selectedSandbox =
-		activeSandboxSelection !== "harness" && activeSandboxSelection !== "none"
-			? sandboxes.find((sandbox) => sandbox._id === activeSandboxSelection)
-			: undefined;
-	const defaultSandbox = harness?.daytonaSandboxId
-		? sandboxes.find(
-				(sandbox) => sandbox.daytonaSandboxId === harness.daytonaSandboxId,
-			)
-		: undefined;
-	const defaultSandboxName = harness?.sandboxEnabled
-		? (defaultSandbox?.name ??
-			harness.daytonaSandboxId ??
-			"Auto-provision on chat")
-		: "No sandbox";
-	const label =
-		activeSandboxSelection === "none"
-			? "No sandbox"
-			: (selectedSandbox?.name ?? `Default: ${defaultSandboxName}`);
-
-	return (
-		<DropdownMenu>
-			<DropdownMenuTrigger asChild>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="gap-1.5"
-					disabled={isStreaming}
-				>
-					<Box size={12} />
-					<span className="max-w-[140px] truncate text-xs font-medium">
-						{label}
-					</span>
-					<ChevronDown size={12} className="text-muted-foreground" />
-				</Button>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent align="start" className="min-w-56">
-				<DropdownMenuItem onClick={() => onSwitchSandbox("harness")}>
-					{activeSandboxSelection === "harness" ? (
-						<Check size={12} className="shrink-0" />
-					) : (
-						<span className="w-3 shrink-0" />
-					)}
-					<div className="min-w-0 flex-1">
-						<p className="truncate text-xs">
-							Use default: {defaultSandboxName}
-						</p>
-						<p className="truncate text-[10px] text-muted-foreground">
-							{harness?.sandboxEnabled
-								? (harness.daytonaSandboxId ?? "Auto-provision on chat")
-								: "Sandbox disabled on this harness"}
-						</p>
-					</div>
-				</DropdownMenuItem>
-				<DropdownMenuItem onClick={() => onSwitchSandbox("none")}>
-					{activeSandboxSelection === "none" ? (
-						<Check size={12} className="shrink-0" />
-					) : (
-						<span className="w-3 shrink-0" />
-					)}
-					<div className="min-w-0 flex-1">
-						<p className="truncate text-xs">No sandbox</p>
-						<p className="truncate text-[10px] text-muted-foreground">
-							Chat without sandbox tools
-						</p>
-					</div>
-				</DropdownMenuItem>
-				{sandboxes.length > 0 && <DropdownMenuSeparator />}
-				{sandboxes.map((sandbox) => (
-					<DropdownMenuItem
-						key={sandbox._id}
-						onClick={() => onSwitchSandbox(sandbox._id)}
-					>
-						{activeSandboxSelection === sandbox._id ? (
-							<Check size={12} className="shrink-0" />
-						) : (
-							<span className="w-3 shrink-0" />
-						)}
-						<div className="min-w-0 flex-1">
-							<p className="truncate text-xs">{sandbox.name}</p>
-							<p className="truncate text-[10px] text-muted-foreground">
-								{sandbox.status}
-								{sandbox.ephemeral ? " ephemeral" : " persistent"}
-							</p>
-						</div>
-					</DropdownMenuItem>
-				))}
-			</DropdownMenuContent>
-		</DropdownMenu>
 	);
 }
 
@@ -2901,7 +2736,7 @@ function ChatMessages({
 											if (part.type === "reasoning" && part.content) {
 												return (
 													<ThinkingBlock
-														key={`sp-${part.type}-${idx}`}
+														key={"sp-${part.type}-${idx}"}
 														content={part.content}
 														isStreaming={isLast && isActivelyStreaming}
 													/>
@@ -2910,7 +2745,7 @@ function ChatMessages({
 											if (part.type === "text" && part.content) {
 												return (
 													<MarkdownMessage
-														key={`sp-${part.type}-${idx}`}
+														key={"sp-${part.type}-${idx}"}
 														content={part.content}
 													/>
 												);
@@ -2918,7 +2753,7 @@ function ChatMessages({
 											if (part.type === "tool_call" && part.tool) {
 												return (
 													<ToolCallBlock
-														key={part.call_id ?? `sp-tc-${idx}`}
+														key={part.call_id ?? "sp-tc-${idx}"}
 														tool={part.tool}
 														arguments={part.arguments ?? {}}
 														result={part.result}
@@ -3243,8 +3078,6 @@ function ChatInput({
 	modelSelectorMode = "session",
 	onSessionModelChange,
 	onConvoCreated,
-	sandboxEnabled,
-	sandboxId,
 	isStreaming,
 	onStream,
 	onInterrupt,
@@ -3281,8 +3114,6 @@ function ChatInput({
 		};
 	};
 	onConvoCreated: (id: Id<"conversations">) => void;
-	sandboxEnabled: boolean;
-	sandboxId?: string;
 	isStreaming: boolean;
 	onStream: (body: {
 		messages: Array<{
@@ -3299,16 +3130,7 @@ function ChatInput({
 			}>;
 			skills: SkillEntry[];
 			name: string;
-			harness_id?: string;
 			system_prompt?: string;
-			sandbox_enabled?: boolean;
-			sandbox_id?: string;
-			sandbox_config?: {
-				persistent: boolean;
-				auto_start: boolean;
-				default_language: string;
-				resource_tier: string;
-			};
 		};
 		conversation_id: string;
 	}) => Promise<void>;
@@ -3463,8 +3285,8 @@ function ChatInput({
 			return;
 		}
 
-		let resolvedSandboxId = sandboxId;
-		if (sandboxEnabled && !resolvedSandboxId) {
+		let resolvedSandboxId = activeHarness.daytonaSandboxId;
+		if ((activeHarness.sandboxEnabled ?? false) && !resolvedSandboxId) {
 			setIsPreparingSandbox(true);
 			try {
 				const config = activeHarness.sandboxConfig;
@@ -3505,8 +3327,8 @@ function ChatInput({
 			name: activeHarness.name,
 			harness_id: activeHarness._id,
 			system_prompt: activeHarness.systemPrompt ?? undefined,
-			sandbox_enabled: sandboxEnabled,
-			sandbox_id: resolvedSandboxId,
+			sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+			sandbox_id: resolvedSandboxId ?? undefined,
 			sandbox_config: activeHarness.sandboxConfig
 				? {
 						persistent: activeHarness.sandboxConfig.persistent,
@@ -3687,7 +3509,6 @@ function ChatInput({
 					</div>
 				</div>
 			)}
-
 			{/* Hidden file input */}
 			<input
 				ref={fileInputRef}
@@ -3700,7 +3521,6 @@ function ChatInput({
 					e.target.value = "";
 				}}
 			/>
-
 			<div className="mx-auto max-w-xl">
 				{/* Queued messages as chips above the input */}
 				<AnimatePresence>

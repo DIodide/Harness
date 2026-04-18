@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../components/princeton-connect-row";
@@ -58,6 +59,7 @@ import { env } from "../env";
 import type { McpServerEntry } from "../lib/mcp";
 import { PRESET_MCPS, presetIdsToServerEntries } from "../lib/mcp";
 import { MODELS } from "../lib/models";
+import { createSandboxApi } from "../lib/sandbox-api";
 import type { SkillEntry } from "../lib/skills";
 import { RECOMMENDED_SKILLS } from "../lib/skills";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "../lib/system-prompt";
@@ -138,9 +140,40 @@ function OnboardingPage() {
 	});
 	const ensureSkillDetailsFn = useConvexAction(api.skills.ensureSkillDetails);
 	const { getToken } = useAuth();
+	const createHarnessFn = useConvexMutation(api.harnesses.create);
+	const sandboxApi = useMemo(() => createSandboxApi(getToken), [getToken]);
 
 	const createHarness = useMutation({
-		mutationFn: useConvexMutation(api.harnesses.create),
+		mutationFn: async (args: {
+			name: string;
+			model: string;
+			status: "started" | "stopped" | "draft";
+			mcpServers: McpServerEntry[];
+			skills: SkillEntry[];
+			systemPrompt?: string;
+			sandboxEnabled?: boolean;
+			sandboxConfig?: typeof sandboxConfig;
+		}) => {
+			const harnessId = await createHarnessFn(args);
+
+			if (args.status === "started" && args.sandboxEnabled) {
+				try {
+					await sandboxApi.createSandbox({
+						harnessId: harnessId as string,
+						name: `${args.name} sandbox`,
+						language: args.sandboxConfig?.defaultLanguage ?? "python",
+						resourceTier: args.sandboxConfig?.resourceTier ?? "basic",
+						ephemeral: !(args.sandboxConfig?.persistent ?? false),
+					});
+				} catch (error) {
+					toast.error(
+						error instanceof Error ? error.message : "Failed to create sandbox",
+					);
+				}
+			}
+
+			return harnessId;
+		},
 		onSuccess: (harnessId) => {
 			const id = harnessId as Id<"harnesses">;
 			navigate({ to: "/chat", search: { harnessId: id as string } });

@@ -11,6 +11,7 @@ import logging
 import mimetypes
 import shlex
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from app.dependencies import get_current_user
@@ -24,8 +25,12 @@ from app.models import (
     GitAddRequest,
     GitCommitRequest,
 )
-from app.services.convex import verify_sandbox_owner
-from app.services.daytona_service import get_daytona_service, DaytonaService
+from app.services.convex import create_sandbox_record, verify_sandbox_owner
+from app.services.daytona_service import (
+    RESOURCE_TIERS,
+    DaytonaService,
+    get_daytona_service,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -61,11 +66,28 @@ async def create_sandbox(
             ephemeral=body.ephemeral,
             git_repo=body.git_repo,
         )
+        tier = RESOURCE_TIERS.get(body.resource_tier, RESOURCE_TIERS["basic"])
+        async with httpx.AsyncClient() as http_client:
+            await create_sandbox_record(
+                http_client,
+                user_id=user_id,
+                harness_id=body.harness_id,
+                daytona_sandbox_id=sandbox.id,
+                name=body.name,
+                language=body.language,
+                ephemeral=body.ephemeral,
+                resources={
+                    "cpu": tier["cpu"],
+                    "memoryGB": tier["memory"],
+                    "diskGB": tier["disk"],
+                },
+            )
         return {
             "id": sandbox.id,
             "status": "running",
             "language": body.language,
             "resource_tier": body.resource_tier,
+            "ephemeral": body.ephemeral,
         }
     except Exception as e:
         logger.error("Failed to create sandbox: %s", e)

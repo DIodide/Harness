@@ -206,6 +206,13 @@ export default defineSchema({
 		modelSelectorMode: v.optional(
 			v.union(v.literal("session"), v.literal("harness")),
 		),
+		// Control whether or not we are in basic models or workspaces modes
+		workspacesMode: v.optional(
+			v.union(
+				v.literal("basic"),
+				v.literal("workspaces")
+			)
+		),
 	}).index("by_user", ["userId"]),
 
 	usageBudgets: defineTable({
