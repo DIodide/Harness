@@ -118,7 +118,6 @@ import {
 	modelSupportsMedia,
 } from "../../lib/models";
 import { buildMultimodalContent } from "../../lib/multimodal";
-import { createSandboxApi } from "../../lib/sandbox-api";
 import {
 	SandboxPanelProvider,
 	useSandboxPanel,
@@ -738,7 +737,7 @@ function ChatPage() {
 					harness_id: activeHarness._id,
 					system_prompt: activeHarness.systemPrompt ?? undefined,
 
-					sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+					sandbox_enabled: Boolean(activeHarness.daytonaSandboxId),
 					sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
 					sandbox_config: activeHarness.sandboxConfig
 						? {
@@ -824,7 +823,7 @@ function ChatPage() {
 				name: activeHarness.name,
 				harness_id: activeHarness._id,
 				system_prompt: activeHarness.systemPrompt ?? undefined,
-				sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+				sandbox_enabled: Boolean(activeHarness.daytonaSandboxId),
 				sandbox_id: activeHarness.daytonaSandboxId ?? undefined,
 				sandbox_config: activeHarness.sandboxConfig
 					? {
@@ -956,8 +955,8 @@ function ChatPage() {
 		? chatStream.streamingConvoIds.has(activeConvoId)
 		: false;
 
-	const sandboxEnabled = activeHarness?.sandboxEnabled ?? false;
 	const daytonaSandboxId = activeHarness?.daytonaSandboxId ?? null;
+	const sandboxEnabled = Boolean(daytonaSandboxId);
 
 	return (
 		<SandboxPanelProvider sandboxId={sandboxEnabled ? daytonaSandboxId : null}>
@@ -2736,7 +2735,7 @@ function ChatMessages({
 											if (part.type === "reasoning" && part.content) {
 												return (
 													<ThinkingBlock
-														key={"sp-${part.type}-${idx}"}
+														key={`sp-${part.type}-${idx}`}
 														content={part.content}
 														isStreaming={isLast && isActivelyStreaming}
 													/>
@@ -2745,7 +2744,7 @@ function ChatMessages({
 											if (part.type === "text" && part.content) {
 												return (
 													<MarkdownMessage
-														key={"sp-${part.type}-${idx}"}
+														key={`sp-${part.type}-${idx}`}
 														content={part.content}
 													/>
 												);
@@ -2753,7 +2752,7 @@ function ChatMessages({
 											if (part.type === "tool_call" && part.tool) {
 												return (
 													<ToolCallBlock
-														key={part.call_id ?? "sp-tc-${idx}"}
+														key={part.call_id ?? `sp-tc-${idx}`}
 														tool={part.tool}
 														arguments={part.arguments ?? {}}
 														result={part.result}
@@ -3156,13 +3155,10 @@ function ChatInput({
 	onPendingPromptConsumed?: () => void;
 	budgetExceeded?: boolean;
 }) {
-	const { getToken } = useAuth();
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [isDragOver, setIsDragOver] = useState(false);
-	const [isPreparingSandbox, setIsPreparingSandbox] = useState(false);
-	const sandboxApi = useMemo(() => createSandboxApi(getToken), [getToken]);
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
@@ -3275,7 +3271,7 @@ function ChatInput({
 
 	const handleSend = async () => {
 		const content = text.trim();
-		if (!content || !activeHarness || budgetExceeded || isPreparingSandbox) {
+		if (!content || !activeHarness || budgetExceeded) {
 			return;
 		}
 
@@ -3285,29 +3281,7 @@ function ChatInput({
 			return;
 		}
 
-		let resolvedSandboxId = activeHarness.daytonaSandboxId;
-		if ((activeHarness.sandboxEnabled ?? false) && !resolvedSandboxId) {
-			setIsPreparingSandbox(true);
-			try {
-				const config = activeHarness.sandboxConfig;
-				const sandbox = await sandboxApi.createSandbox({
-					harnessId: activeHarness._id,
-					name: `${activeHarness.name} sandbox`,
-					language: config?.defaultLanguage ?? "python",
-					resourceTier: config?.resourceTier ?? "basic",
-					ephemeral: !(config?.persistent ?? false),
-					gitRepo: config?.gitRepo,
-				});
-				resolvedSandboxId = sandbox.id;
-			} catch (error) {
-				toast.error(
-					error instanceof Error ? error.message : "Failed to create sandbox",
-				);
-				return;
-			} finally {
-				setIsPreparingSandbox(false);
-			}
-		}
+		const resolvedSandboxId = activeHarness.daytonaSandboxId;
 
 		setText("");
 		setHistoryIndex(-1);
@@ -3327,7 +3301,7 @@ function ChatInput({
 			name: activeHarness.name,
 			harness_id: activeHarness._id,
 			system_prompt: activeHarness.systemPrompt ?? undefined,
-			sandbox_enabled: activeHarness.sandboxEnabled ?? false,
+			sandbox_enabled: Boolean(resolvedSandboxId),
 			sandbox_id: resolvedSandboxId ?? undefined,
 			sandbox_config: activeHarness.sandboxConfig
 				? {
@@ -3725,19 +3699,12 @@ function ChatInput({
 									(budgetExceeded ||
 										!text.trim() ||
 										hasUploading ||
-										isPreparingSandbox ||
 										sendMessage.isPending ||
 										createConvo.isPending)
 								}
 								variant={showStopButton ? "destructive" : "default"}
 							>
-								{isPreparingSandbox ? (
-									<Loader2 size={12} className="animate-spin" />
-								) : showStopButton ? (
-									<Square size={10} />
-								) : (
-									<ArrowUp size={14} />
-								)}
+								{showStopButton ? <Square size={10} /> : <ArrowUp size={14} />}
 							</Button>
 						</TooltipTrigger>
 						<TooltipContent>

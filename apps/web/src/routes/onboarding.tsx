@@ -5,7 +5,10 @@ import {
 	useConvexMutation,
 } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
-import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
+import type {
+	Doc,
+	Id,
+} from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
 	createFileRoute,
@@ -19,13 +22,10 @@ import {
 	Box,
 	Check,
 	ChevronDown,
-	Cpu,
 	Eye,
 	EyeOff,
-	HardDrive,
 	Layers,
 	Link2,
-	Play,
 	Plus,
 	Server,
 	Shield,
@@ -36,7 +36,7 @@ import {
 	Zap,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
@@ -59,7 +59,6 @@ import { env } from "../env";
 import type { McpServerEntry } from "../lib/mcp";
 import { PRESET_MCPS, presetIdsToServerEntries } from "../lib/mcp";
 import { MODELS } from "../lib/models";
-import { createSandboxApi } from "../lib/sandbox-api";
 import type { SkillEntry } from "../lib/skills";
 import { RECOMMENDED_SKILLS } from "../lib/skills";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "../lib/system-prompt";
@@ -84,6 +83,49 @@ const BASE_STEPS = [
 
 const CONNECT_STEP = { key: "connect", label: "Connect", icon: Link2 };
 
+type SandboxConfig = {
+	persistent: boolean;
+	autoStart: boolean;
+	defaultLanguage: string;
+	resourceTier: "basic" | "standard" | "performance";
+};
+
+type Sandbox = Doc<"sandboxes">;
+
+function getDefaultSandboxSelection(sandbox: Sandbox | undefined) {
+	if (!sandbox) return undefined;
+	return {
+		sandboxId: sandbox._id,
+		daytonaSandboxId: sandbox.daytonaSandboxId,
+		config: {
+			persistent: !sandbox.ephemeral,
+			autoStart: true,
+			defaultLanguage: sandbox.language ?? "python",
+			resourceTier: getResourceTierFromSandbox(sandbox),
+		} satisfies SandboxConfig,
+	};
+}
+
+function getResourceTierFromSandbox(
+	sandbox: Sandbox,
+): SandboxConfig["resourceTier"] {
+	if (sandbox.resources.cpu >= 4 || sandbox.resources.memoryGB >= 8) {
+		return "performance";
+	}
+	if (sandbox.resources.cpu >= 2 || sandbox.resources.memoryGB >= 4) {
+		return "standard";
+	}
+	return "basic";
+}
+
+function formatSandboxMeta(sandbox: Sandbox) {
+	const type = sandbox.ephemeral ? "Ephemeral" : "Persistent";
+	const language = sandbox.language
+		? sandbox.language.charAt(0).toUpperCase() + sandbox.language.slice(1)
+		: "Default";
+	return `${type} - ${language} - ${sandbox.resources.cpu} CPU - ${sandbox.resources.memoryGB} GB RAM`;
+}
+
 function OnboardingPage() {
 	const navigate = useNavigate();
 
@@ -94,12 +136,8 @@ function OnboardingPage() {
 		[],
 	);
 	const [sandboxEnabled, setSandboxEnabled] = useState(false);
-	const [sandboxConfig, setSandboxConfig] = useState({
-		persistent: false,
-		autoStart: true,
-		defaultLanguage: "python",
-		resourceTier: "basic" as "basic" | "standard" | "performance",
-	});
+	const [selectedSandboxId, setSelectedSandboxId] =
+		useState<Id<"sandboxes"> | null>(null);
 	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>([]);
 	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>([]);
 
@@ -135,13 +173,23 @@ function OnboardingPage() {
 	const safeIndex = Math.min(stepIndex, steps.length - 1);
 	const currentStep = steps[safeIndex]?.key ?? "name";
 
-	const updateHarnessMut = useMutation({
-		mutationFn: useConvexMutation(api.harnesses.update),
-	});
+	const updateHarnessFn = useConvexMutation(api.harnesses.update);
+	const updateHarnessMut = useMutation({ mutationFn: updateHarnessFn });
 	const ensureSkillDetailsFn = useConvexAction(api.skills.ensureSkillDetails);
 	const { getToken } = useAuth();
 	const createHarnessFn = useConvexMutation(api.harnesses.create);
-	const sandboxApi = useMemo(() => createSandboxApi(getToken), [getToken]);
+	const { data: sandboxes, isLoading: sandboxesLoading } = useQuery(
+		convexQuery(api.sandboxes.list, {}),
+	);
+	const selectedSandbox = useMemo(
+		() => sandboxes?.find((sandbox) => sandbox._id === selectedSandboxId),
+		[sandboxes, selectedSandboxId],
+	);
+
+	useEffect(() => {
+		if (selectedSandboxId || !sandboxes?.length) return;
+		setSelectedSandboxId(sandboxes[0]._id);
+	}, [sandboxes, selectedSandboxId]);
 
 	const createHarness = useMutation({
 		mutationFn: async (args: {
@@ -152,24 +200,24 @@ function OnboardingPage() {
 			skills: SkillEntry[];
 			systemPrompt?: string;
 			sandboxEnabled?: boolean;
-			sandboxConfig?: typeof sandboxConfig;
+			sandboxConfig?: SandboxConfig;
+			defaultSandbox?: {
+				sandboxId: Id<"sandboxes">;
+				daytonaSandboxId: string;
+				config: SandboxConfig;
+			};
 		}) => {
-			const harnessId = await createHarnessFn(args);
+			const { defaultSandbox, ...createArgs } = args;
+			const harnessId = await createHarnessFn(createArgs);
 
-			if (args.status === "started" && args.sandboxEnabled) {
-				try {
-					await sandboxApi.createSandbox({
-						harnessId: harnessId as string,
-						name: `${args.name} sandbox`,
-						language: args.sandboxConfig?.defaultLanguage ?? "python",
-						resourceTier: args.sandboxConfig?.resourceTier ?? "basic",
-						ephemeral: !(args.sandboxConfig?.persistent ?? false),
-					});
-				} catch (error) {
-					toast.error(
-						error instanceof Error ? error.message : "Failed to create sandbox",
-					);
-				}
+			if (args.sandboxEnabled && defaultSandbox) {
+				await updateHarnessFn({
+					id: harnessId as Id<"harnesses">,
+					sandboxId: defaultSandbox.sandboxId,
+					daytonaSandboxId: defaultSandbox.daytonaSandboxId,
+					sandboxConfig: defaultSandbox.config,
+				});
+				return harnessId;
 			}
 
 			return harnessId;
@@ -228,6 +276,9 @@ function OnboardingPage() {
 	const canProceed = () => {
 		if (currentStep === "name")
 			return name.trim().length > 0 && model.length > 0;
+		if (currentStep === "sandbox" && sandboxEnabled) {
+			return !!selectedSandbox;
+		}
 		return true;
 	};
 
@@ -240,6 +291,11 @@ function OnboardingPage() {
 	};
 
 	const handleCreate = () => {
+		const defaultSandbox = getDefaultSandboxSelection(selectedSandbox);
+		if (sandboxEnabled && !defaultSandbox) {
+			toast.error("Select an existing sandbox");
+			return;
+		}
 		createHarness.mutate({
 			name: name.trim(),
 			model,
@@ -248,11 +304,17 @@ function OnboardingPage() {
 			skills: selectedSkills,
 			systemPrompt: systemPrompt.trim() || undefined,
 			sandboxEnabled: sandboxEnabled || undefined,
-			sandboxConfig: sandboxEnabled ? sandboxConfig : undefined,
+			sandboxConfig: sandboxEnabled ? defaultSandbox?.config : undefined,
+			defaultSandbox: sandboxEnabled ? defaultSandbox : undefined,
 		});
 	};
 
 	const handleSaveDraft = () => {
+		const defaultSandbox = getDefaultSandboxSelection(selectedSandbox);
+		if (sandboxEnabled && !defaultSandbox) {
+			toast.error("Select an existing sandbox");
+			return;
+		}
 		createHarness.mutate({
 			name: name.trim() || "Untitled Harness",
 			model: model || "gpt-4o",
@@ -261,7 +323,8 @@ function OnboardingPage() {
 			skills: selectedSkills,
 			systemPrompt: systemPrompt.trim() || undefined,
 			sandboxEnabled: sandboxEnabled || undefined,
-			sandboxConfig: sandboxEnabled ? sandboxConfig : undefined,
+			sandboxConfig: sandboxEnabled ? defaultSandbox?.config : undefined,
+			defaultSandbox: sandboxEnabled ? defaultSandbox : undefined,
 		});
 	};
 
@@ -386,8 +449,10 @@ function OnboardingPage() {
 								<StepSandbox
 									enabled={sandboxEnabled}
 									setEnabled={setSandboxEnabled}
-									config={sandboxConfig}
-									setConfig={setSandboxConfig}
+									sandboxes={sandboxes ?? []}
+									sandboxesLoading={sandboxesLoading}
+									selectedSandboxId={selectedSandboxId}
+									setSelectedSandboxId={setSelectedSandboxId}
 								/>
 							)}
 							{currentStep === "skills" && (
@@ -948,28 +1013,22 @@ function StepConnect({ servers }: { servers: McpServerEntry[] }) {
 function StepSandbox({
 	enabled,
 	setEnabled,
-	config,
-	setConfig,
+	sandboxes,
+	sandboxesLoading,
+	selectedSandboxId,
+	setSelectedSandboxId,
 }: {
 	enabled: boolean;
 	setEnabled: (v: boolean) => void;
-	config: {
-		persistent: boolean;
-		autoStart: boolean;
-		defaultLanguage: string;
-		resourceTier: "basic" | "standard" | "performance";
-	};
-	setConfig: (v: {
-		persistent: boolean;
-		autoStart: boolean;
-		defaultLanguage: string;
-		resourceTier: "basic" | "standard" | "performance";
-	}) => void;
+	sandboxes: Sandbox[];
+	sandboxesLoading: boolean;
+	selectedSandboxId: Id<"sandboxes"> | null;
+	setSelectedSandboxId: (v: Id<"sandboxes"> | null) => void;
 }) {
 	return (
 		<div className="space-y-4">
 			<p className="text-xs text-muted-foreground">
-				Give your harness an isolated sandbox environment for code execution,
+				Choose the default sandbox this harness should use for code execution,
 				file management, terminal commands, and git operations.
 			</p>
 
@@ -985,10 +1044,10 @@ function StepSandbox({
 				>
 					<div className="flex-1">
 						<p className="text-xs font-medium text-foreground">
-							Enable sandbox
+							Enable default sandbox
 						</p>
 						<p className="text-[11px] text-muted-foreground">
-							A sandbox will be auto-provisioned when you start chatting
+							Attach an existing sandbox to this harness
 						</p>
 					</div>
 					<Box size={14} className="shrink-0 text-muted-foreground" />
@@ -1002,110 +1061,53 @@ function StepSandbox({
 					exit={{ opacity: 0, height: 0 }}
 					className="space-y-4"
 				>
-					{/* Sandbox type */}
-					<div>
-						<span className="mb-1.5 block text-xs font-medium text-foreground">
-							Sandbox Type
+					<div className="space-y-2">
+						<span className="block text-xs font-medium text-foreground">
+							Select Sandbox
 						</span>
-						<div className="grid gap-2 sm:grid-cols-2">
-							<button
-								type="button"
-								onClick={() => setConfig({ ...config, persistent: false })}
-								className={`flex items-start gap-2.5 border px-3 py-2.5 text-left transition-colors ${
-									!config.persistent
-										? "border-foreground bg-foreground/5"
-										: "border-border hover:bg-muted/30"
-								}`}
+						{sandboxesLoading ? (
+							<p className="text-[11px] text-muted-foreground">
+								Loading sandboxes...
+							</p>
+						) : sandboxes.length > 0 ? (
+							<Select
+								value={selectedSandboxId ?? undefined}
+								onValueChange={(value) =>
+									setSelectedSandboxId(value as Id<"sandboxes">)
+								}
 							>
-								<Play size={12} className="mt-0.5 shrink-0" />
-								<div>
-									<p className="text-xs font-medium">Ephemeral</p>
-									<p className="text-[11px] text-muted-foreground">
-										Created per conversation, auto-deleted when done
-									</p>
-								</div>
-							</button>
-							<button
-								type="button"
-								onClick={() => setConfig({ ...config, persistent: true })}
-								className={`flex items-start gap-2.5 border px-3 py-2.5 text-left transition-colors ${
-									config.persistent
-										? "border-foreground bg-foreground/5"
-										: "border-border hover:bg-muted/30"
-								}`}
-							>
-								<HardDrive size={12} className="mt-0.5 shrink-0" />
-								<div>
-									<p className="text-xs font-medium">Persistent</p>
-									<p className="text-[11px] text-muted-foreground">
-										Maintains state across conversations
-									</p>
-								</div>
-							</button>
-						</div>
-					</div>
-
-					{/* Resource tier */}
-					<div>
-						<span className="mb-1.5 block text-xs font-medium text-foreground">
-							Resource Tier
-						</span>
-						<Select
-							value={config.resourceTier}
-							onValueChange={(v) =>
-								setConfig({
-									...config,
-									resourceTier: v as "basic" | "standard" | "performance",
-								})
-							}
-						>
-							<SelectTrigger className="max-w-sm text-xs">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="basic">
-									<Cpu size={10} />
-									Basic — 1 CPU, 1 GB RAM, 3 GB Disk
-								</SelectItem>
-								<SelectItem value="standard">
-									<Cpu size={10} />
-									Standard — 2 CPU, 4 GB RAM, 8 GB Disk
-								</SelectItem>
-								<SelectItem value="performance">
-									<Cpu size={10} />
-									Performance — 4 CPU, 8 GB RAM, 10 GB Disk
-								</SelectItem>
-							</SelectContent>
-						</Select>
-					</div>
-
-					{/* Default language */}
-					<div>
-						<span className="mb-1.5 block text-xs font-medium text-foreground">
-							Default Language
-						</span>
-						<Select
-							value={config.defaultLanguage}
-							onValueChange={(v) =>
-								setConfig({ ...config, defaultLanguage: v })
-							}
-						>
-							<SelectTrigger className="max-w-sm text-xs">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="python">Python</SelectItem>
-								<SelectItem value="javascript">JavaScript</SelectItem>
-								<SelectItem value="typescript">TypeScript</SelectItem>
-							</SelectContent>
-						</Select>
+								<SelectTrigger className="w-full max-w-lg text-xs">
+									<SelectValue placeholder="Choose a sandbox" />
+								</SelectTrigger>
+								<SelectContent>
+									{sandboxes.map((sandbox) => (
+										<SelectItem key={sandbox._id} value={sandbox._id}>
+											<span className="truncate">{sandbox.name}</span>
+											<span className="text-[10px] text-muted-foreground">
+												{formatSandboxMeta(sandbox)}
+											</span>
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						) : (
+							<div className="border border-dashed border-border px-3 py-2.5">
+								<p className="text-xs font-medium text-foreground">
+									No existing sandboxes
+								</p>
+								<p className="mt-1 text-[11px] text-muted-foreground">
+									Create a sandbox from the Sandboxes page, then return here to
+									attach it.
+								</p>
+							</div>
+						)}
 					</div>
 				</motion.div>
 			)}
 
 			{!enabled && (
 				<p className="text-center text-[11px] text-muted-foreground/60">
-					You can enable a sandbox later from the harness settings.
+					You can set a default sandbox later from the harness settings.
 				</p>
 			)}
 		</div>

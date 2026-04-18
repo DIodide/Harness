@@ -119,7 +119,6 @@ import {
 	modelSupportsMedia,
 } from "../../lib/models";
 import { buildMultimodalContent } from "../../lib/multimodal";
-import { createSandboxApi } from "../../lib/sandbox-api";
 import {
 	SandboxPanelProvider,
 	useSandboxPanel,
@@ -620,7 +619,9 @@ function ChatPage() {
 	const effectiveSandboxEnabled =
 		activeSandboxSelection === "none"
 			? false
-			: Boolean(selectedSandbox) || (activeHarness?.sandboxEnabled ?? false);
+			: Boolean(
+					selectedSandbox?.daytonaSandboxId ?? activeHarness?.daytonaSandboxId,
+				);
 
 	const buildHarnessConfig = useCallback(() => {
 		if (!activeHarness) return null;
@@ -2107,11 +2108,8 @@ function SandboxSelector({
 				(sandbox) => sandbox.daytonaSandboxId === harness.daytonaSandboxId,
 			)
 		: undefined;
-	const defaultSandboxName = harness?.sandboxEnabled
-		? (defaultSandbox?.name ??
-			harness.daytonaSandboxId ??
-			"Auto-provision on chat")
-		: "No sandbox";
+	const defaultSandboxName =
+		defaultSandbox?.name ?? harness?.daytonaSandboxId ?? "None";
 	const label =
 		activeSandboxSelection === "none"
 			? "No sandbox"
@@ -2145,9 +2143,9 @@ function SandboxSelector({
 							Use default: {defaultSandboxName}
 						</p>
 						<p className="truncate text-[10px] text-muted-foreground">
-							{harness?.sandboxEnabled
-								? (harness.daytonaSandboxId ?? "Auto-provision on chat")
-								: "Sandbox disabled on this harness"}
+							{harness?.daytonaSandboxId
+								? harness.daytonaSandboxId
+								: "No default sandbox"}
 						</p>
 					</div>
 				</DropdownMenuItem>
@@ -3334,13 +3332,10 @@ function ChatInput({
 	onPendingPromptConsumed?: () => void;
 	budgetExceeded?: boolean;
 }) {
-	const { getToken } = useAuth();
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [isDragOver, setIsDragOver] = useState(false);
-	const [isPreparingSandbox, setIsPreparingSandbox] = useState(false);
-	const sandboxApi = useMemo(() => createSandboxApi(getToken), [getToken]);
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
@@ -3453,7 +3448,7 @@ function ChatInput({
 
 	const handleSend = async () => {
 		const content = text.trim();
-		if (!content || !activeHarness || budgetExceeded || isPreparingSandbox) {
+		if (!content || !activeHarness || budgetExceeded) {
 			return;
 		}
 
@@ -3463,29 +3458,7 @@ function ChatInput({
 			return;
 		}
 
-		let resolvedSandboxId = sandboxId;
-		if (sandboxEnabled && !resolvedSandboxId) {
-			setIsPreparingSandbox(true);
-			try {
-				const config = activeHarness.sandboxConfig;
-				const sandbox = await sandboxApi.createSandbox({
-					harnessId: activeHarness._id,
-					name: `${activeHarness.name} sandbox`,
-					language: config?.defaultLanguage ?? "python",
-					resourceTier: config?.resourceTier ?? "basic",
-					ephemeral: !(config?.persistent ?? false),
-					gitRepo: config?.gitRepo,
-				});
-				resolvedSandboxId = sandbox.id;
-			} catch (error) {
-				toast.error(
-					error instanceof Error ? error.message : "Failed to create sandbox",
-				);
-				return;
-			} finally {
-				setIsPreparingSandbox(false);
-			}
-		}
+		const resolvedSandboxId = sandboxEnabled ? sandboxId : undefined;
 
 		setText("");
 		setHistoryIndex(-1);
@@ -3505,7 +3478,7 @@ function ChatInput({
 			name: activeHarness.name,
 			harness_id: activeHarness._id,
 			system_prompt: activeHarness.systemPrompt ?? undefined,
-			sandbox_enabled: sandboxEnabled,
+			sandbox_enabled: Boolean(resolvedSandboxId),
 			sandbox_id: resolvedSandboxId,
 			sandbox_config: activeHarness.sandboxConfig
 				? {
@@ -3905,19 +3878,12 @@ function ChatInput({
 									(budgetExceeded ||
 										!text.trim() ||
 										hasUploading ||
-										isPreparingSandbox ||
 										sendMessage.isPending ||
 										createConvo.isPending)
 								}
 								variant={showStopButton ? "destructive" : "default"}
 							>
-								{isPreparingSandbox ? (
-									<Loader2 size={12} className="animate-spin" />
-								) : showStopButton ? (
-									<Square size={10} />
-								) : (
-									<ArrowUp size={14} />
-								)}
+								{showStopButton ? <Square size={10} /> : <ArrowUp size={14} />}
 							</Button>
 						</TooltipTrigger>
 						<TooltipContent>

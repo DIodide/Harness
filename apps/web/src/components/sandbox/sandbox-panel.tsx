@@ -89,6 +89,7 @@ export function SandboxPanel() {
 	const {
 		activeTab,
 		setActiveTab,
+		reloadKey,
 		activeFile,
 		openFiles,
 		togglePanel,
@@ -181,7 +182,10 @@ export function SandboxPanel() {
 			</div>
 
 			{/* Content */}
-			<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+			<div
+				key={`${panel.sandboxId ?? "none"}-${reloadKey}`}
+				className="flex min-h-0 flex-1 flex-col overflow-hidden"
+			>
 				{/* Files tab */}
 				{activeTab === "files" && (
 					<AnimatePresence mode="wait" initial={false}>
