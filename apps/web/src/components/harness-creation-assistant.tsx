@@ -1,7 +1,7 @@
 import { useAuth } from "@clerk/tanstack-react-start";
-import { useConvexMutation } from "@convex-dev/react-query";
+import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ArrowRight, Lock, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -67,8 +67,16 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 		model: "claude-sonnet-4",
 		mcpIds: [],
 	});
+	const [similarHarness, setSimilarHarness] = useState<{
+		id: string;
+		name: string;
+	} | null>(null);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
+
+	const { data: existingHarnesses } = useQuery(
+		convexQuery(api.harnesses.list, {}),
+	);
 
 	const createConversation = useMutation({
 		mutationFn: useConvexMutation(api.conversations.create),
@@ -81,9 +89,10 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 	});
 
 	// Scroll to bottom when messages change
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-runs on new messages and streaming content
 	useEffect(() => {
 		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-	}, []);
+	}, [messages, streamingContent]);
 
 	// Focus input when dialog opens
 	useEffect(() => {
@@ -174,8 +183,16 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 					const config = JSON.parse(
 						configMatch[1].trim(),
 					) as HarnessConfigPreview;
-					setHarnessConfig(config);
-					setEditedConfig({ ...config });
+					const validIds = new Set(PRESET_MCPS.map((p) => p.id));
+					const filteredMcpIds = config.mcpIds.filter((id) => validIds.has(id));
+					if (filteredMcpIds.length < config.mcpIds.length) {
+						toast(
+							"Some suggested integrations aren't available and were removed.",
+						);
+					}
+					const validated = { ...config, mcpIds: filteredMcpIds };
+					setHarnessConfig(validated);
+					setEditedConfig(validated);
 				} catch {
 					// Config block was malformed — show the full response as-is
 					displayContent = fullContent;
@@ -206,7 +223,26 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 		}
 	};
 
-	const handleCreate = async () => {
+	const handleCreate = async (skipDuplicateCheck = false) => {
+		if (!skipDuplicateCheck) {
+			const configUrls = new Set(
+				presetIdsToServerEntries(editedConfig.mcpIds).map((s) => s.url),
+			);
+			const match = (existingHarnesses ?? []).find((h) => {
+				if (h.model !== editedConfig.model) return false;
+				const harnessUrls = new Set(h.mcpServers.map((s) => s.url));
+				if (harnessUrls.size !== configUrls.size) return false;
+				for (const url of configUrls) {
+					if (!harnessUrls.has(url)) return false;
+				}
+				return true;
+			});
+			if (match) {
+				setSimilarHarness({ id: match._id, name: match.name });
+				return;
+			}
+		}
+
 		const mcpServers = presetIdsToServerEntries(editedConfig.mcpIds);
 		try {
 			const harnessId = await createHarness.mutateAsync({
@@ -251,6 +287,7 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 	};
 
 	const handleToggleMcp = (id: string) => {
+		setSimilarHarness(null);
 		setEditedConfig((prev) => ({
 			...prev,
 			mcpIds: prev.mcpIds.includes(id)
@@ -269,6 +306,7 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 			setStreamingContent("");
 			setHarnessConfig(null);
 			setEditedConfig({ name: "", model: "claude-sonnet-4", mcpIds: [] });
+			setSimilarHarness(null);
 		}
 		onOpenChange(nextOpen);
 	};
@@ -423,58 +461,98 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 							)}
 						</div>
 
+						{/* Duplicate harness warning */}
+						{similarHarness && (
+							<div className="rounded border border-yellow-200 bg-yellow-50 dark:border-yellow-900 dark:bg-yellow-950 p-2.5 space-y-2">
+								<p className="text-xs text-yellow-800 dark:text-yellow-200">
+									You already have a similar harness:{" "}
+									<span className="font-medium">{similarHarness.name}</span>
+								</p>
+								<div className="flex gap-2">
+									<Button
+										size="sm"
+										variant="outline"
+										onClick={() => {
+											onOpenChange(false);
+											navigate({
+												to: "/chat",
+												search: { harnessId: similarHarness.id },
+											});
+										}}
+										className="flex-1 text-xs"
+									>
+										Go to existing
+									</Button>
+									<Button
+										size="sm"
+										onClick={() => handleCreate(true)}
+										disabled={createHarness.isPending}
+										className="flex-1 text-xs"
+									>
+										{createHarness.isPending ? "Creating…" : "Create anyway"}
+									</Button>
+								</div>
+							</div>
+						)}
+
 						{/* Action buttons */}
-						<div className="flex gap-2 pt-1">
-							<Button
-								size="sm"
-								onClick={handleCreate}
-								disabled={!editedConfig.name.trim() || createHarness.isPending}
-								className="flex-1 text-xs"
-							>
-								{createHarness.isPending ? "Creating…" : "Create Harness"}
-								{!createHarness.isPending && <ArrowRight size={12} />}
-							</Button>
-							<Button
-								size="sm"
-								variant="outline"
-								onClick={handleEditManually}
-								className="text-xs"
-							>
-								Edit manually
-							</Button>
-						</div>
+						{!similarHarness && (
+							<div className="flex gap-2 pt-1">
+								<Button
+									size="sm"
+									onClick={() => handleCreate()}
+									disabled={
+										!editedConfig.name.trim() || createHarness.isPending
+									}
+									className="flex-1 text-xs"
+								>
+									{createHarness.isPending ? "Creating…" : "Create Harness"}
+									{!createHarness.isPending && <ArrowRight size={12} />}
+								</Button>
+								<Button
+									size="sm"
+									variant="outline"
+									onClick={handleEditManually}
+									className="text-xs"
+								>
+									Edit manually
+								</Button>
+							</div>
+						)}
 					</div>
 				)}
 
-				{/* Input bar (hidden once config is shown) */}
-				{!harnessConfig && (
-					<div className="shrink-0 border-t p-3">
-						<div className="flex gap-2">
-							<Input
-								ref={inputRef}
-								value={input}
-								onChange={(e) => setInput(e.target.value)}
-								onKeyDown={(e) => {
-									if (e.key === "Enter" && !e.shiftKey) {
-										e.preventDefault();
-										handleSend();
-									}
-								}}
-								placeholder="Describe what you want…"
-								className="h-8 text-xs"
-								disabled={isStreaming}
-							/>
-							<Button
-								size="sm"
-								onClick={handleSend}
-								disabled={!input.trim() || isStreaming}
-								className="h-8 px-3 text-xs"
-							>
-								Send
-							</Button>
-						</div>
+				{/* Input bar */}
+				<div className="shrink-0 border-t p-3">
+					<div className="flex gap-2">
+						<Input
+							ref={inputRef}
+							value={input}
+							onChange={(e) => setInput(e.target.value)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter" && !e.shiftKey) {
+									e.preventDefault();
+									handleSend();
+								}
+							}}
+							placeholder={
+								harnessConfig
+									? "Refine your harness…"
+									: "Describe what you want…"
+							}
+							className="h-8 text-xs"
+							disabled={isStreaming}
+						/>
+						<Button
+							size="sm"
+							onClick={handleSend}
+							disabled={!input.trim() || isStreaming}
+							className="h-8 px-3 text-xs"
+						>
+							Send
+						</Button>
 					</div>
-				)}
+				</div>
 			</DialogContent>
 		</Dialog>
 	);
