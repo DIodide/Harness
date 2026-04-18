@@ -3,7 +3,15 @@ import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowRight, Lock, X } from "lucide-react";
+import {
+	ArrowRight,
+	FileText,
+	Lock,
+	Paperclip,
+	ThumbsDown,
+	ThumbsUp,
+	X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { env } from "../env";
@@ -20,8 +28,10 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "./ui/select";
+import { Textarea } from "./ui/textarea";
 
 const FASTAPI_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
+const CONTEXT_MAX_CHARS = 8000;
 
 const INITIAL_MESSAGE =
 	"Hi! I'll help you set up a harness. What would you like it to help you with?";
@@ -71,8 +81,16 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 		id: string;
 		name: string;
 	} | null>(null);
+	const [configRating, setConfigRating] = useState<"up" | "down" | null>(null);
+
+	// Context pane state
+	const [showContextPane, setShowContextPane] = useState(false);
+	const [pastedContext, setPastedContext] = useState("");
+	const [contextFileName, setContextFileName] = useState<string | null>(null);
+
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
+	const fileInputRef = useRef<HTMLInputElement>(null);
 
 	const { data: existingHarnesses } = useQuery(
 		convexQuery(api.harnesses.list, {}),
@@ -86,6 +104,9 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 	});
 	const createHarness = useMutation({
 		mutationFn: useConvexMutation(api.harnesses.create),
+	});
+	const rateConfig = useMutation({
+		mutationFn: useConvexMutation(api.harnessConfigRatings.rate),
 	});
 
 	// Scroll to bottom when messages change
@@ -101,6 +122,44 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 		}
 	}, [open]);
 
+	const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+		const file = e.target.files?.[0];
+		if (!file) return;
+
+		const allowedTypes = ["text/plain", "text/markdown", "application/json"];
+		const allowedExtensions = [".txt", ".md", ".json"];
+		const hasAllowedExtension = allowedExtensions.some((ext) =>
+			file.name.toLowerCase().endsWith(ext),
+		);
+
+		if (!allowedTypes.includes(file.type) && !hasAllowedExtension) {
+			toast.error("Only .txt, .md, and .json files are supported.");
+			e.target.value = "";
+			return;
+		}
+
+		const reader = new FileReader();
+		reader.onload = (event) => {
+			const content = event.target?.result as string;
+			if (content.length > CONTEXT_MAX_CHARS) {
+				setPastedContext(content.slice(0, CONTEXT_MAX_CHARS));
+				toast("File was truncated to 8,000 characters.");
+			} else {
+				setPastedContext(content);
+			}
+			setContextFileName(file.name);
+			setShowContextPane(true);
+		};
+		reader.readAsText(file);
+		e.target.value = "";
+	};
+
+	const handleClearContext = () => {
+		setPastedContext("");
+		setContextFileName(null);
+		setShowContextPane(false);
+	};
+
 	const handleSend = async () => {
 		if (!input.trim() || isStreaming) return;
 		const userText = input.trim();
@@ -113,6 +172,12 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 		setMessages(updatedMessages);
 		setIsStreaming(true);
 		setStreamingContent("");
+
+		// Capture context for this send, then clear it
+		const contextForThisSend = pastedContext.trim() || null;
+		if (contextForThisSend) {
+			handleClearContext();
+		}
 
 		try {
 			// Stream suggestion from FastAPI
@@ -130,6 +195,7 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 							role: m.role,
 							content: m.content,
 						})),
+						context: contextForThisSend,
 					}),
 				},
 			);
@@ -286,6 +352,28 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 		navigate({ to: "/onboarding" });
 	};
 
+	const handleRate = async (rating: "up" | "down") => {
+		if (!harnessConfig || configRating !== null) return;
+		setConfigRating(rating);
+		try {
+			await rateConfig.mutateAsync({
+				rating,
+				configSnapshot: {
+					name: harnessConfig.name,
+					model: harnessConfig.model,
+					mcpIds: harnessConfig.mcpIds,
+				},
+				conversationSnapshot: messages.map((m) => ({
+					role: m.role,
+					content: m.content,
+				})),
+			});
+		} catch {
+			setConfigRating(null);
+			toast.error("Failed to save rating.");
+		}
+	};
+
 	const handleToggleMcp = (id: string) => {
 		setSimilarHarness(null);
 		setEditedConfig((prev) => ({
@@ -307,6 +395,10 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 			setHarnessConfig(null);
 			setEditedConfig({ name: "", model: "claude-sonnet-4", mcpIds: [] });
 			setSimilarHarness(null);
+			setConfigRating(null);
+			setPastedContext("");
+			setContextFileName(null);
+			setShowContextPane(false);
 		}
 		onOpenChange(nextOpen);
 	};
@@ -315,6 +407,9 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 		const preset = PRESET_MCPS.find((p) => p.id === id);
 		return preset && preset.server.authType !== "none";
 	});
+
+	const contextCharCount = pastedContext.length;
+	const contextOverLimit = contextCharCount > CONTEXT_MAX_CHARS;
 
 	return (
 		<Dialog open={open} onOpenChange={handleOpenChange}>
@@ -461,6 +556,45 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 							)}
 						</div>
 
+						{/* Config rating */}
+						<div className="flex items-center justify-between pt-1">
+							<p className="text-[10px] text-muted-foreground">
+								Was this suggestion helpful?
+							</p>
+							<div className="flex items-center gap-1">
+								<button
+									type="button"
+									onClick={() => handleRate("up")}
+									disabled={configRating !== null}
+									className={`flex h-6 w-6 items-center justify-center rounded transition-colors ${
+										configRating === "up"
+											? "text-green-600"
+											: configRating !== null
+												? "cursor-default text-muted-foreground/40"
+												: "text-muted-foreground hover:text-green-600"
+									}`}
+									title="Good suggestion"
+								>
+									<ThumbsUp size={12} />
+								</button>
+								<button
+									type="button"
+									onClick={() => handleRate("down")}
+									disabled={configRating !== null}
+									className={`flex h-6 w-6 items-center justify-center rounded transition-colors ${
+										configRating === "down"
+											? "text-red-500"
+											: configRating !== null
+												? "cursor-default text-muted-foreground/40"
+												: "text-muted-foreground hover:text-red-500"
+									}`}
+									title="Bad suggestion"
+								>
+									<ThumbsDown size={12} />
+								</button>
+							</div>
+						</div>
+
 						{/* Duplicate harness warning */}
 						{similarHarness && (
 							<div className="rounded border border-yellow-200 bg-yellow-50 dark:border-yellow-900 dark:bg-yellow-950 p-2.5 space-y-2">
@@ -522,9 +656,80 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 					</div>
 				)}
 
+				{/* Context pane */}
+				{showContextPane && (
+					<div className="shrink-0 border-t bg-muted/30 p-3 space-y-2">
+						<div className="flex items-center justify-between">
+							<div className="flex items-center gap-1.5">
+								<FileText size={11} className="text-muted-foreground" />
+								<span className="text-[11px] font-medium text-foreground">
+									{contextFileName ? contextFileName : "Context"}
+								</span>
+								<span
+									className={`text-[10px] ${contextOverLimit ? "text-destructive" : "text-muted-foreground"}`}
+								>
+									{contextCharCount}/{CONTEXT_MAX_CHARS}
+								</span>
+							</div>
+							<button
+								type="button"
+								onClick={handleClearContext}
+								className="text-muted-foreground hover:text-foreground"
+							>
+								<X size={11} />
+							</button>
+						</div>
+						<Textarea
+							value={pastedContext}
+							onChange={(e) => {
+								setPastedContext(e.target.value);
+								if (contextFileName) setContextFileName(null);
+							}}
+							placeholder="Paste a document, job description, README, or any relevant context…"
+							className="min-h-[80px] max-h-[160px] resize-none text-xs"
+						/>
+					</div>
+				)}
+
+				{/* Hidden file input */}
+				<input
+					ref={fileInputRef}
+					type="file"
+					accept=".txt,.md,.json"
+					className="hidden"
+					onChange={handleFileUpload}
+				/>
+
 				{/* Input bar */}
 				<div className="shrink-0 border-t p-3">
 					<div className="flex gap-2">
+						<button
+							type="button"
+							onClick={() => {
+								if (showContextPane) {
+									handleClearContext();
+								} else {
+									setShowContextPane(true);
+									setTimeout(() => inputRef.current?.focus(), 50);
+								}
+							}}
+							className={`flex h-8 w-8 shrink-0 items-center justify-center rounded border text-muted-foreground transition-colors hover:text-foreground ${
+								showContextPane
+									? "border-foreground/30 bg-muted text-foreground"
+									: "border-transparent"
+							}`}
+							title={showContextPane ? "Hide context" : "Add context"}
+						>
+							<Paperclip size={13} />
+						</button>
+						<button
+							type="button"
+							onClick={() => fileInputRef.current?.click()}
+							className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-transparent text-muted-foreground transition-colors hover:text-foreground"
+							title="Upload a file"
+						>
+							<FileText size={13} />
+						</button>
 						<Input
 							ref={inputRef}
 							value={input}
@@ -546,12 +751,27 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 						<Button
 							size="sm"
 							onClick={handleSend}
-							disabled={!input.trim() || isStreaming}
+							disabled={!input.trim() || isStreaming || contextOverLimit}
 							className="h-8 px-3 text-xs"
 						>
 							Send
 						</Button>
 					</div>
+					{pastedContext && !showContextPane && (
+						<div className="mt-1.5 flex items-center gap-1">
+							<FileText size={10} className="text-muted-foreground" />
+							<span className="text-[10px] text-muted-foreground">
+								Context attached
+							</span>
+							<button
+								type="button"
+								onClick={handleClearContext}
+								className="text-[10px] text-muted-foreground underline hover:text-foreground"
+							>
+								Remove
+							</button>
+						</div>
+					)}
 				</div>
 			</DialogContent>
 		</Dialog>

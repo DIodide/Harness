@@ -1,5 +1,6 @@
 import json
 import logging
+import pathlib
 
 import httpx
 from fastapi import APIRouter, Depends, Request
@@ -13,19 +14,8 @@ from app.services.openrouter import stream_chat
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Mirrors frontend PRESET_MCPS — kept in sync manually.
-_PRESET_MCP_CATALOG = [
-    {"id": "princetoncourses", "name": "Princeton Courses", "description": "Search Princeton courses, read evaluations, and explore instructors with live registrar data.", "auth": "tiger_junction"},
-    {"id": "tigerjunction", "name": "TigerJunction", "description": "Manage your course schedules — create, edit, verify conflicts, and find courses that fit.", "auth": "tiger_junction"},
-    {"id": "tigersnatch", "name": "TigerSnatch", "description": "Track course demand and subscribe to enrollment notifications for closed classes.", "auth": "tiger_junction"},
-    {"id": "tigerpath", "name": "TigerPath", "description": "Plan your 4-year course schedule, explore major requirements, and see when students typically take courses.", "auth": "tiger_junction"},
-    {"id": "github", "name": "GitHub", "description": "Browse repos, manage issues and pull requests, and search code.", "auth": "oauth"},
-    {"id": "notion", "name": "Notion", "description": "Read and write pages, databases, and blocks in your workspace.", "auth": "oauth"},
-    {"id": "linear", "name": "Linear", "description": "Create and track issues, manage projects, and streamline engineering workflows.", "auth": "oauth"},
-    {"id": "awsknowledge", "name": "AWS Knowledge", "description": "Search AWS documentation and knowledge bases for services and best practices.", "auth": "none"},
-    {"id": "exa", "name": "Exa", "description": "AI-powered semantic web search and content retrieval.", "auth": "none"},
-    {"id": "context7", "name": "Context7", "description": "Fetch up-to-date library docs and code examples for any framework.", "auth": "none"},
-]
+_SHARED_DIR = pathlib.Path(__file__).parents[3] / "shared"
+_PRESET_MCP_CATALOG: list[dict] = json.loads((_SHARED_DIR / "preset-mcps.json").read_text())
 
 _AVAILABLE_MODELS = list(MODEL_MAP.keys())
 
@@ -54,6 +44,7 @@ Keep responses short and conversational. Do not ask about sandboxes or skills.
 ## How many questions to ask
 
 Adapt to how clearly the user has expressed their needs:
+- If the user provided a context document, extract the use case from it directly and produce a config immediately or with at most one clarifying question.
 - If their first message already tells you the task, speed requirements, and relevant tools → produce a config immediately with a one-line explanation.
 - If you have most of what you need but one important thing is unclear → ask exactly one follow-up question.
 - If the use case is genuinely vague → ask up to two focused questions, then produce a config. Never ask more than two follow-up questions total.
@@ -76,12 +67,39 @@ Guidelines:
 
 If the user mentions needing fast responses or running many queries → lean lighter. If they describe complex analysis, writing, or reasoning → lean heavier. Explain your model choice in one short sentence.
 
+### Natural language adjustment shortcuts
+
+If the user asks to adjust the config using informal language,
+apply these mappings immediately without asking follow-up questions:
+- "cheaper", "low cost", "budget", "affordable"
+  → switch to "gpt-4.1-mini", "grok-3-mini", "deepseek-v3", or "kimi-k2"
+- "faster", "quicker", "snappier", "lightweight"
+  → switch to a mini/flash variant
+- "more powerful", "best quality", "no cost concern", "most capable"
+  → switch to "claude-opus-4" or "claude-opus-4-thinking"
+- "smarter", "better reasoning", "more thoughtful"
+  → switch to a thinking variant ("claude-sonnet-4-thinking", "deepseek-r1")
+- "simpler", "no tools", "just chat"
+  → clear mcpIds to []
+- "add [tool]" or "include [tool]"
+  → add the relevant MCP if it exists in the catalog
+- "remove [tool]" or "without [tool]"
+  → remove the relevant MCP
+
 ## Available MCP integrations (tools the agent can use)
 {mcps_text}
 
 Be proactive: if an MCP is clearly relevant to the user's use case, suggest it and briefly explain what it enables (one phrase). Only suggest MCPs that genuinely fit — don't list everything. Leave mcpIds as [] if no tools are needed.
 
 If you're unsure whether the user wants a particular integration, mention it as an option and let them decide.
+
+## When refining an existing config
+
+If the conversation already contains a config block and the user is asking to change
+something, lead your response with a single short line summarising exactly what changed
+(e.g. "Switched to Linear only, removed GitHub." or "Downgraded to gpt-4.1-mini to
+reduce cost."), then immediately output the updated config block. Do not re-explain
+the full config or re-ask questions that were already answered.
 
 ## When you have gathered enough information
 
@@ -111,6 +129,7 @@ class _Message(BaseModel):
 
 class SuggestRequest(BaseModel):
     messages: list[_Message]
+    context: str | None = None
 
 
 @router.post("/stream")
@@ -122,6 +141,15 @@ async def suggest_harness_stream(
 ):
     async def event_generator():
         messages = [{"role": "system", "content": _get_system_prompt()}]
+        if body.context:
+            messages.append({
+                "role": "user",
+                "content": f"Here is some context about my use case — use it to infer what I need without asking redundant questions:\n\n{body.context}",
+            })
+            messages.append({
+                "role": "assistant",
+                "content": "Thanks, I've read through your context. What would you like your harness to help with?",
+            })
         messages.extend({"role": m.role, "content": m.content} for m in body.messages)
 
         collected_content = ""
