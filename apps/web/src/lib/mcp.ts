@@ -2,11 +2,20 @@ import type { UserResource } from "@clerk/types";
 
 export type McpAuthType = "none" | "bearer" | "oauth" | "tiger_junction";
 
+export interface McpServerCommand {
+	name: string;
+	server: string;
+	tool: string;
+	description: string;
+	parameters: Record<string, unknown>;
+}
+
 export interface McpServerEntry {
 	name: string;
 	url: string;
 	authType: McpAuthType;
 	authToken?: string;
+	commandIds?: string[];
 }
 
 export interface PresetMcpDefinition {
@@ -197,6 +206,53 @@ export const PRESET_MCPS: PresetMcpDefinition[] = [
 		},
 	},
 ];
+
+/** Build the API payload shape for MCP servers. */
+export function toMcpServerPayload(servers: McpServerEntry[]) {
+	return servers.map((s) => ({
+		name: s.name,
+		url: s.url,
+		auth_type: s.authType,
+		...(s.authToken ? { auth_token: s.authToken } : {}),
+	}));
+}
+
+/**
+ * Fetch slash commands from the FastAPI backend.
+ * Returns the raw command list with $-prefixed keys stripped from parameters,
+ * or null if the fetch fails.
+ */
+export async function fetchCommandsFromApi(
+	apiUrl: string,
+	servers: McpServerEntry[],
+	token: string | null,
+): Promise<McpServerCommand[] | null> {
+	try {
+		const res = await fetch(`${apiUrl}/api/commands/list`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...(token ? { Authorization: `Bearer ${token}` } : {}),
+			},
+			body: JSON.stringify({ mcp_servers: toMcpServerPayload(servers) }),
+		});
+		if (!res.ok) return null;
+		const data = await res.json();
+		return (data.commands ?? []).map((c: McpServerCommand) => ({
+			name: c.name,
+			server: c.server,
+			tool: c.tool,
+			description: c.description,
+			parameters: c.parameters,
+		}));
+	} catch {
+		return null;
+	}
+}
+
+/** Sanitize a name the same way the backend does (non-alphanumeric → underscore). */
+export const sanitizeServerName = (n: string) =>
+	n.replace(/[^a-zA-Z0-9_-]/g, "_");
 
 /** Converts an array of selected preset IDs into their McpServerEntry objects. */
 export function presetIdsToServerEntries(ids: string[]): McpServerEntry[] {

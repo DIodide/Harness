@@ -16,6 +16,7 @@ export default defineSchema({
 				url: v.string(),
 				authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth"), v.literal("tiger_junction")),
 				authToken: v.optional(v.string()),
+				commandIds: v.optional(v.array(v.id("commands"))),
 			}),
 		),
 		skills: v.array(v.object({ name: v.string(), description: v.string() })),
@@ -43,6 +44,14 @@ export default defineSchema({
 			}),
 		),
 	}).index("by_user", ["userId"]),
+
+	commands: defineTable({
+		name: v.string(),
+		server: v.string(),
+		tool: v.string(),
+		description: v.string(),
+		parametersJson: v.string(),
+	}).index("by_name", ["name"]),
 
 	sandboxes: defineTable({
 		userId: v.string(),
