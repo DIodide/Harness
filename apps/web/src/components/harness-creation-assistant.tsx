@@ -3,8 +3,10 @@ import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { useConvex } from "convex/react";
 import {
 	ArrowRight,
+	Box,
 	FileText,
 	Lock,
 	Paperclip,
@@ -42,10 +44,20 @@ interface ChatMessage {
 	content: string;
 }
 
+interface SkillSuggestion {
+	id: string;
+	fullId: string;
+	description: string;
+	installs: number;
+}
+
 interface HarnessConfigPreview {
 	name: string;
 	model: string;
 	mcpIds: string[];
+	skillIds: string[];
+	sandboxEnabled: boolean;
+	sandboxLanguage: string;
 }
 
 interface Props {
@@ -63,6 +75,7 @@ function stripConfigBlock(content: string): string {
 export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 	const navigate = useNavigate();
 	const { getToken } = useAuth();
+	const convex = useConvex();
 
 	const [messages, setMessages] = useState<ChatMessage[]>([
 		{ id: "init", role: "assistant", content: INITIAL_MESSAGE },
@@ -76,7 +89,11 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 		name: "",
 		model: "claude-sonnet-4",
 		mcpIds: [],
+		skillIds: [],
+		sandboxEnabled: false,
+		sandboxLanguage: "python",
 	});
+	const [availableSkills, setAvailableSkills] = useState<SkillSuggestion[]>([]);
 	const [similarHarness, setSimilarHarness] = useState<{
 		id: string;
 		name: string;
@@ -179,6 +196,21 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 			handleClearContext();
 		}
 
+		// On first user message, fetch relevant skills from Convex
+		let skillsForThisSend = availableSkills;
+		if (availableSkills.length === 0) {
+			try {
+				const fetched = await convex.query(
+					api.skills.searchForCreationAssistant,
+					{ query: userText, limit: 20 },
+				);
+				skillsForThisSend = fetched;
+				setAvailableSkills(fetched);
+			} catch {
+				// Non-fatal — proceed without skills
+			}
+		}
+
 		try {
 			// Stream suggestion from FastAPI
 			const token = await getToken();
@@ -196,6 +228,8 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 							content: m.content,
 						})),
 						context: contextForThisSend,
+						available_skills:
+							skillsForThisSend.length > 0 ? skillsForThisSend : null,
 					}),
 				},
 			);
@@ -249,14 +283,29 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 					const config = JSON.parse(
 						configMatch[1].trim(),
 					) as HarnessConfigPreview;
-					const validIds = new Set(PRESET_MCPS.map((p) => p.id));
-					const filteredMcpIds = config.mcpIds.filter((id) => validIds.has(id));
-					if (filteredMcpIds.length < config.mcpIds.length) {
+
+					const validMcpIds = new Set(PRESET_MCPS.map((p) => p.id));
+					const filteredMcpIds = (config.mcpIds ?? []).filter((id) =>
+						validMcpIds.has(id),
+					);
+					if (filteredMcpIds.length < (config.mcpIds ?? []).length) {
 						toast(
 							"Some suggested integrations aren't available and were removed.",
 						);
 					}
-					const validated = { ...config, mcpIds: filteredMcpIds };
+
+					const validSkillIds = new Set(skillsForThisSend.map((s) => s.id));
+					const filteredSkillIds = (config.skillIds ?? []).filter((id) =>
+						validSkillIds.has(id),
+					);
+
+					const validated: HarnessConfigPreview = {
+						...config,
+						mcpIds: filteredMcpIds,
+						skillIds: filteredSkillIds,
+						sandboxEnabled: config.sandboxEnabled ?? false,
+						sandboxLanguage: config.sandboxLanguage ?? "python",
+					};
 					setHarnessConfig(validated);
 					setEditedConfig(validated);
 				} catch {
@@ -294,13 +343,40 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 			const configUrls = new Set(
 				presetIdsToServerEntries(editedConfig.mcpIds).map((s) => s.url),
 			);
+			const configSkillNames = new Set(
+				editedConfig.skillIds
+					.map((id) => availableSkills.find((s) => s.id === id)?.fullId)
+					.filter((n): n is string => n !== undefined),
+			);
+
 			const match = (existingHarnesses ?? []).find((h) => {
+				// Model must match
 				if (h.model !== editedConfig.model) return false;
+
+				// MCPs must match (compare by server URL)
 				const harnessUrls = new Set(h.mcpServers.map((s) => s.url));
 				if (harnessUrls.size !== configUrls.size) return false;
 				for (const url of configUrls) {
 					if (!harnessUrls.has(url)) return false;
 				}
+
+				// Skills must match (compare by fullId / name)
+				const harnessSkillNames = new Set(h.skills.map((s) => s.name));
+				if (harnessSkillNames.size !== configSkillNames.size) return false;
+				for (const name of configSkillNames) {
+					if (!harnessSkillNames.has(name)) return false;
+				}
+
+				// Sandbox must match
+				const harnessSandboxEnabled = h.sandboxEnabled ?? false;
+				if (harnessSandboxEnabled !== editedConfig.sandboxEnabled) return false;
+				if (
+					editedConfig.sandboxEnabled &&
+					h.sandboxConfig?.defaultLanguage !== editedConfig.sandboxLanguage
+				) {
+					return false;
+				}
+
 				return true;
 			});
 			if (match) {
@@ -310,13 +386,31 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 		}
 
 		const mcpServers = presetIdsToServerEntries(editedConfig.mcpIds);
+		const skills = editedConfig.skillIds
+			.map((id) => {
+				const skill = availableSkills.find((s) => s.id === id);
+				return skill
+					? { name: skill.fullId, description: skill.description }
+					: null;
+			})
+			.filter((s): s is { name: string; description: string } => s !== null);
+
 		try {
 			const harnessId = await createHarness.mutateAsync({
 				name: editedConfig.name,
 				model: editedConfig.model,
 				status: "started",
 				mcpServers,
-				skills: [],
+				skills,
+				sandboxEnabled: editedConfig.sandboxEnabled || undefined,
+				sandboxConfig: editedConfig.sandboxEnabled
+					? {
+							persistent: false,
+							autoStart: true,
+							defaultLanguage: editedConfig.sandboxLanguage,
+							resourceTier: "basic",
+						}
+					: undefined,
 			});
 
 			// Save conversation + all messages now that a harness was created
@@ -340,12 +434,24 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 	};
 
 	const handleEditManually = () => {
+		const skillsForPrefill = editedConfig.skillIds
+			.map((id) => {
+				const skill = availableSkills.find((s) => s.id === id);
+				return skill
+					? { name: skill.fullId, description: skill.description }
+					: null;
+			})
+			.filter((s): s is { name: string; description: string } => s !== null);
+
 		sessionStorage.setItem(
 			"harness-prefill",
 			JSON.stringify({
 				name: editedConfig.name,
 				model: editedConfig.model,
 				selectedPresetMcps: editedConfig.mcpIds,
+				skills: skillsForPrefill,
+				sandboxEnabled: editedConfig.sandboxEnabled,
+				sandboxLanguage: editedConfig.sandboxLanguage,
 			}),
 		);
 		onOpenChange(false);
@@ -393,7 +499,15 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 			setIsStreaming(false);
 			setStreamingContent("");
 			setHarnessConfig(null);
-			setEditedConfig({ name: "", model: "claude-sonnet-4", mcpIds: [] });
+			setEditedConfig({
+				name: "",
+				model: "claude-sonnet-4",
+				mcpIds: [],
+				skillIds: [],
+				sandboxEnabled: false,
+				sandboxLanguage: "python",
+			});
+			setAvailableSkills([]);
 			setSimilarHarness(null);
 			setConfigRating(null);
 			setPastedContext("");
@@ -553,6 +667,103 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 										</p>
 									)}
 								</div>
+							)}
+						</div>
+
+						{/* Skills chips */}
+						{editedConfig.skillIds.length > 0 && (
+							<div className="space-y-1">
+								<p className="text-[11px] text-muted-foreground">Skills</p>
+								<div className="flex flex-wrap gap-1.5">
+									{editedConfig.skillIds.map((id) => {
+										const skill = availableSkills.find((s) => s.id === id);
+										return (
+											<Badge
+												key={id}
+												variant="outline"
+												className="flex items-center gap-1 pr-1 text-xs"
+												title={skill?.description ?? id}
+											>
+												{id}
+												<button
+													type="button"
+													onClick={() =>
+														setEditedConfig((prev) => ({
+															...prev,
+															skillIds: prev.skillIds.filter((s) => s !== id),
+														}))
+													}
+													className="ml-0.5 text-muted-foreground hover:text-foreground"
+												>
+													<X size={9} />
+												</button>
+											</Badge>
+										);
+									})}
+								</div>
+							</div>
+						)}
+
+						{/* Sandbox */}
+						<div className="space-y-1.5">
+							<p className="text-[11px] text-muted-foreground">Sandbox</p>
+							<button
+								type="button"
+								onClick={() =>
+									setEditedConfig((p) => ({
+										...p,
+										sandboxEnabled: !p.sandboxEnabled,
+									}))
+								}
+								className={`flex w-full items-center gap-2.5 border px-2.5 py-2 text-left transition-colors ${
+									editedConfig.sandboxEnabled
+										? "border-foreground/40 bg-foreground/5"
+										: "border-border hover:border-foreground/20"
+								}`}
+							>
+								<Box
+									size={12}
+									className={
+										editedConfig.sandboxEnabled
+											? "shrink-0 text-foreground"
+											: "shrink-0 text-muted-foreground"
+									}
+								/>
+								<div className="flex-1">
+									<p className="text-[11px] font-medium text-foreground">
+										{editedConfig.sandboxEnabled
+											? "Sandbox enabled"
+											: "No sandbox"}
+									</p>
+									<p className="text-[10px] text-muted-foreground">
+										{editedConfig.sandboxEnabled
+											? "Isolated environment for code execution and file operations"
+											: "Chat only — no code execution environment"}
+									</p>
+								</div>
+							</button>
+							{editedConfig.sandboxEnabled && (
+								<Select
+									value={editedConfig.sandboxLanguage}
+									onValueChange={(v) =>
+										setEditedConfig((p) => ({ ...p, sandboxLanguage: v }))
+									}
+								>
+									<SelectTrigger className="h-7 text-xs">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="python" className="text-xs">
+											Python
+										</SelectItem>
+										<SelectItem value="javascript" className="text-xs">
+											JavaScript
+										</SelectItem>
+										<SelectItem value="typescript" className="text-xs">
+											TypeScript
+										</SelectItem>
+									</SelectContent>
+								</Select>
 							)}
 						</div>
 

@@ -101,6 +101,9 @@ function OnboardingPage() {
 					name?: string;
 					model?: string;
 					selectedPresetMcps?: string[];
+					skills?: { name: string; description: string }[];
+					sandboxEnabled?: boolean;
+					sandboxLanguage?: string;
 				};
 			}
 		} catch {}
@@ -113,17 +116,21 @@ function OnboardingPage() {
 	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>(
 		[],
 	);
-	const [sandboxEnabled, setSandboxEnabled] = useState(false);
+	const [sandboxEnabled, setSandboxEnabled] = useState(
+		_prefill?.sandboxEnabled ?? false,
+	);
 	const [sandboxConfig, setSandboxConfig] = useState({
 		persistent: false,
 		autoStart: true,
-		defaultLanguage: "python",
+		defaultLanguage: _prefill?.sandboxLanguage ?? "python",
 		resourceTier: "basic" as "basic" | "standard" | "performance",
 	});
 	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>(
 		_prefill?.selectedPresetMcps ?? [],
 	);
-	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>([]);
+	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>(
+		_prefill?.skills ?? [],
+	);
 
 	const [stepIndex, setStepIndex] = useState(0);
 
