@@ -23,7 +23,6 @@ import {
 	EyeOff,
 	Globe,
 	HardDrive,
-	Loader2,
 	Pencil,
 	Play,
 	Plus,
@@ -40,6 +39,7 @@ import { OAuthConnectRow } from "../../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../../components/princeton-connect-row";
 import { RecommendedSkillsGrid } from "../../components/recommended-skills-grid";
+import { RoseCurveSpinner } from "../../components/rose-curve-spinner";
 import { SkillViewerDialog } from "../../components/skill-viewer-dialog";
 import { SkillsBrowser } from "../../components/skills-browser";
 import { Badge } from "../../components/ui/badge";
@@ -370,7 +370,7 @@ function HarnessEditPage() {
 					disabled={!hasChanges || updateHarness.isPending}
 				>
 					{updateHarness.isPending ? (
-						<Loader2 size={14} className="animate-spin" />
+						<RoseCurveSpinner size={14} />
 					) : (
 						<Check size={14} />
 					)}

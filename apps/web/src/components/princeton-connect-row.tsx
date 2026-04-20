@@ -1,10 +1,11 @@
 import { useUser } from "@clerk/tanstack-react-start";
-import { GraduationCap, Loader2, Mail } from "lucide-react";
+import { GraduationCap, Mail } from "lucide-react";
 import { motion } from "motion/react";
 import { useCallback, useState } from "react";
 import toast from "react-hot-toast";
 import type { McpServerEntry } from "../lib/mcp";
 import { getPrincetonNetid } from "../lib/mcp";
+import { RoseCurveSpinner } from "./rose-curve-spinner";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -132,11 +133,7 @@ export function PrincetonConnectRow({ server }: { server: McpServerEntry }) {
 							onClick={handleAddEmail}
 							disabled={loading || !netidInput.trim()}
 						>
-							{loading ? (
-								<Loader2 size={10} className="animate-spin" />
-							) : (
-								<Mail size={10} />
-							)}
+							{loading ? <RoseCurveSpinner size={10} /> : <Mail size={10} />}
 							Send Code
 						</Button>
 					</div>
@@ -155,7 +152,7 @@ export function PrincetonConnectRow({ server }: { server: McpServerEntry }) {
 							onClick={handleVerifyCode}
 							disabled={loading || !verificationCode.trim()}
 						>
-							{loading ? <Loader2 size={10} className="animate-spin" /> : null}
+							{loading ? <RoseCurveSpinner size={10} /> : null}
 							Verify
 						</Button>
 					</div>

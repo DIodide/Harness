@@ -1,10 +1,5 @@
 import { useAuth } from "@clerk/clerk-react";
-import {
-	AlertCircle,
-	ChevronRight,
-	Loader2,
-	TerminalSquare,
-} from "lucide-react";
+import { AlertCircle, ChevronRight, TerminalSquare } from "lucide-react";
 import {
 	useCallback,
 	useEffect,
@@ -16,6 +11,7 @@ import {
 import { type CommandResponse, createSandboxApi } from "../../lib/sandbox-api";
 import { useSandboxPanel } from "../../lib/sandbox-panel-context";
 import { cn } from "../../lib/utils";
+import { RoseCurveSpinner } from "../rose-curve-spinner";
 import { ScrollArea } from "../ui/scroll-area";
 
 interface CommandEntry {
@@ -241,9 +237,9 @@ export function CommandRunner() {
 										{entry.command}
 									</span>
 									{entry.running && (
-										<Loader2
+										<RoseCurveSpinner
 											size={10}
-											className="shrink-0 animate-spin text-muted-foreground/40"
+											className="shrink-0 text-muted-foreground/40"
 										/>
 									)}
 								</div>

@@ -1,9 +1,10 @@
 import { convexQuery, useConvexAction } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useQuery } from "@tanstack/react-query";
-import { Download, Loader2 } from "lucide-react";
+import { Download } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MarkdownMessage } from "./markdown-message";
+import { RoseCurveSpinner } from "./rose-curve-spinner";
 import {
 	Dialog,
 	DialogContent,
@@ -121,9 +122,10 @@ export function SkillViewerDialog({
 						</div>
 					) : (
 						<div className="flex items-center justify-center py-12">
-							<Loader2
+							<RoseCurveSpinner
 								size={20}
-								className="animate-spin text-muted-foreground"
+								className="text-muted-foreground"
+								label="Fetching skill documentation"
 							/>
 							<span className="ml-2 text-sm text-muted-foreground">
 								Fetching skill documentation...

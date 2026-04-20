@@ -2,11 +2,12 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, Server, Shield } from "lucide-react";
+import { AlertTriangle, Server, Shield } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { env } from "../env";
+import { RoseCurveSpinner } from "./rose-curve-spinner";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -209,7 +210,7 @@ export function McpServerStatus({
 					>
 						<div className="relative">
 							{anyChecking ? (
-								<Loader2 size={10} className="animate-spin" />
+								<RoseCurveSpinner size={10} />
 							) : (
 								<Server size={10} />
 							)}
@@ -287,9 +288,9 @@ function McpServerRow({
 	return (
 		<div className="flex items-center gap-2 px-3 py-1.5">
 			{status === "checking" ? (
-				<Loader2
+				<RoseCurveSpinner
 					size={10}
-					className="shrink-0 animate-spin text-muted-foreground"
+					className="shrink-0 text-muted-foreground"
 				/>
 			) : (
 				<div
@@ -310,11 +311,7 @@ function McpServerRow({
 					onClick={handleReconnect}
 					disabled={connecting}
 				>
-					{connecting ? (
-						<Loader2 size={8} className="animate-spin" />
-					) : (
-						<Shield size={8} />
-					)}
+					{connecting ? <RoseCurveSpinner size={8} /> : <Shield size={8} />}
 					Reconnect
 				</Button>
 			)}
@@ -402,11 +399,7 @@ export function OAuthReconnectPrompt({
 				onClick={handleReconnect}
 				disabled={connecting}
 			>
-				{connecting ? (
-					<Loader2 size={10} className="animate-spin" />
-				) : (
-					<Shield size={10} />
-				)}
+				{connecting ? <RoseCurveSpinner size={10} /> : <Shield size={10} />}
 				Reconnect
 			</Button>
 		</div>

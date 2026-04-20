@@ -1,5 +1,6 @@
-import { FileText, Loader2, Music, X } from "lucide-react";
+import { FileText, Music, X } from "lucide-react";
 import type { PendingAttachment } from "../hooks/use-file-attachments";
+import { RoseCurveSpinner } from "./rose-curve-spinner";
 
 export function AttachmentChip({
 	attachment,
@@ -33,7 +34,7 @@ export function AttachmentChip({
 
 			{attachment.status === "uploading" && (
 				<div className="absolute inset-0 flex items-center justify-center bg-background/70">
-					<Loader2 size={10} className="animate-spin text-foreground" />
+					<RoseCurveSpinner size={10} className="text-foreground" />
 				</div>
 			)}
 
