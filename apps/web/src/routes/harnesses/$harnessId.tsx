@@ -23,8 +23,6 @@ import {
 	Cpu,
 	Eye,
 	EyeOff,
-	Globe,
-	HardDrive,
 	Pencil,
 	Plus,
 	Server,
