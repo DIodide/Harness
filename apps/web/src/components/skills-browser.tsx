@@ -6,7 +6,6 @@ import {
 	ArrowRight,
 	Download,
 	Eye,
-	Loader2,
 	Search,
 	X,
 	Zap,
@@ -14,6 +13,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SkillEntry, SkillRow } from "../lib/skills";
 import { searchSkillsSh } from "../lib/skills-api";
+import { RoseCurveSpinner } from "./rose-curve-spinner";
 import { SkillViewerDialog } from "./skill-viewer-dialog";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -264,14 +264,14 @@ export function SkillsBrowser({
 						{(searchResults ?? []).length.toLocaleString()} results
 					</Badge>
 					{isFetching && (
-						<Loader2 size={12} className="animate-spin text-muted-foreground" />
+						<RoseCurveSpinner size={12} className="text-muted-foreground" />
 					)}
 				</div>
 			)}
 
 			{isLoading ? (
 				<div className="flex items-center justify-center py-12">
-					<Loader2 size={20} className="animate-spin text-muted-foreground" />
+					<RoseCurveSpinner size={20} className="text-muted-foreground" />
 				</div>
 			) : rows.length === 0 ? (
 				<div className="flex flex-col items-center justify-center py-12 text-center">

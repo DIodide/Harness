@@ -41,6 +41,7 @@ import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../components/princeton-connect-row";
 import { RecommendedSkillsGrid } from "../components/recommended-skills-grid";
+import { RoseCurveSpinner } from "../components/rose-curve-spinner";
 import { SkillsBrowser } from "../components/skills-browser";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -446,7 +447,7 @@ function OnboardingPage() {
 						>
 							{createHarness.isPending ? (
 								<span className="flex items-center gap-2">
-									<span className="h-3 w-3 animate-spin border border-background border-t-transparent" />
+									<RoseCurveSpinner size={12} className="text-background" />
 									Creating...
 								</span>
 							) : (

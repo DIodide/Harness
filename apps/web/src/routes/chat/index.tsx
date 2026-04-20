@@ -19,7 +19,6 @@ import {
 	ChevronRight,
 	Cpu,
 	Eye,
-	Loader2,
 	LogOut,
 	MessageSquare,
 	Mic,
@@ -64,6 +63,7 @@ import {
 	MessageActions,
 } from "../../components/message-actions";
 import { MessageAttachments } from "../../components/message-attachments";
+import { RoseCurveSpinner } from "../../components/rose-curve-spinner";
 import { SandboxPanel } from "../../components/sandbox/sandbox-panel";
 import { SandboxResult } from "../../components/sandbox-result";
 import { SkillViewerDialog } from "../../components/skill-viewer-dialog";
@@ -1547,9 +1547,9 @@ function ChatSidebar({
 														transition={{ duration: 0.15 }}
 														className="flex shrink-0"
 													>
-														<Loader2
+														<RoseCurveSpinner
 															size={12}
-															className="animate-spin text-muted-foreground"
+															className="text-muted-foreground"
 														/>
 													</motion.span>
 												) : doneConvoIds.has(convo._id) ? (
@@ -2817,9 +2817,9 @@ function ChatMessages({
 									: !streamingReasoning &&
 										activeToolCalls.length === 0 &&
 										!streamingContent && (
-											<Loader2
+											<RoseCurveSpinner
 												size={14}
-												className="animate-spin text-muted-foreground"
+												className="text-muted-foreground"
 											/>
 										)}
 							</div>
@@ -2885,7 +2885,7 @@ function ThinkingBlock({
 				{isStreaming ? (
 					<span className="flex items-center gap-1">
 						Thinking
-						<Loader2 size={8} className="animate-spin" />
+						<RoseCurveSpinner size={8} />
 					</span>
 				) : (
 					<span>Thought process</span>
@@ -2998,7 +2998,7 @@ function ToolCallBlock({
 					<ChevronRight size={10} />
 				</motion.span>
 				{isStreaming ? (
-					<Loader2 size={10} className="animate-spin" />
+					<RoseCurveSpinner size={10} />
 				) : authError ? (
 					<Wrench size={10} className="text-destructive" />
 				) : (
@@ -3831,7 +3831,7 @@ function ChatSkeleton() {
 					<Skeleton className="h-6 w-40" />
 				</div>
 				<div className="flex flex-1 items-center justify-center">
-					<div className="h-5 w-5 animate-spin border-2 border-foreground border-t-transparent" />
+					<RoseCurveSpinner size={48} className="text-foreground" />
 				</div>
 			</div>
 		</div>

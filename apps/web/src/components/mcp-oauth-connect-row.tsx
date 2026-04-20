@@ -1,10 +1,11 @@
 import { useAuth } from "@clerk/tanstack-react-start";
-import { Loader2, Server, Shield } from "lucide-react";
+import { Server, Shield } from "lucide-react";
 import { motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { env } from "../env";
 import type { McpServerEntry } from "../lib/mcp";
+import { RoseCurveSpinner } from "./rose-curve-spinner";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 
@@ -111,11 +112,7 @@ export function OAuthConnectRow({
 					onClick={handleConnect}
 					disabled={connecting}
 				>
-					{connecting ? (
-						<Loader2 size={10} className="animate-spin" />
-					) : (
-						<Shield size={10} />
-					)}
+					{connecting ? <RoseCurveSpinner size={10} /> : <Shield size={10} />}
 					Connect
 				</Button>
 			)}

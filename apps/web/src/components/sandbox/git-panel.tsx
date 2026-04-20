@@ -4,7 +4,6 @@ import {
 	ChevronRight,
 	GitBranch,
 	GitCommitHorizontal,
-	Loader2,
 	Minus,
 	Plus,
 	RefreshCw,
@@ -17,6 +16,7 @@ import {
 } from "../../lib/sandbox-api";
 import { useSandboxPanel } from "../../lib/sandbox-panel-context";
 import { cn } from "../../lib/utils";
+import { RoseCurveSpinner } from "../rose-curve-spinner";
 import { ScrollArea } from "../ui/scroll-area";
 
 type Section = "changes" | "log";
@@ -206,7 +206,7 @@ export function GitPanel() {
 					title="Refresh"
 					className="flex h-5 w-5 items-center justify-center text-muted-foreground/40 transition-colors hover:text-muted-foreground disabled:opacity-30"
 				>
-					<RefreshCw size={10} className={loading ? "animate-spin" : ""} />
+					{loading ? <RoseCurveSpinner size={10} /> : <RefreshCw size={10} />}
 				</button>
 			</div>
 
@@ -240,10 +240,7 @@ export function GitPanel() {
 
 			{loading && files.length === 0 && commits.length === 0 ? (
 				<div className="flex flex-1 items-center justify-center">
-					<Loader2
-						size={14}
-						className="animate-spin text-muted-foreground/40"
-					/>
+					<RoseCurveSpinner size={14} className="text-muted-foreground/40" />
 				</div>
 			) : (
 				<>
@@ -268,7 +265,7 @@ export function GitPanel() {
 										className="flex items-center gap-1 rounded bg-foreground/10 px-2 py-1 font-mono text-[10px] text-foreground/80 transition-colors hover:bg-foreground/15 disabled:opacity-30"
 									>
 										{committing ? (
-											<Loader2 size={9} className="animate-spin" />
+											<RoseCurveSpinner size={9} />
 										) : (
 											<Check size={9} />
 										)}
