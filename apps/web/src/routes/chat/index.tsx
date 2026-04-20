@@ -72,6 +72,7 @@ import {
 	SlashCommandMenu,
 	useSlashCommandInput,
 } from "../../components/slash-commands";
+import { ThinkingFiveSpinner } from "../../components/thinking-five-spinner";
 import {
 	Avatar,
 	AvatarFallback,
@@ -3311,8 +3312,8 @@ function EmptyChat({
 				transition={{ duration: 0.4 }}
 				className="text-center"
 			>
-				<div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center bg-foreground">
-					<HarnessMark size={24} className="text-background" />
+				<div className="mx-auto mb-6 flex items-center justify-center">
+					<ThinkingFiveSpinner size={96} className="text-foreground" />
 				</div>
 				<h2 className="mb-2 text-lg font-medium text-foreground">
 					Start a conversation

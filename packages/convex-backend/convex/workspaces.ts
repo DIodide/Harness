@@ -47,6 +47,7 @@ export const create = mutation({
 		name: v.optional(v.string()),
 		harnessId: v.id("harnesses"),
 		sandboxId: v.id("sandboxes"),
+		color: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -70,6 +71,7 @@ export const create = mutation({
 			name: args.name?.trim() || harness.name,
 			harnessId: args.harnessId,
 			sandboxId: args.sandboxId,
+			...(args.color ? { color: args.color } : {}),
 			createdAt: now,
 			lastUsedAt: now,
 		});
@@ -82,6 +84,7 @@ export const update = mutation({
 		name: v.optional(v.string()),
 		harnessId: v.optional(v.id("harnesses")),
 		sandboxId: v.optional(v.id("sandboxes")),
+		color: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -92,6 +95,7 @@ export const update = mutation({
 			name?: string;
 			harnessId?: Id<"harnesses">;
 			sandboxId?: Id<"sandboxes">;
+			color?: string;
 			lastUsedAt: number;
 		} = {
 			lastUsedAt: Date.now(),
@@ -114,6 +118,10 @@ export const update = mutation({
 				throw new Error("Sandbox not found");
 			}
 			updates.sandboxId = args.sandboxId;
+		}
+		if (args.color !== undefined) {
+			// Empty string clears the color field (patch with undefined deletes it).
+			updates.color = args.color || undefined;
 		}
 		await ctx.db.patch(args.id, updates);
 	},

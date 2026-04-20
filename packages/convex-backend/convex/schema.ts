@@ -90,6 +90,7 @@ export default defineSchema({
 		name: v.string(),
 		harnessId: v.id("harnesses"),
 		sandboxId: v.id("sandboxes"),
+		color: v.optional(v.string()),
 		createdAt: v.number(),
 		lastUsedAt: v.number(),
 	})

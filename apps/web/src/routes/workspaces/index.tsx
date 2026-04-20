@@ -20,7 +20,6 @@ import {
 	ChevronRight,
 	Cpu,
 	Eye,
-	Loader2,
 	LogOut,
 	MessageSquare,
 	Mic,
@@ -66,9 +65,11 @@ import {
 	MessageActions,
 } from "../../components/message-actions";
 import { MessageAttachments } from "../../components/message-attachments";
+import { RoseCurveSpinner } from "../../components/rose-curve-spinner";
 import { SandboxPanel } from "../../components/sandbox/sandbox-panel";
 import { SandboxResult } from "../../components/sandbox-result";
 import { SkillViewerDialog } from "../../components/skill-viewer-dialog";
+import { ThinkingFiveSpinner } from "../../components/thinking-five-spinner";
 import {
 	Avatar,
 	AvatarFallback,
@@ -109,8 +110,13 @@ import {
 } from "../../components/ui/tooltip";
 import { UsageDialog } from "../../components/usage-dialog";
 import { formatResetTime, UsageBadge } from "../../components/usage-display";
+import { WorkspaceColorPicker } from "../../components/workspace-color-picker";
 import { env } from "../../env";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
+import {
+	useModifierHeld,
+	useWorkspaceShortcuts,
+} from "../../hooks/use-workspace-shortcuts";
 import type { McpAuthType } from "../../lib/mcp";
 import {
 	acceptString,
@@ -120,6 +126,7 @@ import {
 	modelSupportsMedia,
 } from "../../lib/models";
 import { buildMultimodalContent } from "../../lib/multimodal";
+import { ariaKeyShortcut, formatShortcut, useIsMac } from "../../lib/platform";
 import {
 	SandboxPanelProvider,
 	useSandboxPanel,
@@ -134,6 +141,7 @@ import {
 	useChatStream,
 } from "../../lib/use-chat-stream";
 import { cn } from "../../lib/utils";
+import { getWorkspaceColorHex } from "../../lib/workspace-colors";
 
 export const Route = createFileRoute("/workspaces/")({
 	validateSearch: (
@@ -1243,6 +1251,7 @@ function WorkspaceSidebar({
 		name: string;
 		harnessId: Id<"harnesses">;
 		sandboxId: Id<"sandboxes">;
+		color?: string;
 	}>;
 	harnesses: Array<{
 		_id: Id<"harnesses">;
@@ -1287,6 +1296,7 @@ function WorkspaceSidebar({
 			onSelectWorkspace(workspaceId as Id<"workspaces">);
 			setCreateOpen(false);
 			setNewWorkspaceName("");
+			setNewWorkspaceColor(null);
 		},
 	});
 	const updateWorkspace = useMutation({
@@ -1296,8 +1306,13 @@ function WorkspaceSidebar({
 			setRenameWorkspaceName("");
 			setRenameWorkspaceHarnessId(null);
 			setRenameWorkspaceSandboxId(null);
+			setRenameWorkspaceColor(null);
 		},
 	});
+
+	const isMac = useIsMac();
+	useWorkspaceShortcuts(workspaces, onSelectWorkspace, isMac);
+	const modifierHeld = useModifierHeld(isMac);
 
 	const handleNew = () => {
 		if (!harnessId) return;
@@ -1361,6 +1376,7 @@ function WorkspaceSidebar({
 		name: string;
 		harnessId: Id<"harnesses">;
 		sandboxId: Id<"sandboxes">;
+		color?: string;
 	} | null>(null);
 	const [renameWorkspaceName, setRenameWorkspaceName] = useState("");
 	const [renameWorkspaceHarnessId, setRenameWorkspaceHarnessId] =
@@ -1371,6 +1387,12 @@ function WorkspaceSidebar({
 		useState<Id<"harnesses"> | null>(null);
 	const [newWorkspaceSandboxId, setNewWorkspaceSandboxId] =
 		useState<Id<"sandboxes"> | null>(null);
+	const [newWorkspaceColor, setNewWorkspaceColor] = useState<string | null>(
+		null,
+	);
+	const [renameWorkspaceColor, setRenameWorkspaceColor] = useState<
+		string | null
+	>(null);
 
 	useEffect(() => {
 		if (!newWorkspaceHarnessId && harnesses.length > 0) {
@@ -1401,6 +1423,7 @@ function WorkspaceSidebar({
 					: "New workspace"),
 			harnessId: newWorkspaceHarnessId,
 			sandboxId: newWorkspaceSandboxId,
+			...(newWorkspaceColor ? { color: newWorkspaceColor } : {}),
 		});
 	};
 
@@ -1409,11 +1432,13 @@ function WorkspaceSidebar({
 		name: string;
 		harnessId: Id<"harnesses">;
 		sandboxId: Id<"sandboxes">;
+		color?: string;
 	}) => {
 		setRenameWorkspace(workspace);
 		setRenameWorkspaceName(workspace.name);
 		setRenameWorkspaceHarnessId(workspace.harnessId);
 		setRenameWorkspaceSandboxId(workspace.sandboxId);
+		setRenameWorkspaceColor(workspace.color ?? null);
 	};
 
 	const saveWorkspaceName = () => {
@@ -1432,6 +1457,8 @@ function WorkspaceSidebar({
 			name,
 			harnessId: renameWorkspaceHarnessId,
 			sandboxId: renameWorkspaceSandboxId,
+			// Empty string clears any existing color on the server.
+			color: renameWorkspaceColor ?? "",
 		});
 	};
 
@@ -1490,23 +1517,43 @@ function WorkspaceSidebar({
 							Create a workspace to start.
 						</p>
 					) : (
-						workspaces.map((workspace) => {
+						workspaces.map((workspace, index) => {
 							const harness = harnesses.find(
 								(item) => item._id === workspace.harnessId,
 							);
 							const sandbox = sandboxes.find(
 								(item) => item._id === workspace.sandboxId,
 							);
+							const colorHex = getWorkspaceColorHex(workspace.color);
+							const isActive = activeWorkspaceId === workspace._id;
+							const hasShortcut = index < 9;
+							const shortcutDigit = index + 1;
 							return (
 								<div key={workspace._id} className="group relative">
 									<button
 										type="button"
 										onClick={() => onSelectWorkspace(workspace._id)}
+										aria-keyshortcuts={
+											hasShortcut
+												? ariaKeyShortcut(shortcutDigit, isMac)
+												: undefined
+										}
+										title={
+											hasShortcut
+												? `${workspace.name} — ${formatShortcut(shortcutDigit, isMac)}`
+												: workspace.name
+										}
+										style={colorHex ? { backgroundColor: colorHex } : undefined}
 										className={cn(
-											"flex w-full items-start gap-2 rounded-md px-2 py-2 pr-8 text-left transition-colors",
-											activeWorkspaceId === workspace._id
-												? "bg-muted text-foreground"
-												: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+											"flex w-full items-start gap-2 rounded-md px-2 py-2 pr-8 text-left transition-all",
+											colorHex
+												? "text-foreground hover:brightness-95"
+												: isActive
+													? "bg-muted text-foreground"
+													: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+											isActive &&
+												colorHex &&
+												"ring-2 ring-inset ring-foreground/40",
 										)}
 									>
 										<Sparkles size={12} className="mt-0.5 shrink-0" />
@@ -1514,12 +1561,27 @@ function WorkspaceSidebar({
 											<span className="block truncate text-xs font-medium">
 												{workspace.name}
 											</span>
-											<span className="block truncate text-[10px] text-muted-foreground">
+											<span
+												className={cn(
+													"block truncate text-[10px]",
+													colorHex
+														? "text-foreground/60"
+														: "text-muted-foreground",
+												)}
+											>
 												{harness?.name ?? "Missing harness"} /{" "}
 												{sandbox?.name ?? "Missing sandbox"}
 											</span>
 										</span>
 									</button>
+									{modifierHeld && hasShortcut && (
+										<span
+											aria-hidden="true"
+											className="pointer-events-none absolute right-1 top-1 rounded-sm bg-background/85 px-1 py-0.5 font-mono text-[9px] leading-none text-muted-foreground ring-1 ring-border/60 backdrop-blur-sm transition-opacity group-hover:opacity-0"
+										>
+											{formatShortcut(shortcutDigit, isMac)}
+										</span>
+									)}
 									<Tooltip>
 										<TooltipTrigger asChild>
 											<Button
@@ -1731,9 +1793,9 @@ function WorkspaceSidebar({
 														transition={{ duration: 0.15 }}
 														className="flex shrink-0"
 													>
-														<Loader2
+														<RoseCurveSpinner
 															size={12}
-															className="animate-spin text-muted-foreground"
+															className="text-muted-foreground"
 														/>
 													</motion.span>
 												) : doneConvoIds.has(convo._id) ? (
@@ -1887,6 +1949,13 @@ function WorkspaceSidebar({
 								</SelectContent>
 							</Select>
 						</div>
+						<div className="space-y-1.5">
+							<p className="text-xs font-medium text-foreground">Color</p>
+							<WorkspaceColorPicker
+								value={newWorkspaceColor}
+								onChange={setNewWorkspaceColor}
+							/>
+						</div>
 						<Button
 							className="w-full"
 							disabled={
@@ -1897,7 +1966,7 @@ function WorkspaceSidebar({
 							onClick={createSelectedWorkspace}
 						>
 							{createWorkspace.isPending ? (
-								<Loader2 size={14} className="animate-spin" />
+								<RoseCurveSpinner size={14} />
 							) : (
 								<Plus size={14} />
 							)}
@@ -1914,6 +1983,7 @@ function WorkspaceSidebar({
 						setRenameWorkspaceName("");
 						setRenameWorkspaceHarnessId(null);
 						setRenameWorkspaceSandboxId(null);
+						setRenameWorkspaceColor(null);
 					}
 				}}
 			>
@@ -1982,6 +2052,13 @@ function WorkspaceSidebar({
 								</SelectContent>
 							</Select>
 						</div>
+						<div className="space-y-1.5">
+							<p className="text-xs font-medium text-foreground">Color</p>
+							<WorkspaceColorPicker
+								value={renameWorkspaceColor}
+								onChange={setRenameWorkspaceColor}
+							/>
+						</div>
 						<Button
 							className="w-full"
 							disabled={
@@ -1993,7 +2070,7 @@ function WorkspaceSidebar({
 							onClick={saveWorkspaceName}
 						>
 							{updateWorkspace.isPending ? (
-								<Loader2 size={14} className="animate-spin" />
+								<RoseCurveSpinner size={14} />
 							) : (
 								<Pencil size={14} />
 							)}
@@ -3219,9 +3296,9 @@ function ChatMessages({
 									: !streamingReasoning &&
 										activeToolCalls.length === 0 &&
 										!streamingContent && (
-											<Loader2
+											<RoseCurveSpinner
 												size={14}
-												className="animate-spin text-muted-foreground"
+												className="text-muted-foreground"
 											/>
 										)}
 							</div>
@@ -3287,7 +3364,7 @@ function ThinkingBlock({
 				{isStreaming ? (
 					<span className="flex items-center gap-1">
 						Thinking
-						<Loader2 size={8} className="animate-spin" />
+						<RoseCurveSpinner size={8} />
 					</span>
 				) : (
 					<span>Thought process</span>
@@ -3400,7 +3477,7 @@ function ToolCallBlock({
 					<ChevronRight size={10} />
 				</motion.span>
 				{isStreaming ? (
-					<Loader2 size={10} className="animate-spin" />
+					<RoseCurveSpinner size={10} />
 				) : authError ? (
 					<Wrench size={10} className="text-destructive" />
 				) : (
@@ -3498,8 +3575,8 @@ function EmptyChat({
 				transition={{ duration: 0.4 }}
 				className="text-center"
 			>
-				<div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center bg-foreground">
-					<HarnessMark size={24} className="text-background" />
+				<div className="mx-auto mb-6 flex items-center justify-center">
+					<ThinkingFiveSpinner size={96} className="text-foreground" />
 				</div>
 				<h2 className="mb-2 text-lg font-medium text-foreground">
 					Start a conversation
@@ -4234,7 +4311,7 @@ function ChatSkeleton() {
 					<Skeleton className="h-6 w-40" />
 				</div>
 				<div className="flex flex-1 items-center justify-center">
-					<div className="h-5 w-5 animate-spin border-2 border-foreground border-t-transparent" />
+					<RoseCurveSpinner size={48} className="text-foreground" />
 				</div>
 			</div>
 		</div>
