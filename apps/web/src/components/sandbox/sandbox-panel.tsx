@@ -13,6 +13,7 @@ import {
 	useSandboxPanel,
 } from "../../lib/sandbox-panel-context";
 import { cn } from "../../lib/utils";
+import { RoseCurveSpinner } from "../rose-curve-spinner";
 import { CommandRunner } from "./command-input";
 import { FileExplorer } from "./file-explorer";
 import { FileViewer } from "./file-viewer";
@@ -272,7 +273,11 @@ export function SandboxPanel() {
 					{terminalMode === "pty" ? (
 						<Suspense
 							fallback={
-								<div className="flex flex-1 items-center justify-center">
+								<div className="flex flex-1 items-center justify-center gap-2">
+									<RoseCurveSpinner
+										size={12}
+										className="text-muted-foreground/40"
+									/>
 									<span className="font-mono text-[10.5px] text-muted-foreground/40">
 										Loading terminal...
 									</span>

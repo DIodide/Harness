@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routes import chat, health, mcp_health, mcp_oauth, sandbox, terminal
+from app.routes import chat, commands, health, mcp_health, mcp_oauth, sandbox, terminal
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,8 +48,10 @@ app.add_middleware(
         settings.frontend_url,
         "http://localhost:3000",
         "http://localhost:3001",
+        "http://localhost:3003",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
+        "http://127.0.0.1:3003",
         "http://127.0.0.1:57177",
         "https://harness.nz",
         "https://staging.harness.nz",
@@ -65,5 +67,6 @@ app.include_router(health.router)
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(mcp_oauth.router, prefix="/api/mcp/oauth", tags=["mcp-oauth"])
 app.include_router(mcp_health.router, prefix="/api/mcp/health", tags=["mcp-health"])
+app.include_router(commands.router, prefix="/api/commands", tags=["commands"])
 app.include_router(sandbox.router, prefix="/api/sandbox", tags=["sandbox"])
 app.include_router(terminal.router, prefix="/api/sandbox", tags=["terminal"])

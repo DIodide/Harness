@@ -513,12 +513,21 @@ async def chat_stream(
 
             client_disconnected = False
 
+            # Force a specific tool on the first iteration when forced_tool is set
+            tool_choice: dict | str | None = None
+            if body.forced_tool and iteration == 0 and tools:
+                tool_choice = {
+                    "type": "function",
+                    "function": {"name": body.forced_tool},
+                }
+
             try:
                 async for chunk in stream_chat(
                     http_client,
                     messages,
                     body.harness.model,
                     tools,
+                    tool_choice=tool_choice,
                 ):
                     if not client_disconnected and await request.is_disconnected():
                         logger.info(

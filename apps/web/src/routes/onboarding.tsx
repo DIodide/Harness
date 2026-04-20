@@ -42,6 +42,7 @@ import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../components/princeton-connect-row";
 import { RecommendedSkillsGrid } from "../components/recommended-skills-grid";
+import { RoseCurveSpinner } from "../components/rose-curve-spinner";
 import { SkillsBrowser } from "../components/skills-browser";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -57,7 +58,13 @@ import {
 import { Textarea } from "../components/ui/textarea";
 import { env } from "../env";
 import type { McpServerEntry } from "../lib/mcp";
-import { PRESET_MCPS, presetIdsToServerEntries } from "../lib/mcp";
+import {
+	fetchCommandsFromApi,
+	PRESET_MCPS,
+	presetIdsToServerEntries,
+	sanitizeServerName,
+	toMcpServerPayload,
+} from "../lib/mcp";
 import { MODELS } from "../lib/models";
 import type { SkillEntry } from "../lib/skills";
 import { RECOMMENDED_SKILLS } from "../lib/skills";
@@ -173,8 +180,12 @@ function OnboardingPage() {
 	const safeIndex = Math.min(stepIndex, steps.length - 1);
 	const currentStep = steps[safeIndex]?.key ?? "name";
 
+	const updateHarnessMut = useMutation({
+		mutationFn: useConvexMutation(api.harnesses.update),
+	});
+	// Direct Convex mutations for fire-and-forget command sync (survives unmount)
+	const upsertCommandsFn = useConvexMutation(api.commands.upsert);
 	const updateHarnessFn = useConvexMutation(api.harnesses.update);
-	const updateHarnessMut = useMutation({ mutationFn: updateHarnessFn });
 	const ensureSkillDetailsFn = useConvexAction(api.skills.ensureSkillDetails);
 	const { getToken } = useAuth();
 	const createHarnessFn = useConvexMutation(api.harnesses.create);
@@ -247,12 +258,7 @@ function OnboardingPage() {
 									...(token ? { Authorization: `Bearer ${token}` } : {}),
 								},
 								body: JSON.stringify({
-									mcp_servers: allMcpServers.map((s) => ({
-										name: s.name,
-										url: s.url,
-										auth_type: s.authType,
-										...(s.authToken ? { auth_token: s.authToken } : {}),
-									})),
+									mcp_servers: toMcpServerPayload(allMcpServers),
 								}),
 							},
 						);
@@ -267,6 +273,46 @@ function OnboardingPage() {
 						}
 					} catch {
 						// Non-blocking — prompts are optional
+					}
+				})();
+
+				// Fire-and-forget: fetch commands, upsert, and link to harness
+				(async () => {
+					try {
+						const token = await getToken();
+						const cmds = await fetchCommandsFromApi(
+							API_URL,
+							allMcpServers,
+							token,
+						);
+						if (!cmds || cmds.length === 0) return;
+
+						const ids = await upsertCommandsFn({
+							commands: cmds.map((c) => ({
+								name: c.name,
+								server: c.server,
+								tool: c.tool,
+								description: c.description,
+								parametersJson: JSON.stringify(c.parameters),
+							})),
+						});
+
+						const idByName = new Map(cmds.map((c, i) => [c.name, ids[i]]));
+						const enriched = allMcpServers.map((s) => ({
+							name: s.name,
+							url: s.url,
+							authType: s.authType,
+							...(s.authToken ? { authToken: s.authToken } : {}),
+							commandIds: [...idByName.entries()]
+								.filter(([name]) =>
+									name.startsWith(`${sanitizeServerName(s.name)}__`),
+								)
+								.map(([, cmdId]) => cmdId),
+						}));
+
+						await updateHarnessFn({ id, mcpServers: enriched });
+					} catch {
+						// Non-blocking
 					}
 				})();
 			}
@@ -290,6 +336,11 @@ function OnboardingPage() {
 		if (safeIndex > 0) setStepIndex(safeIndex - 1);
 	};
 
+	// Strip commandIds from servers — commands are synced after creation in the chat page
+	const mcpServersForMutation = allMcpServers.map(
+		({ commandIds: _, ...rest }) => rest,
+	);
+
 	const handleCreate = () => {
 		const defaultSandbox = getDefaultSandboxSelection(selectedSandbox);
 		if (sandboxEnabled && !defaultSandbox) {
@@ -300,7 +351,7 @@ function OnboardingPage() {
 			name: name.trim(),
 			model,
 			status: "started" as const,
-			mcpServers: allMcpServers,
+			mcpServers: mcpServersForMutation,
 			skills: selectedSkills,
 			systemPrompt: systemPrompt.trim() || undefined,
 			sandboxEnabled: sandboxEnabled || undefined,
@@ -319,7 +370,7 @@ function OnboardingPage() {
 			name: name.trim() || "Untitled Harness",
 			model: model || "gpt-4o",
 			status: "draft" as const,
-			mcpServers: allMcpServers,
+			mcpServers: mcpServersForMutation,
 			skills: selectedSkills,
 			systemPrompt: systemPrompt.trim() || undefined,
 			sandboxEnabled: sandboxEnabled || undefined,
@@ -495,7 +546,7 @@ function OnboardingPage() {
 						>
 							{createHarness.isPending ? (
 								<span className="flex items-center gap-2">
-									<span className="h-3 w-3 animate-spin border border-background border-t-transparent" />
+									<RoseCurveSpinner size={12} className="text-background" />
 									Creating...
 								</span>
 							) : (

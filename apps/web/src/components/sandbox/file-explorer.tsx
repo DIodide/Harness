@@ -4,7 +4,6 @@ import {
 	File,
 	Folder,
 	FolderOpen,
-	Loader2,
 	RefreshCw,
 	Search,
 } from "lucide-react";
@@ -12,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createSandboxApi, type SandboxFile } from "../../lib/sandbox-api";
 import { useSandboxPanel } from "../../lib/sandbox-panel-context";
 import { cn } from "../../lib/utils";
+import { RoseCurveSpinner } from "../rose-curve-spinner";
 import { ScrollArea } from "../ui/scroll-area";
 import { FileContextMenu } from "./file-context-menu";
 import { FileSearch } from "./file-search";
@@ -159,9 +159,9 @@ export function FileExplorer() {
 				<div className="py-0.5">
 					{rootNode?.loading && rootNode.files.length === 0 ? (
 						<div className="flex items-center justify-center py-12">
-							<Loader2
+							<RoseCurveSpinner
 								size={14}
-								className="animate-spin text-muted-foreground/40"
+								className="text-muted-foreground/40"
 							/>
 						</div>
 					) : rootNode?.files.length === 0 ? (
@@ -293,7 +293,7 @@ function FileTreeNode({
 						className="flex items-center gap-1 py-1 font-mono text-[10px] text-muted-foreground/35"
 						style={{ paddingLeft: `${(depth + 1) * 12 + 8}px` }}
 					>
-						<Loader2 size={9} className="animate-spin" />
+						<RoseCurveSpinner size={9} />
 					</div>
 				) : (
 					node.files.map((child) => (

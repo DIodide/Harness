@@ -98,6 +98,7 @@ export interface ChatStreamRequest {
 		};
 	};
 	conversation_id: string;
+	forced_tool?: string;
 }
 
 export function useChatStream(callbacks: UseChatStreamCallbacks) {

@@ -1,9 +1,10 @@
 import { useAuth } from "@clerk/clerk-react";
 import "@xterm/xterm/css/xterm.css";
-import { Loader2, RotateCcw, TerminalSquare } from "lucide-react";
+import { RotateCcw, TerminalSquare } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { env } from "../../env";
 import { useSandboxPanel } from "../../lib/sandbox-panel-context";
+import { RoseCurveSpinner } from "../rose-curve-spinner";
 
 const WS_URL = (() => {
 	const url = new URL(env.VITE_FASTAPI_URL ?? "http://localhost:8000");
@@ -230,10 +231,7 @@ export function WebTerminal() {
 									: "disconnected"}
 					</span>
 					{state === "connecting" && (
-						<Loader2
-							size={10}
-							className="animate-spin text-muted-foreground/40"
-						/>
+						<RoseCurveSpinner size={10} className="text-muted-foreground/40" />
 					)}
 				</div>
 				{(state === "disconnected" || state === "error") && (

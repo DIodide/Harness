@@ -23,7 +23,8 @@ import {
 	Cpu,
 	Eye,
 	EyeOff,
-	Loader2,
+	Globe,
+	HardDrive,
 	Pencil,
 	Plus,
 	Server,
@@ -39,6 +40,7 @@ import { OAuthConnectRow } from "../../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../../components/princeton-connect-row";
 import { RecommendedSkillsGrid } from "../../components/recommended-skills-grid";
+import { RoseCurveSpinner } from "../../components/rose-curve-spinner";
 import { SkillViewerDialog } from "../../components/skill-viewer-dialog";
 import { SkillsBrowser } from "../../components/skills-browser";
 import { Badge } from "../../components/ui/badge";
@@ -65,7 +67,12 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Textarea } from "../../components/ui/textarea";
 import { env } from "../../env";
 import type { McpServerEntry } from "../../lib/mcp";
-import { PRESET_MCPS } from "../../lib/mcp";
+import {
+	fetchCommandsFromApi,
+	PRESET_MCPS,
+	sanitizeServerName,
+	toMcpServerPayload,
+} from "../../lib/mcp";
 import { MODELS } from "../../lib/models";
 import type { SkillEntry } from "../../lib/skills";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "../../lib/system-prompt";
@@ -138,6 +145,7 @@ function HarnessEditPage() {
 
 	const { getToken } = useAuth();
 	const updateHarnessFn = useConvexMutation(api.harnesses.update);
+	const upsertCommandsFn = useConvexMutation(api.commands.upsert);
 	const ensureSkillDetailsFn = useConvexAction(api.skills.ensureSkillDetails);
 
 	const updateHarness = useMutation({
@@ -161,7 +169,7 @@ function HarnessEditPage() {
 				);
 			}
 
-			// Regenerate suggested prompts when MCP servers changed
+			// Regenerate suggested prompts and commands when MCP servers changed
 			if (savedMcpServers !== null && savedMcpServers.length > 0) {
 				(async () => {
 					try {
@@ -175,12 +183,7 @@ function HarnessEditPage() {
 									...(token ? { Authorization: `Bearer ${token}` } : {}),
 								},
 								body: JSON.stringify({
-									mcp_servers: savedMcpServers.map((s) => ({
-										name: s.name,
-										url: s.url,
-										auth_type: s.authType,
-										...(s.authToken ? { auth_token: s.authToken } : {}),
-									})),
+									mcp_servers: toMcpServerPayload(savedMcpServers),
 								}),
 							},
 						);
@@ -193,6 +196,49 @@ function HarnessEditPage() {
 								});
 							}
 						}
+					} catch {
+						// Non-blocking
+					}
+				})();
+
+				// Fire-and-forget: fetch commands, upsert, and link to harness
+				(async () => {
+					try {
+						const token = await getToken();
+						const cmds = await fetchCommandsFromApi(
+							API_URL,
+							savedMcpServers,
+							token,
+						);
+						if (!cmds || cmds.length === 0) return;
+
+						const ids = await upsertCommandsFn({
+							commands: cmds.map((c) => ({
+								name: c.name,
+								server: c.server,
+								tool: c.tool,
+								description: c.description,
+								parametersJson: JSON.stringify(c.parameters),
+							})),
+						});
+
+						const idByName = new Map(cmds.map((c, i) => [c.name, ids[i]]));
+						const enriched = savedMcpServers.map((s) => ({
+							name: s.name,
+							url: s.url,
+							authType: s.authType,
+							...(s.authToken ? { authToken: s.authToken } : {}),
+							commandIds: [...idByName.entries()]
+								.filter(([name]) =>
+									name.startsWith(`${sanitizeServerName(s.name)}__`),
+								)
+								.map(([, cmdId]) => cmdId),
+						}));
+
+						await updateHarnessFn({
+							id: harnessId as Id<"harnesses">,
+							mcpServers: enriched,
+						});
 					} catch {
 						// Non-blocking
 					}
@@ -385,7 +431,7 @@ function HarnessEditPage() {
 					disabled={!hasChanges || updateHarness.isPending}
 				>
 					{updateHarness.isPending ? (
-						<Loader2 size={14} className="animate-spin" />
+						<RoseCurveSpinner size={14} />
 					) : (
 						<Check size={14} />
 					)}

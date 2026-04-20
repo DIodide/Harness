@@ -2,11 +2,12 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, Server, Shield } from "lucide-react";
+import { AlertTriangle, Server, Shield } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { env } from "../env";
+import { RoseCurveSpinner } from "./rose-curve-spinner";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -150,9 +151,11 @@ const STATUS_LABEL: Record<ServerStatus, string> = {
 export function McpServerStatus({
 	servers,
 	healthStatuses = {},
+	onReconnected,
 }: {
 	servers: McpServer[];
 	healthStatuses?: Record<string, HealthStatus>;
+	onReconnected?: () => void;
 }) {
 	const { data: oauthStatuses } = useQuery(
 		convexQuery(api.mcpOAuthTokens.listStatuses, {}),
@@ -207,7 +210,7 @@ export function McpServerStatus({
 					>
 						<div className="relative">
 							{anyChecking ? (
-								<Loader2 size={10} className="animate-spin" />
+								<RoseCurveSpinner size={10} />
 							) : (
 								<Server size={10} />
 							)}
@@ -243,7 +246,7 @@ export function McpServerStatus({
 									key={server.url}
 									server={server}
 									status={status}
-									onReconnected={() => {}}
+									onReconnected={onReconnected}
 								/>
 							))}
 						</div>
@@ -261,7 +264,7 @@ function McpServerRow({
 }: {
 	server: McpServer;
 	status: ServerStatus;
-	onReconnected: () => void;
+	onReconnected?: () => void;
 }) {
 	const { getToken } = useAuth();
 	const [connecting, setConnecting] = useState(false);
@@ -271,7 +274,7 @@ function McpServerRow({
 		startOAuthPopup(getToken, server.url, {
 			onSuccess: () => {
 				toast.success(`Reconnected to ${server.name}`);
-				onReconnected();
+				onReconnected?.();
 			},
 			onError: (msg) => toast.error(msg),
 			onDone: () => setConnecting(false),
@@ -285,9 +288,9 @@ function McpServerRow({
 	return (
 		<div className="flex items-center gap-2 px-3 py-1.5">
 			{status === "checking" ? (
-				<Loader2
+				<RoseCurveSpinner
 					size={10}
-					className="shrink-0 animate-spin text-muted-foreground"
+					className="shrink-0 text-muted-foreground"
 				/>
 			) : (
 				<div
@@ -308,11 +311,7 @@ function McpServerRow({
 					onClick={handleReconnect}
 					disabled={connecting}
 				>
-					{connecting ? (
-						<Loader2 size={8} className="animate-spin" />
-					) : (
-						<Shield size={8} />
-					)}
+					{connecting ? <RoseCurveSpinner size={8} /> : <Shield size={8} />}
 					Reconnect
 				</Button>
 			)}
@@ -355,9 +354,11 @@ export function parseAuthRequiredError(
 export function OAuthReconnectPrompt({
 	serverUrl,
 	errorMessage,
+	onReconnected,
 }: {
 	serverUrl: string;
 	errorMessage: string;
+	onReconnected?: () => void;
 }) {
 	const { getToken } = useAuth();
 	const [connecting, setConnecting] = useState(false);
@@ -369,11 +370,12 @@ export function OAuthReconnectPrompt({
 			onSuccess: () => {
 				toast.success("Reconnected — you can retry the message");
 				setReconnected(true);
+				onReconnected?.();
 			},
 			onError: (msg) => toast.error(msg),
 			onDone: () => setConnecting(false),
 		});
-	}, [getToken, serverUrl]);
+	}, [getToken, serverUrl, onReconnected]);
 
 	if (reconnected) {
 		return (
@@ -397,11 +399,7 @@ export function OAuthReconnectPrompt({
 				onClick={handleReconnect}
 				disabled={connecting}
 			>
-				{connecting ? (
-					<Loader2 size={10} className="animate-spin" />
-				) : (
-					<Shield size={10} />
-				)}
+				{connecting ? <RoseCurveSpinner size={10} /> : <Shield size={10} />}
 				Reconnect
 			</Button>
 		</div>
