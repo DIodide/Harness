@@ -67,6 +67,7 @@ import {
 	MessageActions,
 } from "../../components/message-actions";
 import { MessageAttachments } from "../../components/message-attachments";
+import { PendingResponseIndicator } from "../../components/pending-response-indicator";
 import { RoseCurveSpinner } from "../../components/rose-curve-spinner";
 import { SandboxPanel } from "../../components/sandbox/sandbox-panel";
 import { SandboxResult } from "../../components/sandbox-result";
@@ -2963,9 +2964,13 @@ function ChatMessages({
 		lastMsg.content === pendingDoneContent;
 	const isActivelyStreaming =
 		streamingContent !== null || streamingReasoning !== null;
-	// Show the streaming bubble when we have content, reasoning, or tool calls, but Convex hasn't synced yet
+	// Show the streaming bubble while we're waiting for or receiving a response
+	// (content, reasoning, tool calls) but Convex hasn't synced yet. Include
+	// `isStreaming` so the bubble appears immediately with a pending spinner
+	// before the first chunk arrives.
 	const showStreamingBubble =
-		(streamingContent !== null ||
+		(isStreaming ||
+			streamingContent !== null ||
 			streamingReasoning !== null ||
 			activeToolCalls.length > 0) &&
 		!convexHasMessage;
@@ -3430,12 +3435,7 @@ function ChatMessages({
 										})
 									: !streamingReasoning &&
 										activeToolCalls.length === 0 &&
-										!streamingContent && (
-											<RoseCurveSpinner
-												size={14}
-												className="text-muted-foreground"
-											/>
-										)}
+										!streamingContent && <PendingResponseIndicator />}
 							</div>
 							{displayMode === "developer" && streamUsage && (
 								<div className="flex items-center gap-3 pt-1">

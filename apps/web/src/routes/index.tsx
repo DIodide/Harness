@@ -535,7 +535,7 @@ function LandingNav() {
 								<Link to="/sign-in">Log in</Link>
 							</Button>
 							<Button size="sm" asChild>
-								<Link to="/sign-in">
+								<Link to="/sign-up">
 									Get Started
 									<ArrowRight size={14} />
 								</Link>
@@ -605,7 +605,7 @@ function LandingNav() {
 											</Link>
 										</Button>
 										<Button asChild>
-											<Link to="/sign-in" onClick={() => setOpen(false)}>
+											<Link to="/sign-up" onClick={() => setOpen(false)}>
 												Get Started
 												<ArrowRight size={14} />
 											</Link>
@@ -670,7 +670,7 @@ function HeroSection() {
 							className="flex flex-wrap items-center gap-4"
 						>
 							<Button size="lg" asChild>
-								<Link to={isSignedIn ? "/chat" : "/sign-in"}>
+								<Link to={isSignedIn ? "/chat" : "/sign-up"}>
 									{isSignedIn ? "Go to Chat" : "Get Started"}
 									<ArrowRight size={16} />
 								</Link>
@@ -922,7 +922,7 @@ function CTASection() {
 						</p>
 						<div className="flex flex-wrap items-center justify-center gap-4">
 							<Button size="lg" asChild>
-								<Link to={isSignedIn ? "/chat" : "/sign-in"}>
+								<Link to={isSignedIn ? "/chat" : "/sign-up"}>
 									{isSignedIn ? "Go to Chat" : "Get Started Free"}
 									<ArrowRight size={16} />
 								</Link>

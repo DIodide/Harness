@@ -233,9 +233,14 @@ function OnboardingPage() {
 
 			return harnessId;
 		},
-		onSuccess: (harnessId) => {
+		onSuccess: (harnessId, variables) => {
 			const id = harnessId as Id<"harnesses">;
-			navigate({ to: "/chat", search: { harnessId: id as string } });
+			if (variables.status === "draft") {
+				navigate({ to: "/harnesses" });
+				toast.success("Draft saved");
+			} else {
+				navigate({ to: "/chat", search: { harnessId: id as string } });
+			}
 
 			// Fire-and-forget: sync skill details for added skills
 			if (selectedSkills.length > 0) {
@@ -361,14 +366,22 @@ function OnboardingPage() {
 	};
 
 	const handleSaveDraft = () => {
+		if (!name.trim()) {
+			toast.error("Give your harness a name before saving");
+			return;
+		}
+		if (!model) {
+			toast.error("Pick a model before saving");
+			return;
+		}
 		const defaultSandbox = getDefaultSandboxSelection(selectedSandbox);
 		if (sandboxEnabled && !defaultSandbox) {
 			toast.error("Select an existing sandbox");
 			return;
 		}
 		createHarness.mutate({
-			name: name.trim() || "Untitled Harness",
-			model: model || "gpt-4o",
+			name: name.trim(),
+			model,
 			status: "draft" as const,
 			mcpServers: mcpServersForMutation,
 			skills: selectedSkills,
@@ -415,7 +428,14 @@ function OnboardingPage() {
 					variant="ghost"
 					size="sm"
 					onClick={handleSaveDraft}
-					disabled={createHarness.isPending}
+					disabled={
+						createHarness.isPending || !name.trim() || !model
+					}
+					title={
+						!name.trim() || !model
+							? "Name the harness and pick a model first"
+							: undefined
+					}
 				>
 					Save Draft
 				</Button>

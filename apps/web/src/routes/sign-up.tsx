@@ -1,14 +1,14 @@
-import { SignIn } from "@clerk/tanstack-react-start";
+import { SignUp } from "@clerk/tanstack-react-start";
 import { createFileRoute } from "@tanstack/react-router";
 import { motion } from "motion/react";
 
 import { HarnessMark } from "../components/harness-mark";
 
-export const Route = createFileRoute("/sign-in")({
-	component: SignInPage,
+export const Route = createFileRoute("/sign-up")({
+	component: SignUpPage,
 });
 
-function SignInPage() {
+function SignUpPage() {
 	return (
 		<div className="flex min-h-screen">
 			<div className="hidden flex-col justify-between bg-foreground p-12 text-background lg:flex lg:w-1/2">
@@ -62,10 +62,10 @@ function SignInPage() {
 							Harness
 						</span>
 					</div>
-					<SignIn
+					<SignUp
 						routing="hash"
 						forceRedirectUrl="/app"
-						signUpUrl="/sign-up"
+						signInUrl="/sign-in"
 						appearance={{
 							elements: {
 								rootBox: "w-full max-w-sm",

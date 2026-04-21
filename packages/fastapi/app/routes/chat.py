@@ -645,6 +645,18 @@ async def chat_stream(
                     "OpenRouter HTTP error: %s",
                     e.response.status_code,
                 )
+                await _save_interrupted(
+                    http_client,
+                    body,
+                    user_id,
+                    collected_content,
+                    all_reasoning,
+                    all_tool_calls_history,
+                    all_parts,
+                    collected_usage,
+                    collected_model,
+                    f"Upstream service error ({e.response.status_code})",
+                )
                 yield {
                     "event": "error",
                     "data": json.dumps(
@@ -656,6 +668,18 @@ async def chat_stream(
                 return
             except httpx.HTTPError as e:
                 logger.error("HTTP error during chat stream: %s", e)
+                await _save_interrupted(
+                    http_client,
+                    body,
+                    user_id,
+                    collected_content,
+                    all_reasoning,
+                    all_tool_calls_history,
+                    all_parts,
+                    collected_usage,
+                    collected_model,
+                    "Service unavailable",
+                )
                 yield {
                     "event": "error",
                     "data": json.dumps({"message": "Service unavailable"}),
@@ -665,6 +689,18 @@ async def chat_stream(
                 logger.exception(
                     "Unexpected error in chat stream for conversation '%s'",
                     body.conversation_id,
+                )
+                await _save_interrupted(
+                    http_client,
+                    body,
+                    user_id,
+                    collected_content,
+                    all_reasoning,
+                    all_tool_calls_history,
+                    all_parts,
+                    collected_usage,
+                    collected_model,
+                    "Internal server error",
                 )
                 yield {
                     "event": "error",
@@ -904,11 +940,24 @@ async def chat_stream(
                 body.conversation_id,
             )
 
-        # Max iterations reached
+        # Max iterations reached — persist everything we have so the user can
+        # see the partial trace instead of it silently vanishing.
         logger.warning(
             "Max tool iterations (%d) reached for conversation '%s'",
             MAX_TOOL_ITERATIONS,
             body.conversation_id,
+        )
+        await _save_interrupted(
+            http_client,
+            body,
+            user_id,
+            "",
+            all_reasoning,
+            all_tool_calls_history,
+            all_parts,
+            collected_usage,
+            collected_model,
+            f"Max tool call iterations ({MAX_TOOL_ITERATIONS}) reached",
         )
         yield {
             "event": "error",
@@ -916,3 +965,64 @@ async def chat_stream(
         }
 
     return EventSourceResponse(event_generator())
+
+
+async def _save_interrupted(
+    http_client: httpx.AsyncClient,
+    body: "ChatRequest",
+    user_id: str,
+    content: str,
+    reasoning: str,
+    tool_calls_history: list[dict],
+    parts: list[dict],
+    collected_usage: dict | None,
+    collected_model: str | None,
+    reason: str,
+) -> None:
+    """Persist partial assistant state when the stream ends before a normal finish."""
+    usage_for_convex: dict | None = None
+    if collected_usage:
+        usage_for_convex = {
+            "promptTokens": collected_usage.get("prompt_tokens", 0),
+            "completionTokens": collected_usage.get("completion_tokens", 0),
+            "totalTokens": collected_usage.get("total_tokens", 0),
+        }
+        cost = collected_usage.get("cost")
+        if cost is not None:
+            usage_for_convex["cost"] = cost
+
+    try:
+        await save_assistant_message(
+            http_client,
+            body.conversation_id,
+            content,
+            reasoning=reasoning or None,
+            tool_calls=tool_calls_history or None,
+            parts=parts or None,
+            usage=usage_for_convex,
+            model=collected_model,
+            interrupted=True,
+            interruption_reason=reason,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to persist interrupted message for conversation '%s'",
+            body.conversation_id,
+        )
+
+    if collected_usage:
+        try:
+            await record_usage(
+                http_client,
+                user_id=user_id,
+                conversation_id=body.conversation_id,
+                harness_id=body.harness.harness_id,
+                harness_name=body.harness.name,
+                model=collected_model or body.harness.model,
+                usage_data=collected_usage,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record usage for interrupted conversation '%s'",
+                body.conversation_id,
+            )
