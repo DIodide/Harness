@@ -17,7 +17,10 @@ import type { ConvexReactClient } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 
 import { Toaster } from "react-hot-toast";
+import { CommandPalette } from "../components/command-palette/command-palette";
+import { GlobalCommands } from "../components/command-palette/commands/global-commands";
 import { TooltipProvider } from "../components/ui/tooltip";
+import { CommandPaletteProvider } from "../lib/command-palette/context";
 import appCss from "../styles.css?url";
 
 const CHROMELESS_ROUTES = ["/", "/sign-in", "/onboarding"];
@@ -121,24 +124,28 @@ function RootComponent() {
 		>
 			<ConvexProviderWithClerk client={context.convexClient} useAuth={useAuth}>
 				<TooltipProvider delayDuration={300}>
-					{isChromeless ? (
-						<Outlet />
-					) : (
-						<div className="flex h-screen overflow-hidden">
-							<div className="flex flex-1 flex-col overflow-hidden">
-								<Outlet />
+					<CommandPaletteProvider>
+						{isChromeless ? (
+							<Outlet />
+						) : (
+							<div className="flex h-screen overflow-hidden">
+								<div className="flex flex-1 flex-col overflow-hidden">
+									<Outlet />
+								</div>
 							</div>
-						</div>
-					)}
-					<Toaster
-						position="bottom-right"
-						toastOptions={{
-							style: {
-								borderRadius: "0px",
-								fontSize: "13px",
-							},
-						}}
-					/>
+						)}
+						<GlobalCommands />
+						<CommandPalette />
+						<Toaster
+							position="bottom-right"
+							toastOptions={{
+								style: {
+									borderRadius: "0px",
+									fontSize: "13px",
+								},
+							}}
+						/>
+					</CommandPaletteProvider>
 				</TooltipProvider>
 			</ConvexProviderWithClerk>
 		</ClerkProvider>

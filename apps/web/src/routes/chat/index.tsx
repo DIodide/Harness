@@ -9,7 +9,7 @@ import {
 	redirect,
 	useNavigate,
 } from "@tanstack/react-router";
-import { usePaginatedQuery } from "convex/react";
+import { useConvexAuth, usePaginatedQuery } from "convex/react";
 import {
 	AlertTriangle,
 	ArrowUp,
@@ -51,6 +51,7 @@ import React, {
 } from "react";
 import toast from "react-hot-toast";
 import { AttachmentChip } from "../../components/attachment-chip";
+import { useChatPaletteCommands } from "../../components/command-palette/commands/chat-commands";
 import { HarnessMark } from "../../components/harness-mark";
 import { MarkdownMessage } from "../../components/markdown-message";
 import {
@@ -576,11 +577,12 @@ function ChatPage() {
 		}
 	}, [activeSandboxSelection, sandboxes]);
 
+	const { isAuthenticated: convexAuthReady } = useConvexAuth();
 	useEffect(() => {
-		if (harnesses && harnesses.length === 0) {
+		if (convexAuthReady && harnesses && harnesses.length === 0) {
 			navigate({ to: "/onboarding" });
 		}
-	}, [harnesses, navigate]);
+	}, [convexAuthReady, harnesses, navigate]);
 
 	useEffect(() => {
 		const prev = prevStreamingRef.current;
@@ -1047,6 +1049,19 @@ function ChatPage() {
 			buildHarnessConfig,
 		],
 	);
+
+	useChatPaletteCommands({
+		isStreaming: activeConvoId
+			? chatStream.streamingConvoIds.has(activeConvoId)
+			: false,
+		canStartNewConversation: Boolean(activeHarnessId),
+		sidebarOpen,
+		onNewConversation: () => setActiveConvoId(null),
+		onCancelStream: () => {
+			if (activeConvoId) handleInterrupt(activeConvoId);
+		},
+		onToggleSidebar: () => setSidebarOpen((v) => !v),
+	});
 
 	if (harnessesLoading || !harnesses || harnesses.length === 0) {
 		return <ChatSkeleton />;

@@ -9,7 +9,7 @@ import {
 	redirect,
 	useNavigate,
 } from "@tanstack/react-router";
-import { usePaginatedQuery } from "convex/react";
+import { useConvexAuth, usePaginatedQuery } from "convex/react";
 import {
 	AlertTriangle,
 	ArrowUp,
@@ -52,6 +52,9 @@ import React, {
 } from "react";
 import toast from "react-hot-toast";
 import { AttachmentChip } from "../../components/attachment-chip";
+import { useChatPaletteCommands } from "../../components/command-palette/commands/chat-commands";
+import { useWorkspaceActionCommands } from "../../components/command-palette/commands/workspace-action-commands";
+import { useWorkspaceSwitchCommands } from "../../components/command-palette/commands/workspace-switch-commands";
 import { HarnessMark } from "../../components/harness-mark";
 import { MarkdownMessage } from "../../components/markdown-message";
 import {
@@ -606,11 +609,12 @@ function ChatPage() {
 		}
 	}, [activeSandboxSelection, sandboxes]);
 
+	const { isAuthenticated: convexAuthReady } = useConvexAuth();
 	useEffect(() => {
-		if (harnesses && harnesses.length === 0) {
+		if (convexAuthReady && harnesses && harnesses.length === 0) {
 			navigate({ to: "/onboarding" });
 		}
-	}, [harnesses, navigate]);
+	}, [convexAuthReady, harnesses, navigate]);
 
 	useEffect(() => {
 		const prev = prevStreamingRef.current;
@@ -1002,6 +1006,19 @@ function ChatPage() {
 		],
 	);
 
+	useChatPaletteCommands({
+		isStreaming: activeConvoId
+			? chatStream.streamingConvoIds.has(activeConvoId)
+			: false,
+		canStartNewConversation: Boolean(activeWorkspace),
+		sidebarOpen,
+		onNewConversation: () => setActiveConvoId(null),
+		onCancelStream: () => {
+			if (activeConvoId) handleInterrupt(activeConvoId);
+		},
+		onToggleSidebar: () => setSidebarOpen((v) => !v),
+	});
+
 	if (harnessesLoading || !harnesses || harnesses.length === 0) {
 		return <ChatSkeleton />;
 	}
@@ -1312,6 +1329,7 @@ function WorkspaceSidebar({
 
 	const isMac = useIsMac();
 	useWorkspaceShortcuts(workspaces, onSelectWorkspace, isMac);
+	useWorkspaceSwitchCommands(workspaces, onSelectWorkspace, isMac);
 	const modifierHeld = useModifierHeld(isMac);
 
 	const handleNew = () => {
@@ -1461,6 +1479,16 @@ function WorkspaceSidebar({
 			color: renameWorkspaceColor ?? "",
 		});
 	};
+
+	const activeWorkspace = workspaces.find((w) => w._id === activeWorkspaceId);
+	useWorkspaceActionCommands({
+		activeWorkspace,
+		canCreateWorkspace: harnesses.length > 0 && sandboxes.length > 0,
+		onCreateWorkspace: () => setCreateOpen(true),
+		onRenameActiveWorkspace: () => {
+			if (activeWorkspace) startRenameWorkspace(activeWorkspace);
+		},
+	});
 
 	return (
 		<div className="flex h-full w-[280px] flex-col bg-background">
