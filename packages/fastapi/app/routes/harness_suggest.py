@@ -4,9 +4,9 @@ import pathlib
 
 import httpx
 from fastapi import APIRouter, Depends, Request
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import MODEL_MAP
@@ -658,6 +658,11 @@ class _Skill(BaseModel):
     description: str
     installs: int = 0
 
+    @field_validator("id", "description")
+    @classmethod
+    def no_newlines(cls, v: str) -> str:
+        return v.replace("\n", " ").replace("\r", " ")[:500]
+
 
 MAX_CONTEXT_CHARS = 10_000
 
@@ -665,7 +670,7 @@ MAX_CONTEXT_CHARS = 10_000
 class SuggestRequest(BaseModel):
     messages: list[_Message]
     context: str | None = None
-    available_skills: list[_Skill] | None = None
+    available_skills: Annotated[list[_Skill], Field(max_length=50)] | None = None
 
 
 @router.post("/stream")
