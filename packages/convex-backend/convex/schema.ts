@@ -85,9 +85,22 @@ export default defineSchema({
 		.index("by_harness", ["harnessId"])
 		.index("by_daytona_id", ["daytonaSandboxId"]),
 
+	workspaces: defineTable({
+		userId: v.string(),
+		name: v.string(),
+		harnessId: v.optional(v.id("harnesses")),
+		sandboxId: v.optional(v.id("sandboxes")),
+		color: v.optional(v.string()),
+		createdAt: v.number(),
+		lastUsedAt: v.number(),
+	})
+		.index("by_user", ["userId"])
+		.index("by_user_last_used", ["userId", "lastUsedAt"]),
+
 	conversations: defineTable({
 		title: v.string(),
 		lastHarnessId: v.optional(v.id("harnesses")),
+		workspaceId: v.optional(v.id("workspaces")),
 		userId: v.string(),
 		lastMessageAt: v.number(),
 		forkedFromConversationId: v.optional(v.id("conversations")),
@@ -97,13 +110,15 @@ export default defineSchema({
 	})
 		.index("by_user", ["userId"])
 		.index("by_user_last_message", ["userId", "lastMessageAt"])
+		.index("by_workspace_last_message", ["workspaceId", "lastMessageAt"])
 		.searchIndex("search_title", {
 			searchField: "title",
-			filterFields: ["userId"],
+			filterFields: ["userId", "workspaceId"],
 		}),
 
 	messages: defineTable({
 		conversationId: v.id("conversations"),
+		workspaceId: v.optional(v.id("workspaces")),
 		userId: v.optional(v.string()),
 		role: v.union(v.literal("user"), v.literal("assistant")),
 		content: v.string(),
@@ -158,7 +173,7 @@ export default defineSchema({
 		.index("by_conversation", ["conversationId"])
 		.searchIndex("search_content", {
 			searchField: "content",
-			filterFields: ["conversationId", "userId"]
+			filterFields: ["conversationId", "userId", "workspaceId"]
 		}),
 
 
@@ -214,6 +229,13 @@ export default defineSchema({
 		// session ("session") or persists the change to the harness ("harness").
 		modelSelectorMode: v.optional(
 			v.union(v.literal("session"), v.literal("harness")),
+		),
+		// Control whether or not we are in basic models or workspaces modes
+		workspacesMode: v.optional(
+			v.union(
+				v.literal("basic"),
+				v.literal("workspaces")
+			)
 		),
 	}).index("by_user", ["userId"]),
 

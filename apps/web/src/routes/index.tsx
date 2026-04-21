@@ -524,7 +524,7 @@ function LandingNav() {
 				<div className="hidden items-center gap-3 lg:flex">
 					{isSignedIn ? (
 						<Button size="sm" asChild>
-							<Link to="/chat">
+							<Link to="/app">
 								Chat
 								<ArrowRight size={14} />
 							</Link>

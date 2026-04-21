@@ -64,7 +64,7 @@ function SignInPage() {
 					</div>
 					<SignIn
 						routing="hash"
-						forceRedirectUrl="/chat"
+						forceRedirectUrl="/app"
 						appearance={{
 							elements: {
 								rootBox: "w-full max-w-sm",

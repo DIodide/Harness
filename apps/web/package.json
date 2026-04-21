@@ -40,6 +40,7 @@
     "arcjet": "^1.3.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
     "convex": "^1.31.7",
     "geist": "^1.7.0",
     "highlight.js": "^11.11.1",

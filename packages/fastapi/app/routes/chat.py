@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import re
 
 import httpx
 from fastapi import APIRouter, Depends, Request
@@ -9,7 +8,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.config import settings
 from app.dependencies import get_current_user, get_http_client
 from app.models import ChatRequest
-from app.services.convex import query_convex, save_assistant_message, patch_message_usage, create_sandbox_record
+from app.services.convex import query_convex, save_assistant_message, patch_message_usage
 from app.services.mcp_client import UserContext, call_tool, resolve_princeton_netid, list_tools
 from app.services.mcp_oauth import get_valid_token, GITHUB_STANDALONE_URL
 from app.services.openrouter import stream_chat
@@ -19,10 +18,7 @@ from app.services.sandbox_tools import (
     SANDBOX_TOOL_NAMES,
     execute_sandbox_tool,
 )
-from app.services.daytona_service import (
-    get_daytona_service,
-    RESOURCE_TIERS,
-)
+from app.services.daytona_service import get_daytona_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -67,9 +63,9 @@ def _extract_summary(detail: str, max_chars: int = 300) -> str:
     text = re.sub(r"^---\s*\n[\s\S]*?\n---\s*\n?", "", text).strip()
     # Collect non-heading, non-empty lines
     lines = [
-        l.strip()
-        for l in text.split("\n")
-        if l.strip() and not l.strip().startswith("#")
+        line.strip()
+        for line in text.split("\n")
+        if line.strip() and not line.strip().startswith("#")
     ]
     summary = " ".join(lines)
     if len(summary) > max_chars:
@@ -429,62 +425,11 @@ async def chat_stream(
                 # Existing sandbox — use it directly
                 sandbox_id = body.harness.sandbox_id
             else:
-                # Auto-provision a new sandbox on first chat message
-                yield {
-                    "event": "sandbox_status",
-                    "data": json.dumps({"sandbox_id": "", "status": "creating"}),
-                }
-                try:
-                    sandbox_config = body.harness.sandbox_config
-                    resource_tier = sandbox_config.resource_tier if sandbox_config else "basic"
-                    language = sandbox_config.default_language if sandbox_config else "python"
-                    ephemeral = not (sandbox_config and sandbox_config.persistent)
-
-                    sandbox = await asyncio.get_running_loop().run_in_executor(
-                        None,
-                        lambda: daytona_service.create_sandbox(
-                            user_id=user_id,
-                            harness_id=None,
-                            language=language,
-                            resource_tier=resource_tier,
-                            ephemeral=ephemeral,
-                        ),
-                    )
-                    sandbox_id = sandbox.id
-                    logger.info(
-                        "Auto-provisioned sandbox '%s' for harness '%s'",
-                        sandbox_id, body.harness.name,
-                    )
-
-                    # Persist sandbox record to Convex and link to harness
-                    tier = RESOURCE_TIERS.get(
-                        resource_tier, RESOURCE_TIERS["basic"],
-                    )
-                    await create_sandbox_record(
-                        http_client,
-                        user_id=user_id,
-                        harness_id=body.harness.harness_id,
-                        daytona_sandbox_id=sandbox_id,
-                        name=f"{body.harness.name} sandbox",
-                        language=language,
-                        ephemeral=ephemeral,
-                        resources={
-                            "cpu": tier["cpu"],
-                            "memoryGB": tier["memory"],
-                            "diskGB": tier["disk"],
-                        },
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to auto-provision sandbox for harness '%s'",
-                        body.harness.name,
-                    )
-                    yield {
-                        "event": "sandbox_status",
-                        "data": json.dumps({"sandbox_id": "", "status": "error"}),
-                    }
-                    # Continue without sandbox — MCP tools still work
-                    daytona_service = None
+                logger.info(
+                    "Sandbox enabled for harness '%s' without a default sandbox; continuing without sandbox tools",
+                    body.harness.name,
+                )
+                daytona_service = None
 
             if sandbox_id and daytona_service:
                 if tools is None:

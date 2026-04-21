@@ -16,6 +16,23 @@ const ROSE_SCALE = 3.25;
 const PATH_STEPS = 480;
 const PARTICLE_IDS = Array.from({ length: PARTICLE_COUNT }, (_, i) => `p-${i}`);
 
+const INITIAL_DETAIL_SCALE = getDetailScale(0);
+const INITIAL_PATH_D = buildPathD(INITIAL_DETAIL_SCALE);
+const INITIAL_PARTICLES = PARTICLE_IDS.map((_, i) => {
+	const tailOffset = i / (PARTICLE_COUNT - 1);
+	const point = computePoint(
+		normalizeProgress(-tailOffset * TRAIL_SPAN),
+		INITIAL_DETAIL_SCALE,
+	);
+	const fade = (1 - tailOffset) ** 0.56;
+	return {
+		cx: point.x.toFixed(2),
+		cy: point.y.toFixed(2),
+		r: (0.9 + fade * 2.7).toFixed(2),
+		opacity: (0.04 + fade * 0.96).toFixed(3),
+	};
+});
+
 function normalizeProgress(value: number) {
 	return ((value % 1) + 1) % 1;
 }
@@ -142,22 +159,29 @@ export function RoseCurveSpinner({
 			<g ref={groupRef}>
 				<path
 					ref={pathRef}
+					d={INITIAL_PATH_D}
 					stroke="currentColor"
 					strokeWidth={strokeWidth}
 					strokeLinecap="round"
 					strokeLinejoin="round"
 					opacity={0.1}
 				/>
-				{PARTICLE_IDS.map((id, i) => (
-					<circle
-						key={id}
-						ref={(el) => {
-							particlesRef.current[i] = el;
-						}}
-						fill="currentColor"
-						r={0}
-					/>
-				))}
+				{PARTICLE_IDS.map((id, i) => {
+					const p = INITIAL_PARTICLES[i];
+					return (
+						<circle
+							key={id}
+							ref={(el) => {
+								particlesRef.current[i] = el;
+							}}
+							fill="currentColor"
+							cx={p.cx}
+							cy={p.cy}
+							r={p.r}
+							opacity={p.opacity}
+						/>
+					);
+				})}
 			</g>
 		</svg>
 	);

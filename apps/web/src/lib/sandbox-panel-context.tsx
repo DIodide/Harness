@@ -2,7 +2,9 @@ import {
 	createContext,
 	useCallback,
 	useContext,
+	useEffect,
 	useMemo,
+	useRef,
 	useState,
 } from "react";
 
@@ -15,6 +17,8 @@ interface SandboxPanelState {
 	activeTab: SandboxTab;
 	/** The Daytona sandbox ID for API calls. */
 	sandboxId: string | null;
+	/** Incremented whenever the sandbox changes so panel children can remount. */
+	reloadKey: number;
 	/** Currently open file paths (tabs in the file viewer). */
 	openFiles: string[];
 	/** Which open file is active. */
@@ -44,6 +48,18 @@ export function SandboxPanelProvider({
 	const [openFiles, setOpenFiles] = useState<string[]>([]);
 	const [activeFile, setActiveFile] = useState<string | null>(null);
 	const [currentDir, setCurrentDir] = useState("/home/daytona");
+	const [reloadKey, setReloadKey] = useState(0);
+	const previousSandboxIdRef = useRef(sandboxId);
+
+	useEffect(() => {
+		if (previousSandboxIdRef.current === sandboxId) return;
+		previousSandboxIdRef.current = sandboxId;
+		setActiveTab("files");
+		setOpenFiles([]);
+		setActiveFile(null);
+		setCurrentDir("/home/daytona");
+		setReloadKey((key) => key + 1);
+	}, [sandboxId]);
 
 	const togglePanel = useCallback(() => setPanelOpen((o) => !o), []);
 
@@ -78,6 +94,7 @@ export function SandboxPanelProvider({
 			panelOpen,
 			activeTab,
 			sandboxId,
+			reloadKey,
 			openFiles,
 			activeFile,
 			currentDir,
@@ -92,6 +109,7 @@ export function SandboxPanelProvider({
 			panelOpen,
 			activeTab,
 			sandboxId,
+			reloadKey,
 			openFiles,
 			activeFile,
 			currentDir,

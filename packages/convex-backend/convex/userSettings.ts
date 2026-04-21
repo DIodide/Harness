@@ -5,6 +5,7 @@ const DEFAULTS = {
 	autoSwitchHarness: true,
 	displayMode: "standard" as const,
 	modelSelectorMode: "session" as const,
+	workspacesMode: "basic" as const,
 } as const;
 
 export const get = query({
@@ -23,6 +24,7 @@ export const get = query({
 			autoSwitchHarness: settings.autoSwitchHarness,
 			displayMode: settings.displayMode ?? "standard",
 			modelSelectorMode: settings.modelSelectorMode ?? "session",
+			workspacesMode: settings.workspacesMode ?? "basic"
 		};
 	},
 });
@@ -39,6 +41,9 @@ export const update = mutation({
 		),
 		modelSelectorMode: v.optional(
 			v.union(v.literal("session"), v.literal("harness")),
+		),
+		workspacesMode: v.optional(
+			v.union(v.literal("basic"), v.literal("workspaces")),
 		),
 	},
 	handler: async (ctx, args) => {

@@ -20,6 +20,7 @@ import type * as seed from "../seed.js";
 import type * as skills from "../skills.js";
 import type * as usage from "../usage.js";
 import type * as userSettings from "../userSettings.js";
+import type * as workspaces from "../workspaces.js";
 
 import type {
   ApiFromModules,
@@ -40,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   skills: typeof skills;
   usage: typeof usage;
   userSettings: typeof userSettings;
+  workspaces: typeof workspaces;
 }>;
 
 /**
