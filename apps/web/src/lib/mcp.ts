@@ -26,7 +26,6 @@ export interface PresetMcpDefinition {
 	server: McpServerEntry;
 }
 
-// When adding/removing MCPs, also update packages/shared/preset-mcps.json (used by the AI harness creation assistant).
 export const PRESET_MCPS: PresetMcpDefinition[] = [
 	{
 		id: "princetoncourses",

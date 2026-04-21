@@ -51,31 +51,6 @@ export const create = mutation({
 	},
 });
 
-export const createCreationSession = mutation({
-	args: { title: v.string() },
-	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Unauthenticated");
-		return await ctx.db.insert("conversations", {
-			title: args.title,
-			userId: identity.subject,
-			lastMessageAt: Date.now(),
-			isCreationSession: true,
-		});
-	},
-});
-
-export const linkToHarness = mutation({
-	args: { id: v.id("conversations"), harnessId: v.id("harnesses") },
-	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error("Unauthenticated");
-		const convo = await ctx.db.get(args.id);
-		if (!convo || convo.userId !== identity.subject) throw new Error("Not found");
-		await ctx.db.patch(args.id, { lastHarnessId: args.harnessId, isCreationSession: undefined });
-	},
-});
-
 export const updateTitle = mutation({
 	args: { id: v.id("conversations"), title: v.string() },
 	handler: async (ctx, args) => {
