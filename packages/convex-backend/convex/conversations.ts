@@ -62,7 +62,7 @@ export const create = mutation({
 			if (!workspace || workspace.userId !== identity.subject) {
 				throw new Error("Workspace not found");
 			}
-			if (workspace.harnessId !== args.harnessId) {
+			if (workspace.harnessId && workspace.harnessId !== args.harnessId) {
 				throw new Error("Workspace harness mismatch");
 			}
 		}

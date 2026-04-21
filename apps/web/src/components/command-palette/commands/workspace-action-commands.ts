@@ -8,8 +8,8 @@ import { getWorkspaceColorHex } from "../../../lib/workspace-colors";
 interface ActiveWorkspace {
 	_id: Id<"workspaces">;
 	name: string;
-	harnessId: Id<"harnesses">;
-	sandboxId: Id<"sandboxes">;
+	harnessId?: Id<"harnesses">;
+	sandboxId?: Id<"sandboxes">;
 	color?: string;
 }
 

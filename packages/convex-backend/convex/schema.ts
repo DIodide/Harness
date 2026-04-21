@@ -88,8 +88,8 @@ export default defineSchema({
 	workspaces: defineTable({
 		userId: v.string(),
 		name: v.string(),
-		harnessId: v.id("harnesses"),
-		sandboxId: v.id("sandboxes"),
+		harnessId: v.optional(v.id("harnesses")),
+		sandboxId: v.optional(v.id("sandboxes")),
 		color: v.optional(v.string()),
 		createdAt: v.number(),
 		lastUsedAt: v.number(),

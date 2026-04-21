@@ -187,6 +187,7 @@ const EMPTY_STREAM_STATE: ConvoStreamState = {
 };
 
 type SandboxSelection = "harness" | "none" | Id<"sandboxes">;
+const NONE_OPTION = "__none__";
 
 function ChatPage() {
 	const navigate = useNavigate();
@@ -578,14 +579,26 @@ function ChatPage() {
 			return;
 		}
 
-		setActiveHarnessId(activeWorkspace.harnessId);
-		setActiveSandboxSelection(activeWorkspace.sandboxId);
+		if (activeWorkspace.harnessId) {
+			setActiveHarnessId(activeWorkspace.harnessId);
+		} else if (
+			activeHarnessId &&
+			harnesses?.some((harness) => harness._id === activeHarnessId)
+		) {
+			setActiveHarnessId(activeHarnessId);
+		} else if (harnesses?.length) {
+			const started = harnesses.find((h) => h.status === "started");
+			setActiveHarnessId(started?._id ?? harnesses[0]._id);
+		} else {
+			setActiveHarnessId(null);
+		}
+		setActiveSandboxSelection(activeWorkspace.sandboxId ?? "none");
 		navigate({
 			to: "/workspaces",
 			search: { workspaceId: activeWorkspace._id },
 			replace: true,
 		});
-	}, [activeWorkspace, harnesses, initialHarnessId, navigate]);
+	}, [activeWorkspace, activeHarnessId, harnesses, initialHarnessId, navigate]);
 
 	// Reset session model whenever the active harness or conversation changes
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on harness/conversation switch
@@ -1109,6 +1122,7 @@ function ChatPage() {
 
 				<div className="flex flex-1 flex-col overflow-hidden">
 					<ChatHeader
+						workspace={activeWorkspace}
 						harness={activeHarness}
 						sandboxes={sandboxes ?? []}
 						activeSandboxSelection={activeSandboxSelection}
@@ -1305,8 +1319,8 @@ function WorkspaceSidebar({
 	workspaces: Array<{
 		_id: Id<"workspaces">;
 		name: string;
-		harnessId: Id<"harnesses">;
-		sandboxId: Id<"sandboxes">;
+		harnessId?: Id<"harnesses">;
+		sandboxId?: Id<"sandboxes">;
 		color?: string;
 	}>;
 	harnesses: Array<{
@@ -1431,8 +1445,8 @@ function WorkspaceSidebar({
 	const [renameWorkspace, setRenameWorkspace] = useState<{
 		_id: Id<"workspaces">;
 		name: string;
-		harnessId: Id<"harnesses">;
-		sandboxId: Id<"sandboxes">;
+		harnessId?: Id<"harnesses">;
+		sandboxId?: Id<"sandboxes">;
 		color?: string;
 	} | null>(null);
 	const [renameWorkspaceName, setRenameWorkspaceName] = useState("");
@@ -1450,22 +1464,29 @@ function WorkspaceSidebar({
 	const [renameWorkspaceColor, setRenameWorkspaceColor] = useState<
 		string | null
 	>(null);
+	const [confirmDeleteWorkspace, setConfirmDeleteWorkspace] = useState(false);
 
-	useEffect(() => {
-		if (!newWorkspaceHarnessId && harnesses.length > 0) {
-			const started = harnesses.find((harness) => harness.status !== "draft");
-			setNewWorkspaceHarnessId(started?._id ?? harnesses[0]._id);
-		}
-		if (!newWorkspaceSandboxId && sandboxes.length > 0) {
-			setNewWorkspaceSandboxId(sandboxes[0]._id);
-		}
-	}, [harnesses, newWorkspaceHarnessId, newWorkspaceSandboxId, sandboxes]);
+	function resetRenameWorkspaceDialog() {
+		setRenameWorkspace(null);
+		setRenameWorkspaceName("");
+		setRenameWorkspaceHarnessId(null);
+		setRenameWorkspaceSandboxId(null);
+		setRenameWorkspaceColor(null);
+		setConfirmDeleteWorkspace(false);
+	}
+
+	const deleteWorkspace = useMutation({
+		mutationFn: useConvexMutation(api.workspaces.remove),
+		onSuccess: () => {
+			resetRenameWorkspaceDialog();
+			toast.success("Workspace deleted");
+		},
+		onError: () => {
+			toast.error("Failed to delete workspace");
+		},
+	});
 
 	const createSelectedWorkspace = () => {
-		if (!newWorkspaceHarnessId || !newWorkspaceSandboxId) {
-			toast.error("Select a harness and sandbox");
-			return;
-		}
 		const harness = harnesses.find(
 			(item) => item._id === newWorkspaceHarnessId,
 		);
@@ -1477,9 +1498,9 @@ function WorkspaceSidebar({
 				newWorkspaceName.trim() ||
 				(harness && sandbox
 					? `${harness.name} / ${sandbox.name}`
-					: "New workspace"),
-			harnessId: newWorkspaceHarnessId,
-			sandboxId: newWorkspaceSandboxId,
+					: (harness?.name ?? sandbox?.name ?? "New workspace")),
+			...(newWorkspaceHarnessId ? { harnessId: newWorkspaceHarnessId } : {}),
+			...(newWorkspaceSandboxId ? { sandboxId: newWorkspaceSandboxId } : {}),
 			...(newWorkspaceColor ? { color: newWorkspaceColor } : {}),
 		});
 	};
@@ -1487,15 +1508,16 @@ function WorkspaceSidebar({
 	const startRenameWorkspace = (workspace: {
 		_id: Id<"workspaces">;
 		name: string;
-		harnessId: Id<"harnesses">;
-		sandboxId: Id<"sandboxes">;
+		harnessId?: Id<"harnesses">;
+		sandboxId?: Id<"sandboxes">;
 		color?: string;
 	}) => {
 		setRenameWorkspace(workspace);
 		setRenameWorkspaceName(workspace.name);
-		setRenameWorkspaceHarnessId(workspace.harnessId);
-		setRenameWorkspaceSandboxId(workspace.sandboxId);
+		setRenameWorkspaceHarnessId(workspace.harnessId ?? null);
+		setRenameWorkspaceSandboxId(workspace.sandboxId ?? null);
 		setRenameWorkspaceColor(workspace.color ?? null);
+		setConfirmDeleteWorkspace(false);
 	};
 
 	const saveWorkspaceName = () => {
@@ -1503,10 +1525,6 @@ function WorkspaceSidebar({
 		const name = renameWorkspaceName.trim();
 		if (!name) {
 			toast.error("Workspace name is required");
-			return;
-		}
-		if (!renameWorkspaceHarnessId || !renameWorkspaceSandboxId) {
-			toast.error("Select a harness and sandbox");
 			return;
 		}
 		updateWorkspace.mutate({
@@ -1519,10 +1537,19 @@ function WorkspaceSidebar({
 		});
 	};
 
+	const removeWorkspace = () => {
+		if (!renameWorkspace) return;
+		if (!confirmDeleteWorkspace) {
+			setConfirmDeleteWorkspace(true);
+			return;
+		}
+		deleteWorkspace.mutate({ id: renameWorkspace._id });
+	};
+
 	const activeWorkspace = workspaces.find((w) => w._id === activeWorkspaceId);
 	useWorkspaceActionCommands({
 		activeWorkspace,
-		canCreateWorkspace: harnesses.length > 0 && sandboxes.length > 0,
+		canCreateWorkspace: true,
 		onCreateWorkspace: () => setCreateOpen(true),
 		onRenameActiveWorkspace: () => {
 			if (activeWorkspace) startRenameWorkspace(activeWorkspace);
@@ -1560,7 +1587,7 @@ function WorkspaceSidebar({
 
 			<Separator />
 
-			<div className="px-2 py-2">
+			<div className="shrink-0 px-2 py-2">
 				<div className="mb-1 flex items-center justify-between px-2">
 					<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
 						Workspaces
@@ -1578,98 +1605,101 @@ function WorkspaceSidebar({
 						<TooltipContent>New workspace</TooltipContent>
 					</Tooltip>
 				</div>
-				<div className="space-y-0.5">
-					{workspaces.length === 0 ? (
-						<p className="px-2 py-2 text-[11px] text-muted-foreground">
-							Create a workspace to start.
-						</p>
-					) : (
-						workspaces.map((workspace, index) => {
-							const harness = harnesses.find(
-								(item) => item._id === workspace.harnessId,
-							);
-							const sandbox = sandboxes.find(
-								(item) => item._id === workspace.sandboxId,
-							);
-							const colorHex = getWorkspaceColorHex(workspace.color);
-							const isActive = activeWorkspaceId === workspace._id;
-							const hasShortcut = index < 9;
-							const shortcutDigit = index + 1;
-							return (
-								<div key={workspace._id} className="group relative">
-									<button
-										type="button"
-										onClick={() => onSelectWorkspace(workspace._id)}
-										aria-keyshortcuts={
-											hasShortcut
-												? ariaKeyShortcut(shortcutDigit, isMac)
-												: undefined
-										}
-										title={
-											hasShortcut
-												? `${workspace.name} — ${formatShortcut(shortcutDigit, isMac)}`
-												: workspace.name
-										}
-										style={colorHex ? { backgroundColor: colorHex } : undefined}
-										className={cn(
-											"flex w-full items-start gap-2 rounded-md px-2 py-2 pr-8 text-left transition-all",
-											colorHex
-												? "text-foreground hover:brightness-95"
-												: isActive
-													? "bg-muted text-foreground"
-													: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-											isActive &&
-												colorHex &&
-												"ring-2 ring-inset ring-foreground/40",
-										)}
-									>
-										<Sparkles size={12} className="mt-0.5 shrink-0" />
-										<span className="min-w-0 flex-1">
-											<span className="block truncate text-xs font-medium">
-												{workspace.name}
-											</span>
-											<span
-												className={cn(
-													"block truncate text-[10px]",
-													colorHex
-														? "text-foreground/60"
-														: "text-muted-foreground",
-												)}
-											>
-												{harness?.name ?? "Missing harness"} /{" "}
-												{sandbox?.name ?? "Missing sandbox"}
-											</span>
-										</span>
-									</button>
-									{modifierHeld && hasShortcut && (
-										<span
-											aria-hidden="true"
-											className="pointer-events-none absolute right-1 top-1 rounded-sm bg-background/85 px-1 py-0.5 font-mono text-[9px] leading-none text-muted-foreground ring-1 ring-border/60 backdrop-blur-sm transition-opacity group-hover:opacity-0"
+				<ScrollArea className="h-56">
+					<div className="space-y-0.5 pr-2">
+						{workspaces.length === 0 ? (
+							<p className="px-2 py-2 text-[11px] text-muted-foreground">
+								Create a workspace to start.
+							</p>
+						) : (
+							workspaces.map((workspace, index) => {
+								const harness = harnesses.find(
+									(item) => item._id === workspace.harnessId,
+								);
+								const sandbox = sandboxes.find(
+									(item) => item._id === workspace.sandboxId,
+								);
+								const colorHex = getWorkspaceColorHex(workspace.color);
+								const isActive = activeWorkspaceId === workspace._id;
+								const hasShortcut = index < 9;
+								const shortcutDigit = index + 1;
+								return (
+									<div key={workspace._id} className="group relative">
+										<button
+											type="button"
+											onClick={() => onSelectWorkspace(workspace._id)}
+											aria-keyshortcuts={
+												hasShortcut
+													? ariaKeyShortcut(shortcutDigit, isMac)
+													: undefined
+											}
+											title={
+												hasShortcut
+													? `${workspace.name} — ${formatShortcut(shortcutDigit, isMac)}`
+													: workspace.name
+											}
+											style={
+												colorHex ? { backgroundColor: colorHex } : undefined
+											}
+											className={cn(
+												"flex w-full items-start gap-2 rounded-md px-2 py-2 pr-8 text-left transition-all",
+												colorHex
+													? "text-foreground hover:brightness-95"
+													: isActive
+														? "bg-muted text-foreground"
+														: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+												isActive &&
+													colorHex &&
+													"ring-2 ring-inset ring-foreground/40",
+											)}
 										>
-											{formatShortcut(shortcutDigit, isMac)}
-										</span>
-									)}
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<Button
-												variant="ghost"
-												size="icon-xs"
-												className="absolute right-1 top-1.5 opacity-0 group-hover:opacity-100"
-												onClick={(event) => {
-													event.stopPropagation();
-													startRenameWorkspace(workspace);
-												}}
+											<Sparkles size={12} className="mt-0.5 shrink-0" />
+											<span className="min-w-0 flex-1">
+												<span className="block truncate text-xs font-medium">
+													{workspace.name}
+												</span>
+												<span
+													className={cn(
+														"block truncate text-[10px]",
+														colorHex
+															? "text-foreground/60"
+															: "text-muted-foreground",
+													)}
+												>
+													{harness?.name ?? "None"} / {sandbox?.name ?? "None"}
+												</span>
+											</span>
+										</button>
+										{modifierHeld && hasShortcut && (
+											<span
+												aria-hidden="true"
+												className="pointer-events-none absolute right-1 top-1 rounded-sm bg-background/85 px-1 py-0.5 font-mono text-[9px] leading-none text-muted-foreground ring-1 ring-border/60 backdrop-blur-sm transition-opacity group-hover:opacity-0"
 											>
-												<Pencil size={10} />
-											</Button>
-										</TooltipTrigger>
-										<TooltipContent>Edit workspace</TooltipContent>
-									</Tooltip>
-								</div>
-							);
-						})
-					)}
-				</div>
+												{formatShortcut(shortcutDigit, isMac)}
+											</span>
+										)}
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<Button
+													variant="ghost"
+													size="icon-xs"
+													className="absolute right-1 top-1.5 opacity-0 group-hover:opacity-100"
+													onClick={(event) => {
+														event.stopPropagation();
+														startRenameWorkspace(workspace);
+													}}
+												>
+													<Pencil size={10} />
+												</Button>
+											</TooltipTrigger>
+											<TooltipContent>Edit workspace</TooltipContent>
+										</Tooltip>
+									</div>
+								);
+							})
+						)}
+					</div>
+				</ScrollArea>
 			</div>
 
 			<Separator />
@@ -1977,15 +2007,18 @@ function WorkspaceSidebar({
 						<div className="space-y-1.5">
 							<p className="text-xs font-medium text-foreground">Harness</p>
 							<Select
-								value={newWorkspaceHarnessId ?? undefined}
+								value={newWorkspaceHarnessId ?? NONE_OPTION}
 								onValueChange={(value) =>
-									setNewWorkspaceHarnessId(value as Id<"harnesses">)
+									setNewWorkspaceHarnessId(
+										value === NONE_OPTION ? null : (value as Id<"harnesses">),
+									)
 								}
 							>
 								<SelectTrigger>
 									<SelectValue placeholder="Select a harness" />
 								</SelectTrigger>
 								<SelectContent>
+									<SelectItem value={NONE_OPTION}>None</SelectItem>
 									{harnesses
 										.filter((harness) => harness.status !== "draft")
 										.map((harness) => (
@@ -1999,15 +2032,18 @@ function WorkspaceSidebar({
 						<div className="space-y-1.5">
 							<p className="text-xs font-medium text-foreground">Sandbox</p>
 							<Select
-								value={newWorkspaceSandboxId ?? undefined}
+								value={newWorkspaceSandboxId ?? NONE_OPTION}
 								onValueChange={(value) =>
-									setNewWorkspaceSandboxId(value as Id<"sandboxes">)
+									setNewWorkspaceSandboxId(
+										value === NONE_OPTION ? null : (value as Id<"sandboxes">),
+									)
 								}
 							>
 								<SelectTrigger>
 									<SelectValue placeholder="Select a sandbox" />
 								</SelectTrigger>
 								<SelectContent>
+									<SelectItem value={NONE_OPTION}>None</SelectItem>
 									{sandboxes.map((sandbox) => (
 										<SelectItem key={sandbox._id} value={sandbox._id}>
 											{sandbox.name}
@@ -2025,11 +2061,7 @@ function WorkspaceSidebar({
 						</div>
 						<Button
 							className="w-full"
-							disabled={
-								createWorkspace.isPending ||
-								!newWorkspaceHarnessId ||
-								!newWorkspaceSandboxId
-							}
+							disabled={createWorkspace.isPending}
 							onClick={createSelectedWorkspace}
 						>
 							{createWorkspace.isPending ? (
@@ -2046,11 +2078,7 @@ function WorkspaceSidebar({
 				open={renameWorkspace !== null}
 				onOpenChange={(open) => {
 					if (!open) {
-						setRenameWorkspace(null);
-						setRenameWorkspaceName("");
-						setRenameWorkspaceHarnessId(null);
-						setRenameWorkspaceSandboxId(null);
-						setRenameWorkspaceColor(null);
+						resetRenameWorkspaceDialog();
 					}
 				}}
 			>
@@ -2080,15 +2108,18 @@ function WorkspaceSidebar({
 						<div className="space-y-1.5">
 							<p className="text-xs font-medium text-foreground">Harness</p>
 							<Select
-								value={renameWorkspaceHarnessId ?? undefined}
+								value={renameWorkspaceHarnessId ?? NONE_OPTION}
 								onValueChange={(value) =>
-									setRenameWorkspaceHarnessId(value as Id<"harnesses">)
+									setRenameWorkspaceHarnessId(
+										value === NONE_OPTION ? null : (value as Id<"harnesses">),
+									)
 								}
 							>
 								<SelectTrigger>
 									<SelectValue placeholder="Select a harness" />
 								</SelectTrigger>
 								<SelectContent>
+									<SelectItem value={NONE_OPTION}>None</SelectItem>
 									{harnesses
 										.filter((harness) => harness.status !== "draft")
 										.map((harness) => (
@@ -2102,15 +2133,18 @@ function WorkspaceSidebar({
 						<div className="space-y-1.5">
 							<p className="text-xs font-medium text-foreground">Sandbox</p>
 							<Select
-								value={renameWorkspaceSandboxId ?? undefined}
+								value={renameWorkspaceSandboxId ?? NONE_OPTION}
 								onValueChange={(value) =>
-									setRenameWorkspaceSandboxId(value as Id<"sandboxes">)
+									setRenameWorkspaceSandboxId(
+										value === NONE_OPTION ? null : (value as Id<"sandboxes">),
+									)
 								}
 							>
 								<SelectTrigger>
 									<SelectValue placeholder="Select a sandbox" />
 								</SelectTrigger>
 								<SelectContent>
+									<SelectItem value={NONE_OPTION}>None</SelectItem>
 									{sandboxes.map((sandbox) => (
 										<SelectItem key={sandbox._id} value={sandbox._id}>
 											{sandbox.name}
@@ -2126,13 +2160,19 @@ function WorkspaceSidebar({
 								onChange={setRenameWorkspaceColor}
 							/>
 						</div>
+						{confirmDeleteWorkspace ? (
+							<p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+								Deleting this workspace will also delete its conversations.
+								Click delete again to confirm.
+							</p>
+						) : null}
 						<Button
+							type="button"
 							className="w-full"
 							disabled={
 								updateWorkspace.isPending ||
-								!renameWorkspaceName.trim() ||
-								!renameWorkspaceHarnessId ||
-								!renameWorkspaceSandboxId
+								deleteWorkspace.isPending ||
+								!renameWorkspaceName.trim()
 							}
 							onClick={saveWorkspaceName}
 						>
@@ -2142,6 +2182,22 @@ function WorkspaceSidebar({
 								<Pencil size={14} />
 							)}
 							Save Workspace
+						</Button>
+						<Button
+							type="button"
+							variant="destructive"
+							className="w-full"
+							disabled={updateWorkspace.isPending || deleteWorkspace.isPending}
+							onClick={removeWorkspace}
+						>
+							{deleteWorkspace.isPending ? (
+								<RoseCurveSpinner size={14} />
+							) : (
+								<Trash2 size={14} />
+							)}
+							{confirmDeleteWorkspace
+								? "Confirm Delete Workspace"
+								: "Delete Workspace"}
 						</Button>
 					</div>
 				</DialogContent>
@@ -2445,6 +2501,7 @@ function McpFailureBanner({
 }
 
 function ChatHeader({
+	workspace,
 	harness,
 	sandboxes,
 	activeSandboxSelection,
@@ -2456,6 +2513,11 @@ function ChatHeader({
 	onAddSkill,
 	onRemoveSkill,
 }: {
+	workspace?: {
+		_id: Id<"workspaces">;
+		name: string;
+		color?: string;
+	};
 	harness?: {
 		_id: Id<"harnesses">;
 		name: string;
@@ -2491,6 +2553,7 @@ function ChatHeader({
 		activeSandboxSelection !== "harness" && activeSandboxSelection !== "none"
 			? activeSandboxSelection
 			: null;
+	const workspaceColorHex = getWorkspaceColorHex(workspace?.color);
 
 	return (
 		<header className="flex items-center justify-between border-b border-border px-4 py-2.5">
@@ -2505,6 +2568,34 @@ function ChatHeader({
 						<TooltipContent>Open sidebar</TooltipContent>
 					</Tooltip>
 				)}
+
+				<div
+					className={cn(
+						"flex items-center gap-2 rounded-md border px-2.5 py-1.5",
+						workspaceColorHex
+							? "border-transparent text-foreground"
+							: "border-border/70 bg-muted/40 text-foreground",
+					)}
+					style={
+						workspaceColorHex
+							? { backgroundColor: workspaceColorHex }
+							: undefined
+					}
+				>
+					<span
+						className={cn(
+							"text-[10px] uppercase tracking-wider",
+							workspaceColorHex
+								? "text-foreground/70"
+								: "text-muted-foreground",
+						)}
+					>
+						Workspace
+					</span>
+					<span className="max-w-[220px] truncate text-xs font-semibold">
+						{workspace?.name ?? "No workspace selected"}
+					</span>
+				</div>
 
 				<div className="flex items-center gap-1.5 px-1.5 py-1">
 					<span className="text-xs font-medium">
