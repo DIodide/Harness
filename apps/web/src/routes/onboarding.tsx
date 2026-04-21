@@ -92,46 +92,21 @@ const CONNECT_STEP = { key: "connect", label: "Connect", icon: Link2 };
 function OnboardingPage() {
 	const navigate = useNavigate();
 
-	// Read AI-generated prefill from sessionStorage (set by HarnessCreationAssistant)
-	const _prefill = (() => {
-		try {
-			const raw = sessionStorage.getItem("harness-prefill");
-			if (raw) {
-				sessionStorage.removeItem("harness-prefill");
-				return JSON.parse(raw) as {
-					name?: string;
-					model?: string;
-					selectedPresetMcps?: string[];
-					skills?: { name: string; description: string }[];
-					sandboxEnabled?: boolean;
-					sandboxLanguage?: string;
-				};
-			}
-		} catch {}
-		return null;
-	})();
-
-	const [name, setName] = useState(_prefill?.name ?? "");
-	const [model, setModel] = useState(_prefill?.model ?? "");
+	const [name, setName] = useState("");
+	const [model, setModel] = useState("");
 	const [systemPrompt, setSystemPrompt] = useState("");
 	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>(
 		[],
 	);
-	const [sandboxEnabled, setSandboxEnabled] = useState(
-		_prefill?.sandboxEnabled ?? false,
-	);
+	const [sandboxEnabled, setSandboxEnabled] = useState(false);
 	const [sandboxConfig, setSandboxConfig] = useState({
 		persistent: false,
 		autoStart: true,
-		defaultLanguage: _prefill?.sandboxLanguage ?? "python",
+		defaultLanguage: "python",
 		resourceTier: "basic" as "basic" | "standard" | "performance",
 	});
-	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>(
-		_prefill?.selectedPresetMcps ?? [],
-	);
-	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>(
-		_prefill?.skills ?? [],
-	);
+	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>([]);
+	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>([]);
 
 	const [stepIndex, setStepIndex] = useState(0);
 
