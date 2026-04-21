@@ -19,7 +19,6 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Cpu,
-	Eye,
 	LogOut,
 	MessageSquare,
 	Mic,
@@ -37,7 +36,6 @@ import {
 	User,
 	Wrench,
 	X,
-	Zap,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import React, {
@@ -53,6 +51,7 @@ import toast from "react-hot-toast";
 import { AttachmentChip } from "../../components/attachment-chip";
 import { useChatPaletteCommands } from "../../components/command-palette/commands/chat-commands";
 import { HarnessMark } from "../../components/harness-mark";
+import { HeaderSkillsMenu } from "../../components/header-skills-menu";
 import { MarkdownMessage } from "../../components/markdown-message";
 import {
 	type HealthStatus,
@@ -68,7 +67,6 @@ import { MessageAttachments } from "../../components/message-attachments";
 import { RoseCurveSpinner } from "../../components/rose-curve-spinner";
 import { SandboxPanel } from "../../components/sandbox/sandbox-panel";
 import { SandboxResult } from "../../components/sandbox-result";
-import { SkillViewerDialog } from "../../components/skill-viewer-dialog";
 import {
 	SlashCommandMenu,
 	useSlashCommandInput,
@@ -641,6 +639,30 @@ function ChatPage() {
 					selectedSandbox?.daytonaSandboxId ?? activeHarness?.daytonaSandboxId,
 				);
 
+	const handleAddSkill = useCallback(
+		(skill: SkillEntry) => {
+			if (!activeHarness) return;
+			const existing = activeHarness.skills ?? [];
+			if (existing.some((s) => s.name === skill.name)) return;
+			updateHarness.mutate({
+				id: activeHarness._id,
+				skills: [...existing, skill],
+			});
+		},
+		[activeHarness, updateHarness],
+	);
+
+	const handleRemoveSkill = useCallback(
+		(skill: SkillEntry) => {
+			if (!activeHarness) return;
+			const filtered = (activeHarness.skills ?? []).filter(
+				(s) => s.name !== skill.name,
+			);
+			updateHarness.mutate({ id: activeHarness._id, skills: filtered });
+		},
+		[activeHarness, updateHarness],
+	);
+
 	const buildHarnessConfig = useCallback(() => {
 		if (!activeHarness) return null;
 
@@ -1121,6 +1143,8 @@ function ChatPage() {
 						isStreaming={isActiveConvoStreaming}
 						mcpHealthStatuses={mcpHealthStatuses}
 						onRefreshCommands={refreshCommands}
+						onAddSkill={handleAddSkill}
+						onRemoveSkill={handleRemoveSkill}
 					/>
 
 					<McpFailureBanner
@@ -1981,87 +2005,6 @@ function McpFailureBanner({
 	);
 }
 
-function SkillsStatus({ skills }: { skills: SkillEntry[] }) {
-	const [open, setOpen] = useState(false);
-	const [viewingSkillId, setViewingSkillId] = useState<string | null>(null);
-	const ref = useRef<HTMLDivElement>(null);
-
-	useEffect(() => {
-		if (!open) return;
-		const handler = (e: MouseEvent) => {
-			if (viewingSkillId) return;
-			if (ref.current && !ref.current.contains(e.target as Node)) {
-				setOpen(false);
-			}
-		};
-		document.addEventListener("mousedown", handler);
-		return () => document.removeEventListener("mousedown", handler);
-	}, [open, viewingSkillId]);
-
-	if (skills.length === 0) return null;
-
-	return (
-		<div ref={ref} className="relative">
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<button
-						type="button"
-						onClick={() => setOpen((prev) => !prev)}
-						className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-					>
-						<Zap size={10} />
-						{skills.length} Skill{skills.length !== 1 && "s"}
-					</button>
-				</TooltipTrigger>
-				<TooltipContent>Active skills</TooltipContent>
-			</Tooltip>
-
-			<AnimatePresence>
-				{open && (
-					<motion.div
-						initial={{ opacity: 0, y: -4, scale: 0.97 }}
-						animate={{ opacity: 1, y: 0, scale: 1 }}
-						exit={{ opacity: 0, y: -4, scale: 0.97 }}
-						transition={{ duration: 0.15 }}
-						className="absolute left-0 top-full z-50 mt-1 w-64 border border-border bg-background shadow-lg"
-					>
-						<div className="border-b border-border px-3 py-2">
-							<span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-								Skills
-							</span>
-						</div>
-						<div className="max-h-48 overflow-y-auto py-1">
-							{skills.map((skill) => (
-								<div
-									key={skill.name}
-									className="flex items-center gap-2 px-3 py-1.5"
-								>
-									<Zap size={10} className="shrink-0 text-muted-foreground" />
-									<span className="min-w-0 flex-1 truncate text-xs font-medium">
-										{skill.name.split("/").pop() ?? skill.name}
-									</span>
-									<button
-										type="button"
-										onClick={() => setViewingSkillId(skill.name)}
-										className="shrink-0 text-muted-foreground/40 transition-colors hover:text-foreground"
-									>
-										<Eye size={12} />
-									</button>
-								</div>
-							))}
-						</div>
-					</motion.div>
-				)}
-			</AnimatePresence>
-
-			<SkillViewerDialog
-				fullId={viewingSkillId}
-				onClose={() => setViewingSkillId(null)}
-			/>
-		</div>
-	);
-}
-
 function ChatHeader({
 	harness,
 	harnesses,
@@ -2075,6 +2018,8 @@ function ChatHeader({
 	isStreaming,
 	mcpHealthStatuses,
 	onRefreshCommands,
+	onAddSkill,
+	onRemoveSkill,
 }: {
 	harness?: {
 		_id: Id<"harnesses">;
@@ -2114,6 +2059,8 @@ function ChatHeader({
 	isStreaming: boolean;
 	mcpHealthStatuses?: Record<string, HealthStatus>;
 	onRefreshCommands: () => void;
+	onAddSkill: (skill: SkillEntry) => void;
+	onRemoveSkill: (skill: SkillEntry) => void;
 }) {
 	return (
 		<header className="flex items-center justify-between border-b border-border px-4 py-2.5">
@@ -2177,8 +2124,12 @@ function ChatHeader({
 					/>
 				)}
 
-				{harness && harness.skills.length > 0 && (
-					<SkillsStatus skills={harness.skills} />
+				{harness && (
+					<HeaderSkillsMenu
+						skills={harness.skills}
+						onAdd={onAddSkill}
+						onRemove={onRemoveSkill}
+					/>
 				)}
 
 				<SandboxSelector
@@ -2187,9 +2138,8 @@ function ChatHeader({
 					activeSandboxSelection={activeSandboxSelection}
 					onSwitchSandbox={onSwitchSandbox}
 					isStreaming={isStreaming}
+					panelAvailable={effectiveSandboxEnabled}
 				/>
-
-				{effectiveSandboxEnabled && <SandboxBadge />}
 			</div>
 		</header>
 	);
@@ -2201,6 +2151,7 @@ function SandboxSelector({
 	activeSandboxSelection,
 	onSwitchSandbox,
 	isStreaming,
+	panelAvailable,
 }: {
 	harness?: {
 		name: string;
@@ -2217,7 +2168,10 @@ function SandboxSelector({
 	activeSandboxSelection: SandboxSelection;
 	onSwitchSandbox: (selection: SandboxSelection) => void;
 	isStreaming: boolean;
+	panelAvailable: boolean;
 }) {
+	const panel = useSandboxPanel();
+	const panelOpen = !!panel?.panelOpen;
 	const selectedSandbox =
 		activeSandboxSelection !== "harness" && activeSandboxSelection !== "none"
 			? sandboxes.find((sandbox) => sandbox._id === activeSandboxSelection)
@@ -2240,17 +2194,43 @@ function SandboxSelector({
 				<Button
 					variant="ghost"
 					size="sm"
-					className="gap-1.5"
+					className={cn(
+						"gap-1.5",
+						panelOpen &&
+							"text-emerald-600 hover:text-emerald-600 dark:text-emerald-400 dark:hover:text-emerald-400",
+					)}
 					disabled={isStreaming}
 				>
 					<Box size={12} />
 					<span className="max-w-[140px] truncate text-xs font-medium">
 						{label}
 					</span>
+					{panelOpen && (
+						<span className="h-1.5 w-1.5 bg-emerald-500" aria-hidden="true" />
+					)}
 					<ChevronDown size={12} className="text-muted-foreground" />
 				</Button>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="start" className="min-w-56">
+			<DropdownMenuContent align="start" className="min-w-60">
+				<DropdownMenuItem
+					onClick={() => panel?.togglePanel()}
+					disabled={!panelAvailable}
+				>
+					<span className="w-3 shrink-0">
+						{panelOpen ? <Check size={12} /> : null}
+					</span>
+					<div className="min-w-0 flex-1">
+						<p className="truncate text-xs">
+							{panelOpen ? "Close sandbox panel" : "Open sandbox panel"}
+						</p>
+						<p className="truncate text-[10px] text-muted-foreground">
+							{panelAvailable
+								? "Browse files and interact directly"
+								: "Attach a sandbox to enable the panel"}
+						</p>
+					</div>
+				</DropdownMenuItem>
+				<DropdownMenuSeparator />
 				<DropdownMenuItem onClick={() => onSwitchSandbox("harness")}>
 					{activeSandboxSelection === "harness" ? (
 						<Check size={12} className="shrink-0" />
@@ -2296,44 +2276,13 @@ function SandboxSelector({
 							<p className="truncate text-xs">{sandbox.name}</p>
 							<p className="truncate text-[10px] text-muted-foreground">
 								{sandbox.status}
-								{sandbox.ephemeral ? " ephemeral" : " persistent"}
+								{sandbox.ephemeral ? " · ephemeral" : " · persistent"}
 							</p>
 						</div>
 					</DropdownMenuItem>
 				))}
 			</DropdownMenuContent>
 		</DropdownMenu>
-	);
-}
-
-/** Clickable sandbox badge in the header — toggles the sandbox panel. */
-function SandboxBadge() {
-	const panel = useSandboxPanel();
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<button
-					type="button"
-					onClick={() => panel?.togglePanel()}
-					className={cn(
-						"flex items-center gap-1.5 border px-2 py-1 text-[10px] transition-colors",
-						panel?.panelOpen
-							? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-							: "border-border text-muted-foreground hover:bg-muted/30",
-					)}
-				>
-					<div className="h-1.5 w-1.5 bg-emerald-500" />
-					<span>Sandbox</span>
-				</button>
-			</TooltipTrigger>
-			<TooltipContent>
-				<p>
-					{panel?.panelOpen
-						? "Close sandbox panel"
-						: "Open sandbox panel — browse files and interact directly"}
-				</p>
-			</TooltipContent>
-		</Tooltip>
 	);
 }
 

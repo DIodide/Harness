@@ -1,6 +1,6 @@
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { Edit3, FolderPlus } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useRegisterCommands } from "../../../hooks/use-register-commands";
 import type { Command } from "../../../lib/command-palette/types";
 import { getWorkspaceColorHex } from "../../../lib/workspace-colors";
@@ -51,6 +51,7 @@ export function useWorkspaceActionCommands({
 				group: "workspace",
 				icon: Edit3,
 				colorDot: activeColor,
+				shortcut: "⇧⌘R",
 				keywords: ["rename", "edit", "workspace", activeWorkspace.name],
 				perform: onRenameActiveWorkspace,
 			});
@@ -66,4 +67,24 @@ export function useWorkspaceActionCommands({
 	]);
 
 	useRegisterCommands(commands);
+
+	// Latest callback in a ref so the keydown effect doesn't rebind on every
+	// render. We need activeWorkspace's presence though, so the effect still
+	// resubscribes when that flips.
+	const renameRef = useRef(onRenameActiveWorkspace);
+	renameRef.current = onRenameActiveWorkspace;
+	const hasActive = !!activeWorkspace;
+
+	useEffect(() => {
+		if (!hasActive) return;
+		const handler = (e: KeyboardEvent) => {
+			if (e.repeat) return;
+			if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
+			if (e.key !== "r" && e.key !== "R") return;
+			e.preventDefault();
+			renameRef.current();
+		};
+		document.addEventListener("keydown", handler);
+		return () => document.removeEventListener("keydown", handler);
+	}, [hasActive]);
 }
