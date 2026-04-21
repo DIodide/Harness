@@ -11,6 +11,7 @@
 import type * as commands from "../commands.js";
 import type * as conversations from "../conversations.js";
 import type * as files from "../files.js";
+import type * as harnessConfigRatings from "../harnessConfigRatings.js";
 import type * as harnesses from "../harnesses.js";
 import type * as mcpOAuthTokens from "../mcpOAuthTokens.js";
 import type * as messages from "../messages.js";
@@ -31,6 +32,7 @@ declare const fullApi: ApiFromModules<{
   commands: typeof commands;
   conversations: typeof conversations;
   files: typeof files;
+  harnessConfigRatings: typeof harnessConfigRatings;
   harnesses: typeof harnesses;
   mcpOAuthTokens: typeof mcpOAuthTokens;
   messages: typeof messages;

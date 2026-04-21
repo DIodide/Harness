@@ -109,6 +109,61 @@ export const searchSkillsIndex = query({
 });
 
 
+/**
+ * Search skills by relevance to a query string, returning a lightweight shape
+ * suitable for injecting into the AI harness creation assistant's system prompt.
+ * Searches both skillId and description indexes, deduplicates, and returns
+ * the top `limit` results sorted by relevance then installs.
+ */
+export const searchForCreationAssistant = query({
+	args: {
+		query: v.string(),
+		limit: v.optional(v.number()),
+	},
+	handler: async (ctx, args) => {
+		const limit = args.limit ?? 20;
+
+		const [byName, byDescription] = await Promise.all([
+			ctx.db
+				.query("skillsIndex")
+				.withSearchIndex("search_skills", (q) =>
+					q.search("skillId", args.query),
+				)
+				.take(limit),
+			ctx.db
+				.query("skillsIndex")
+				.withSearchIndex("search_skills_description", (q) =>
+					q.search("description", args.query),
+				)
+				.take(limit),
+		]);
+
+		const seen = new Set<string>();
+		const merged: Array<{
+			id: string;
+			fullId: string;
+			description: string;
+			installs: number;
+		}> = [];
+
+		for (const doc of [...byName, ...byDescription]) {
+			if (!seen.has(doc.fullId)) {
+				seen.add(doc.fullId);
+				merged.push({
+					id: doc.skillId,
+					fullId: doc.fullId,
+					description: doc.description,
+					installs: doc.installs,
+				});
+			}
+		}
+
+		return merged
+			.sort((a, b) => b.installs - a.installs)
+			.slice(0, limit);
+	},
+});
+
 /** Upsert a batch of skills discovered from skills.sh search API */
 export const upsertSkillsIndexBatch = internalMutation({
 	args: {

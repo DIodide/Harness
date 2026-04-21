@@ -50,6 +50,7 @@ import React, {
 } from "react";
 import toast from "react-hot-toast";
 import { AttachmentChip } from "../../components/attachment-chip";
+import { HarnessCreationAssistant } from "../../components/harness-creation-assistant";
 import { HarnessMark } from "../../components/harness-mark";
 import { MarkdownMessage } from "../../components/markdown-message";
 import {
@@ -192,6 +193,7 @@ function ChatPage() {
 	const [sessionModel, setSessionModel] = useState<string | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
 	const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+	const [creationAssistantOpen, setCreationAssistantOpen] = useState(false);
 	const [editingMessageId, setEditingMessageId] =
 		useState<Id<"messages"> | null>(null);
 	const [editingContent, setEditingContent] = useState("");
@@ -1159,6 +1161,8 @@ function ChatPage() {
 						<EmptyChat
 							suggestedPrompts={activeHarness?.suggestedPrompts}
 							onPromptClick={(text) => setPendingPrompt(text)}
+							hasNoHarnesses={!harnessesLoading && (harnesses?.length ?? 0) === 0}
+							onCreateWithAI={() => setCreationAssistantOpen(true)}
 						/>
 					)}
 
@@ -1212,6 +1216,10 @@ function ChatPage() {
 					{sandboxEnabled && <SandboxPanelToggle />}
 				</AnimatePresence>
 			</div>
+			<HarnessCreationAssistant
+				open={creationAssistantOpen}
+				onOpenChange={setCreationAssistantOpen}
+			/>
 		</SandboxPanelProvider>
 	);
 }
@@ -3079,14 +3087,57 @@ function StreamingUsage({
 function EmptyChat({
 	suggestedPrompts,
 	onPromptClick,
+	hasNoHarnesses,
+	onCreateWithAI,
 }: {
 	suggestedPrompts?: string[];
 	onPromptClick: (text: string) => void;
+	hasNoHarnesses?: boolean;
+	onCreateWithAI?: () => void;
 }) {
 	const prompts =
 		suggestedPrompts && suggestedPrompts.length > 0
 			? suggestedPrompts
 			: SUGGESTED_PROMPTS;
+
+	if (hasNoHarnesses) {
+		return (
+			<div className="flex flex-1 flex-col items-center justify-center px-4">
+				<motion.div
+					initial={{ opacity: 0, y: 12 }}
+					animate={{ opacity: 1, y: 0 }}
+					transition={{ duration: 0.4 }}
+					className="text-center"
+				>
+					<div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center bg-foreground">
+						<HarnessMark size={24} className="text-background" />
+					</div>
+					<h2 className="mb-2 text-lg font-medium text-foreground">
+						Create your first harness
+					</h2>
+					<p className="mb-6 text-sm text-muted-foreground">
+						A harness equips your AI with tools and context. Let AI help you set one up.
+					</p>
+					<div className="flex items-center justify-center gap-2">
+						<button
+							type="button"
+							onClick={onCreateWithAI}
+							className="flex items-center gap-1.5 border border-foreground bg-foreground px-4 py-2 text-xs font-medium text-background transition-colors hover:bg-foreground/90"
+						>
+							<Sparkles size={12} />
+							Create with AI
+						</button>
+						<Link
+							to="/onboarding"
+							className="flex items-center gap-1.5 border border-border px-4 py-2 text-xs text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground"
+						>
+							Create manually
+						</Link>
+					</div>
+				</motion.div>
+			</div>
+		);
+	}
 
 	return (
 		<div className="flex flex-1 flex-col items-center justify-center px-4">
