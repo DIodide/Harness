@@ -831,7 +831,9 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 									<Button
 										size="sm"
 										onClick={() => handleCreate(true)}
-										disabled={createHarness.isPending}
+										disabled={
+											createHarness.isPending || !editedConfig.name.trim()
+										}
 										className="flex-1 text-xs"
 									>
 										{createHarness.isPending ? "Creating…" : "Create anyway"}

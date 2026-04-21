@@ -38,7 +38,8 @@ export const listByRating = query({
 		if (!identity) return [];
 		return await ctx.db
 			.query("harnessConfigRatings")
-			.withIndex("by_rating", (q) => q.eq("rating", args.rating))
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.filter((q) => q.eq(q.field("rating"), args.rating))
 			.order("desc")
 			.collect();
 	},

@@ -657,6 +657,9 @@ class _Skill(BaseModel):
     installs: int = 0
 
 
+MAX_CONTEXT_CHARS = 10_000
+
+
 class SuggestRequest(BaseModel):
     messages: list[_Message]
     context: str | None = None
@@ -671,37 +674,41 @@ async def suggest_harness_stream(
     user: dict = Depends(get_current_user),
 ):
     async def event_generator():
-        messages = [{"role": "system", "content": _get_system_prompt()}]
+        system_prompt = _get_system_prompt()
 
         if body.available_skills:
             skills_lines = "\n".join(
                 f"  - id={s.id!r}: {s.description}"
                 for s in body.available_skills
             )
-            messages.append({
-                "role": "system",
-                "content": (
-                    "## Available skills for this request\n"
-                    f"{skills_lines}\n\n"
-                    "Suggest relevant skills by including their exact IDs in the "
-                    "skillIds field of the config block. Only suggest skills that "
-                    "clearly fit the use case. Leave skillIds as [] if none apply.\n"
-                    "The <harness-config> block must now include skillIds:\n"
-                    '<harness-config>\n'
-                    '{\n'
-                    '  "name": "Short Harness Name",\n'
-                    '  "model": "exact-model-id",\n'
-                    '  "mcpIds": ["id1"],\n'
-                    '  "skillIds": ["skill-id1"]\n'
-                    '}\n'
-                    '</harness-config>'
-                ),
-            })
+            system_prompt += (
+                "\n\n## Available skills for this request\n"
+                f"{skills_lines}\n\n"
+                "Suggest relevant skills by including their exact IDs in the "
+                "skillIds field of the config block. Only suggest skills that "
+                "clearly fit the use case. Leave skillIds as [] if none apply.\n"
+                "The <harness-config> block must now include skillIds:\n"
+                '<harness-config>\n'
+                '{\n'
+                '  "name": "Short Harness Name",\n'
+                '  "model": "exact-model-id",\n'
+                '  "mcpIds": ["id1"],\n'
+                '  "skillIds": ["skill-id1"]\n'
+                '}\n'
+                '</harness-config>'
+            )
 
-        if body.context:
+        messages = [{"role": "system", "content": system_prompt}]
+
+        context = (
+            body.context[:MAX_CONTEXT_CHARS]
+            if body.context and len(body.context) > MAX_CONTEXT_CHARS
+            else body.context
+        )
+        if context:
             messages.append({
                 "role": "user",
-                "content": f"Here is some context about my use case — use it to infer what I need without asking redundant questions:\n\n{body.context}",
+                "content": f"Here is some context about my use case — use it to infer what I need without asking redundant questions:\n\n{context}",
             })
             messages.append({
                 "role": "assistant",
