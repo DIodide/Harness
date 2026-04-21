@@ -47,6 +47,8 @@ async def save_assistant_message(
     parts: list[dict] | None = None,
     usage: dict | None = None,
     model: str | None = None,
+    interrupted: bool = False,
+    interruption_reason: str | None = None,
 ) -> None:
     """Save an assistant message to Convex via the HTTP API.
 
@@ -72,6 +74,10 @@ async def save_assistant_message(
         args["usage"] = usage
     if model:
         args["model"] = model
+    if interrupted:
+        args["interrupted"] = True
+    if interruption_reason:
+        args["interruptionReason"] = interruption_reason
 
     try:
         resp = await http_client.post(

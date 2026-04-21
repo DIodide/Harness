@@ -42,16 +42,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_local_dev_origins = [
+    f"http://{host}:{port}"
+    for host in ("localhost", "127.0.0.1")
+    for port in range(3000, 3021)
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         settings.frontend_url,
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:3003",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-        "http://127.0.0.1:3003",
+        *_local_dev_origins,
         "http://127.0.0.1:57177",
         "https://harness.nz",
         "https://staging.harness.nz",

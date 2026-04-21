@@ -95,6 +95,32 @@ class TestSaveAssistantMessage:
         assert body["args"]["model"] == "gpt-4o"
 
     @respx.mock
+    async def test_includes_interrupted_fields_when_provided(self, convex_settings):
+        route = respx.post(f"{CONVEX_URL}/api/mutation").mock(
+            return_value=httpx.Response(200, json={"value": None})
+        )
+        async with httpx.AsyncClient() as client:
+            await save_assistant_message(
+                client, "c1", "partial",
+                interrupted=True,
+                interruption_reason="Service unavailable",
+            )
+        body = json.loads(route.calls.last.request.content)
+        assert body["args"]["interrupted"] is True
+        assert body["args"]["interruptionReason"] == "Service unavailable"
+
+    @respx.mock
+    async def test_omits_interrupted_fields_by_default(self, convex_settings):
+        route = respx.post(f"{CONVEX_URL}/api/mutation").mock(
+            return_value=httpx.Response(200, json={"value": None})
+        )
+        async with httpx.AsyncClient() as client:
+            await save_assistant_message(client, "c1", "ok")
+        body = json.loads(route.calls.last.request.content)
+        assert "interrupted" not in body["args"]
+        assert "interruptionReason" not in body["args"]
+
+    @respx.mock
     async def test_swallows_http_status_errors(self, convex_settings):
         respx.post(f"{CONVEX_URL}/api/mutation").mock(
             return_value=httpx.Response(400, text="bad")
