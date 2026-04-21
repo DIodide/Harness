@@ -10,7 +10,6 @@ import {
 	LogOut,
 	MessageSquare,
 	Package,
-	PackagePlus,
 	SlidersHorizontal,
 } from "lucide-react";
 import { useMemo } from "react";
@@ -103,7 +102,7 @@ export function GlobalCommands() {
 				title: `Open sandbox: ${sandbox.name}`,
 				subtitle: sandbox.status,
 				group: "sandbox",
-				icon: PackagePlus,
+				icon: Package,
 				keywords: ["sandbox", "environment", sandbox.name, sandbox.status],
 				perform: () =>
 					navigate({

@@ -581,14 +581,6 @@ function ChatPage() {
 
 		if (activeWorkspace.harnessId) {
 			setActiveHarnessId(activeWorkspace.harnessId);
-		} else if (
-			activeHarnessId &&
-			harnesses?.some((harness) => harness._id === activeHarnessId)
-		) {
-			setActiveHarnessId(activeHarnessId);
-		} else if (harnesses?.length) {
-			const started = harnesses.find((h) => h.status === "started");
-			setActiveHarnessId(started?._id ?? harnesses[0]._id);
 		} else {
 			setActiveHarnessId(null);
 		}
@@ -598,7 +590,7 @@ function ChatPage() {
 			search: { workspaceId: activeWorkspace._id },
 			replace: true,
 		});
-	}, [activeWorkspace, activeHarnessId, harnesses, initialHarnessId, navigate]);
+	}, [activeWorkspace, harnesses, initialHarnessId, navigate]);
 
 	// Reset session model whenever the active harness or conversation changes
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on harness/conversation switch
@@ -1482,6 +1474,7 @@ function WorkspaceSidebar({
 			toast.success("Workspace deleted");
 		},
 		onError: () => {
+			setConfirmDeleteWorkspace(false);
 			toast.error("Failed to delete workspace");
 		},
 	});

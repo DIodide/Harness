@@ -1,4 +1,5 @@
 import type { LucideIcon } from "lucide-react";
+import type { ComponentType } from "react";
 
 export type CommandGroupId =
 	| "recent"
@@ -29,9 +30,7 @@ export const COMMAND_GROUP_ORDER: CommandGroupId[] = [
 	"account",
 ];
 
-export type CommandIcon =
-	| LucideIcon
-	| React.ComponentType<{ className?: string }>;
+export type CommandIcon = LucideIcon | ComponentType<{ className?: string }>;
 
 export interface Command {
 	/** Stable ID used for dedup and recent-commands tracking. */

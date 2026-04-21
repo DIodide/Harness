@@ -169,9 +169,7 @@ export const remove = mutation({
 				)
 				.collect();
 
-			for (const message of messages) {
-				await ctx.db.delete(message._id);
-			}
+			await Promise.all(messages.map((m) => ctx.db.delete(m._id)));
 
 			await ctx.db.delete(conversation._id);
 		}

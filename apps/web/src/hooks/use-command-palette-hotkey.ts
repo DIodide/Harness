@@ -14,7 +14,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
  * users expect to open the palette mid-typing.
  */
 export function useCommandPaletteHotkey(): void {
-	const { toggle, open, setOpen } = useCommandPalette();
+	const { toggle } = useCommandPalette();
 
 	useEffect(() => {
 		const handler = (e: KeyboardEvent) => {
@@ -41,13 +41,4 @@ export function useCommandPaletteHotkey(): void {
 		document.addEventListener("keydown", handler);
 		return () => document.removeEventListener("keydown", handler);
 	}, [toggle]);
-
-	useEffect(() => {
-		if (!open) return;
-		const onEsc = (e: KeyboardEvent) => {
-			if (e.key === "Escape") setOpen(false);
-		};
-		document.addEventListener("keydown", onEsc);
-		return () => document.removeEventListener("keydown", onEsc);
-	}, [open, setOpen]);
 }
