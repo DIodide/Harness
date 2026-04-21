@@ -249,7 +249,7 @@ function HarnessGroup({
 			authType: "none" | "bearer" | "oauth" | "tiger_junction";
 			authToken?: string;
 		}>;
-		skills: string[];
+		skills: { name: string; description: string }[];
 	}>;
 	onToggle: (
 		id: Id<"harnesses">,
@@ -304,7 +304,7 @@ function HarnessCard({
 			authType: "none" | "bearer" | "oauth" | "tiger_junction";
 			authToken?: string;
 		}>;
-		skills: string[];
+		skills: { name: string; description: string }[];
 	};
 	onToggle: (
 		id: Id<"harnesses">,

@@ -4,6 +4,8 @@ import pathlib
 
 import httpx
 from fastapi import APIRouter, Depends, Request
+from typing import Literal
+
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -647,7 +649,7 @@ Rules:
 
 
 class _Message(BaseModel):
-    role: str
+    role: Literal["user", "assistant"]
     content: str
 
 
