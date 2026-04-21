@@ -26,7 +26,7 @@ export interface PresetMcpDefinition {
 	server: McpServerEntry;
 }
 
-// When adding/removing MCPs, also update packages/shared/preset-mcps.json (used by the AI harness creation assistant).
+// When adding/removing MCPs, also update _PRESET_MCP_CATALOG in packages/fastapi/app/routes/harness_suggest.py.
 export const PRESET_MCPS: PresetMcpDefinition[] = [
 	{
 		id: "princetoncourses",

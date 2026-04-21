@@ -181,6 +181,7 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 		if (!input.trim() || isStreaming) return;
 		const userText = input.trim();
 		setInput("");
+		inputRef.current?.focus();
 
 		const updatedMessages: ChatMessage[] = [
 			...messages,
@@ -335,6 +336,7 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 		} finally {
 			setIsStreaming(false);
 			setStreamingContent("");
+			setTimeout(() => inputRef.current?.focus(), 0);
 		}
 	};
 
@@ -527,7 +529,7 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 
 	return (
 		<Dialog open={open} onOpenChange={handleOpenChange}>
-			<DialogContent className="flex max-h-[85vh] max-w-lg flex-col gap-0 overflow-hidden p-0">
+			<DialogContent className="flex max-h-[92vh] max-w-lg flex-col gap-0 overflow-hidden p-0">
 				<DialogHeader className="shrink-0 border-b px-5 py-4">
 					<DialogTitle className="text-sm font-medium">
 						Create with AI
@@ -535,7 +537,7 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 				</DialogHeader>
 
 				{/* Message list */}
-				<div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+				<div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[120px]">
 					{messages.map((msg) => (
 						<div
 							key={msg.id}
@@ -575,7 +577,7 @@ export function HarnessCreationAssistant({ open, onOpenChange }: Props) {
 
 				{/* Config preview (shown after AI produces a config) */}
 				{harnessConfig && (
-					<div className="shrink-0 border-t bg-background p-4 space-y-3">
+					<div className="shrink-0 border-t bg-background p-4 space-y-3 max-h-[45vh] overflow-y-auto">
 						<p className="text-xs font-medium text-foreground">
 							Review your harness
 						</p>

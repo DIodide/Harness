@@ -1,6 +1,5 @@
 import json
 import logging
-import pathlib
 
 import httpx
 from fastapi import APIRouter, Depends, Request
@@ -16,8 +15,33 @@ from app.services.openrouter import stream_chat
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-_SHARED_DIR = pathlib.Path(__file__).parents[3] / "shared"
-_PRESET_MCP_CATALOG: list[dict] = json.loads((_SHARED_DIR / "preset-mcps.json").read_text())
+# When adding/removing MCPs, also update apps/web/src/lib/mcp.ts (PRESET_MCPS).
+_PRESET_MCP_CATALOG: list[dict] = [
+    {"id": "princetoncourses", "name": "Princeton Courses", "auth": "tiger_junction",
+     "description": "Search Princeton courses, read evaluations, and explore instructors with live registrar data."},
+    {"id": "tigerjunction", "name": "TigerJunction", "auth": "tiger_junction",
+     "description": "Manage your course schedules — create, edit, verify conflicts, and find courses that fit."},
+    {"id": "tigersnatch", "name": "TigerSnatch", "auth": "tiger_junction",
+     "description": "Track course demand and subscribe to enrollment notifications for closed classes."},
+    {"id": "tigerpath", "name": "TigerPath", "auth": "tiger_junction",
+     "description": "Plan your 4-year course schedule, explore major requirements, and see when students typically take courses."},
+    {"id": "github", "name": "GitHub", "auth": "oauth",
+     "description": "Browse repos, manage issues and pull requests, and search code."},
+    {"id": "notion", "name": "Notion", "auth": "oauth",
+     "description": "Read and write pages, databases, and blocks in your workspace."},
+    {"id": "linear", "name": "Linear", "auth": "oauth",
+     "description": "Create and track issues, manage projects, and streamline engineering workflows."},
+    {"id": "slack", "name": "Slack", "auth": "oauth",
+     "description": "Send messages, read channel history, and search conversations."},
+    {"id": "jira", "name": "Jira", "auth": "oauth",
+     "description": "Create tickets, track sprints, and manage Agile releases."},
+    {"id": "awsknowledge", "name": "AWS Knowledge", "auth": "none",
+     "description": "Search AWS documentation and knowledge bases for services and best practices."},
+    {"id": "exa", "name": "Exa", "auth": "none",
+     "description": "AI-powered semantic web search and content retrieval."},
+    {"id": "context7", "name": "Context7", "auth": "none",
+     "description": "Fetch up-to-date library docs and code examples for any framework."},
+]
 
 _AVAILABLE_MODELS = list(MODEL_MAP.keys())
 
