@@ -159,6 +159,7 @@ export default defineSchema({
 		),
 		model: v.optional(v.string()),
 		interrupted: v.optional(v.boolean()),
+		interruptionReason: v.optional(v.string()),
 		attachments: v.optional(
 			v.array(
 				v.object({

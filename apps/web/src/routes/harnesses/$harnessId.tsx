@@ -89,6 +89,8 @@ type SandboxConfig = {
 
 type Sandbox = Doc<"sandboxes">;
 
+type HarnessStatus = "draft" | "started" | "stopped";
+
 function getResourceTierFromSandbox(
 	sandbox: Sandbox,
 ): SandboxConfig["resourceTier"] {
@@ -154,6 +156,7 @@ function HarnessEditPage() {
 
 			setName(null);
 			setModel(null);
+			setStatus(null);
 			setMcpServers(null);
 			setSkills(null);
 			setSystemPrompt(null);
@@ -247,6 +250,7 @@ function HarnessEditPage() {
 
 	const [name, setName] = useState<string | null>(null);
 	const [model, setModel] = useState<string | null>(null);
+	const [status, setStatus] = useState<HarnessStatus | null>(null);
 	const [mcpServers, setMcpServers] = useState<McpServerEntry[] | null>(null);
 	const [skills, setSkills] = useState<SkillEntry[] | null>(null);
 	const [skillsBrowserOpen, setSkillsBrowserOpen] = useState(false);
@@ -259,6 +263,8 @@ function HarnessEditPage() {
 	// Use local state if edited, otherwise fall back to server data
 	const currentName = name ?? harness?.name ?? "";
 	const currentModel = model ?? harness?.model ?? "";
+	const currentStatus: HarnessStatus =
+		status ?? (harness?.status as HarnessStatus | undefined) ?? "draft";
 	const currentMcpServers = mcpServers ?? harness?.mcpServers ?? [];
 	const currentSkills: SkillEntry[] = skills ?? harness?.skills ?? [];
 
@@ -295,6 +301,7 @@ function HarnessEditPage() {
 	const hasChanges =
 		name !== null ||
 		model !== null ||
+		status !== null ||
 		mcpServers !== null ||
 		skills !== null ||
 		systemPrompt !== null ||
@@ -360,6 +367,7 @@ function HarnessEditPage() {
 		}
 		if (name !== null) updates.name = name;
 		if (model !== null) updates.model = model;
+		if (status !== null) updates.status = status;
 		if (mcpServers !== null) updates.mcpServers = mcpServers;
 		if (skills !== null) updates.skills = skills;
 		if (systemPrompt !== null) updates.systemPrompt = systemPrompt.trim();
@@ -814,20 +822,39 @@ function HarnessEditPage() {
 						<h2 className="mb-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">
 							Status
 						</h2>
-						<div className="flex items-center gap-3">
-							<div
-								className={`h-2 w-2 ${
-									harness.status === "started"
-										? "bg-emerald-500"
-										: harness.status === "stopped"
-											? "bg-muted-foreground/40"
-											: "bg-amber-400"
-								}`}
-							/>
-							<span className="text-sm text-foreground capitalize">
-								{harness.status}
-							</span>
-						</div>
+						<Select
+							value={currentStatus}
+							onValueChange={(v) => setStatus(v as HarnessStatus)}
+						>
+							<SelectTrigger className="max-w-sm">
+								<SelectValue placeholder="Select status" />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="draft">
+									<div className="flex items-center gap-2">
+										<div className="h-2 w-2 bg-amber-400" />
+										<span>Draft</span>
+									</div>
+								</SelectItem>
+								<SelectItem value="started">
+									<div className="flex items-center gap-2">
+										<div className="h-2 w-2 bg-emerald-500" />
+										<span>Started</span>
+									</div>
+								</SelectItem>
+								<SelectItem value="stopped">
+									<div className="flex items-center gap-2">
+										<div className="h-2 w-2 bg-muted-foreground/40" />
+										<span>Stopped</span>
+									</div>
+								</SelectItem>
+							</SelectContent>
+						</Select>
+						{harness.status === "draft" && currentStatus !== "draft" && (
+							<p className="mt-2 text-[11px] text-muted-foreground">
+								Saving will promote this harness out of draft.
+							</p>
+						)}
 					</motion.section>
 				</div>
 			</div>

@@ -212,9 +212,14 @@ function OnboardingPage() {
 
 			return harnessId;
 		},
-		onSuccess: (harnessId) => {
+		onSuccess: (harnessId, variables) => {
 			const id = harnessId as Id<"harnesses">;
-			navigate({ to: "/chat", search: { harnessId: id as string } });
+			if (variables.status === "draft") {
+				navigate({ to: "/harnesses" });
+				toast.success("Draft saved");
+			} else {
+				navigate({ to: "/chat", search: { harnessId: id as string } });
+			}
 
 			// Fire-and-forget: sync skill details for added skills
 			if (selectedSkills.length > 0) {
@@ -380,27 +385,43 @@ function OnboardingPage() {
 		return getDefaultSandboxSelection(sandbox);
 	};
 
-	const submitHarness = async (status: "started" | "draft") => {
-		try {
-			const defaultSandbox = await resolveDefaultSandbox();
-			createHarness.mutate({
-				name:
-					status === "draft" ? name.trim() || "Untitled Harness" : name.trim(),
-				model: status === "draft" ? model || "gpt-4o" : model,
-				status,
-				mcpServers: mcpServersForMutation,
-				skills: selectedSkills,
-				systemPrompt: systemPrompt.trim() || undefined,
-				sandboxEnabled: sandboxEnabled || undefined,
-				sandboxConfig: sandboxEnabled ? defaultSandbox?.config : undefined,
-				defaultSandbox: sandboxEnabled ? defaultSandbox : undefined,
-			});
-		} catch (error) {
-			toast.error(
-				error instanceof Error ? error.message : "Failed to configure sandbox",
-			);
-		}
-	};
+  const submitHarness = async (status: "started" | "draft") => {
+    if (status === "started") {
+      // existing validation for "start" lives elsewhere — untouched
+    } else {
+      if (!name.trim()) {
+        toast.error("Give your harness a name before saving");
+        return;
+      }
+      if (!model) {
+        toast.error("Pick a model before saving");
+        return;
+      }
+    }
+
+    try {
+      const defaultSandbox = await resolveDefaultSandbox();
+      if (sandboxEnabled && !defaultSandbox) {
+        toast.error("Select an existing sandbox");
+        return;
+      }
+      createHarness.mutate({
+        name: name.trim(),
+        model,
+        status,
+        mcpServers: mcpServersForMutation,
+        skills: selectedSkills,
+        systemPrompt: systemPrompt.trim() || undefined,
+        sandboxEnabled: sandboxEnabled || undefined,
+        sandboxConfig: sandboxEnabled ? defaultSandbox?.config : undefined,
+        defaultSandbox: sandboxEnabled ? defaultSandbox : undefined,
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to configure sandbox",
+      );
+    }
+  };
 
 	const handleAddServer = (server: McpServerEntry) => {
 		setCustomMcpServers((prev) => [...prev, server]);
@@ -434,14 +455,24 @@ function OnboardingPage() {
 						</p>
 					</div>
 				</div>
-				<Button
-					variant="ghost"
-					size="sm"
-					onClick={() => void submitHarness("draft")}
-					disabled={createHarness.isPending || createSandbox.isPending}
-				>
-					Save Draft
-				</Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void submitHarness("draft")}
+          disabled={
+            createHarness.isPending ||
+            createSandbox.isPending ||
+            !name.trim() ||
+            !model
+          }
+          title={
+            !name.trim() || !model
+              ? "Name the harness and pick a model first"
+              : undefined
+          }
+        >
+          Save Draft
+        </Button>
 			</header>
 
 			<div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 py-10">

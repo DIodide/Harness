@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SignUpRouteImport } from './routes/sign-up'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as AppRouteImport } from './routes/app'
@@ -21,6 +22,11 @@ import { Route as SandboxesCreate_sandboxRouteImport } from './routes/sandboxes/
 import { Route as SandboxesSandboxIdRouteImport } from './routes/sandboxes/$sandboxId'
 import { Route as HarnessesHarnessIdRouteImport } from './routes/harnesses/$harnessId'
 
+const SignUpRoute = SignUpRouteImport.update({
+  id: '/sign-up',
+  path: '/sign-up',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SignInRoute = SignInRouteImport.update({
   id: '/sign-in',
   path: '/sign-in',
@@ -82,6 +88,7 @@ export interface FileRoutesByFullPath {
   '/app': typeof AppRoute
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
+  '/sign-up': typeof SignUpRoute
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
   '/sandboxes/$sandboxId': typeof SandboxesSandboxIdRoute
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
@@ -95,6 +102,7 @@ export interface FileRoutesByTo {
   '/app': typeof AppRoute
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
+  '/sign-up': typeof SignUpRoute
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
   '/sandboxes/$sandboxId': typeof SandboxesSandboxIdRoute
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
@@ -109,6 +117,7 @@ export interface FileRoutesById {
   '/app': typeof AppRoute
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
+  '/sign-up': typeof SignUpRoute
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
   '/sandboxes/$sandboxId': typeof SandboxesSandboxIdRoute
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
@@ -124,6 +133,7 @@ export interface FileRouteTypes {
     | '/app'
     | '/onboarding'
     | '/sign-in'
+    | '/sign-up'
     | '/harnesses/$harnessId'
     | '/sandboxes/$sandboxId'
     | '/sandboxes/create_sandbox'
@@ -137,6 +147,7 @@ export interface FileRouteTypes {
     | '/app'
     | '/onboarding'
     | '/sign-in'
+    | '/sign-up'
     | '/harnesses/$harnessId'
     | '/sandboxes/$sandboxId'
     | '/sandboxes/create_sandbox'
@@ -150,6 +161,7 @@ export interface FileRouteTypes {
     | '/app'
     | '/onboarding'
     | '/sign-in'
+    | '/sign-up'
     | '/harnesses/$harnessId'
     | '/sandboxes/$sandboxId'
     | '/sandboxes/create_sandbox'
@@ -164,6 +176,7 @@ export interface RootRouteChildren {
   AppRoute: typeof AppRoute
   OnboardingRoute: typeof OnboardingRoute
   SignInRoute: typeof SignInRoute
+  SignUpRoute: typeof SignUpRoute
   HarnessesHarnessIdRoute: typeof HarnessesHarnessIdRoute
   SandboxesSandboxIdRoute: typeof SandboxesSandboxIdRoute
   SandboxesCreate_sandboxRoute: typeof SandboxesCreate_sandboxRoute
@@ -175,6 +188,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/sign-up': {
+      id: '/sign-up'
+      path: '/sign-up'
+      fullPath: '/sign-up'
+      preLoaderRoute: typeof SignUpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sign-in': {
       id: '/sign-in'
       path: '/sign-in'
@@ -260,6 +280,7 @@ const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRoute,
   OnboardingRoute: OnboardingRoute,
   SignInRoute: SignInRoute,
+  SignUpRoute: SignUpRoute,
   HarnessesHarnessIdRoute: HarnessesHarnessIdRoute,
   SandboxesSandboxIdRoute: SandboxesSandboxIdRoute,
   SandboxesCreate_sandboxRoute: SandboxesCreate_sandboxRoute,
