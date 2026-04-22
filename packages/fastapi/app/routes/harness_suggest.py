@@ -647,7 +647,7 @@ async def suggest_harness_stream(
 
         if body.available_skills:
             skills_lines = "\n".join(
-                f"  - id={s.id!r}: {s.description}"
+                f"  - id={s.id!r}: {s.description!r}"
                 for s in body.available_skills
             )
             system_prompt += (
