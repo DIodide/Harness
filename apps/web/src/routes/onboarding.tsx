@@ -26,6 +26,7 @@ import {
 	Plus,
 	Server,
 	Shield,
+	Sparkles,
 	Terminal,
 	Trash2,
 	Wrench,
@@ -35,6 +36,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
+import { HarnessCreationAssistant } from "../components/harness-creation-assistant";
 import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../components/princeton-connect-row";
@@ -100,8 +102,24 @@ function OnboardingPage() {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 
-	const [name, setName] = useState("");
-	const [model, setModel] = useState("");
+	const _prefill = (() => {
+		try {
+			const raw = sessionStorage.getItem("harness-prefill");
+			if (raw) {
+				sessionStorage.removeItem("harness-prefill");
+				return JSON.parse(raw) as {
+					name?: string;
+					model?: string;
+					selectedPresetMcps?: string[];
+					skills?: { name: string; description: string }[];
+				};
+			}
+		} catch {}
+		return null;
+	})();
+
+	const [name, setName] = useState(_prefill?.name ?? "");
+	const [model, setModel] = useState(_prefill?.model ?? "");
 	const [systemPrompt, setSystemPrompt] = useState("");
 	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>(
 		[],
@@ -116,10 +134,15 @@ function OnboardingPage() {
 	const [newSandboxConfig, setNewSandboxConfig] = useState<SandboxConfig>(
 		DEFAULT_SANDBOX_CONFIG,
 	);
-	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>([]);
-	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>([]);
+	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>(
+		_prefill?.selectedPresetMcps ?? [],
+	);
+	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>(
+		_prefill?.skills ?? [],
+	);
 
 	const [stepIndex, setStepIndex] = useState(0);
+	const [aiAssistantOpen, setAiAssistantOpen] = useState(false);
 
 	const allMcpServers = useMemo(
 		() => [
@@ -128,6 +151,19 @@ function OnboardingPage() {
 		],
 		[customMcpServers, selectedPresetMcps],
 	);
+
+	const handleAiPrefill = (prefill: {
+		name?: string;
+		model?: string;
+		selectedPresetMcps?: string[];
+		skills?: { name: string; description: string }[];
+	}) => {
+		if (prefill.name) setName(prefill.name);
+		if (prefill.model) setModel(prefill.model);
+		if (prefill.selectedPresetMcps)
+			setSelectedPresetMcps(prefill.selectedPresetMcps);
+		if (prefill.skills) setSelectedSkills(prefill.skills);
+	};
 
 	const hasOAuthServers = allMcpServers.some((s) => s.authType === "oauth");
 	const hasTigerJunction = allMcpServers.some(
@@ -439,14 +475,24 @@ function OnboardingPage() {
 						</p>
 					</div>
 				</div>
-				<Button
-					variant="ghost"
-					size="sm"
-					onClick={() => void submitHarness("draft")}
-					disabled={createHarness.isPending || createSandbox.isPending}
-				>
-					Save Draft
-				</Button>
+				<div className="flex items-center gap-2">
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={() => setAiAssistantOpen(true)}
+					>
+						<Sparkles size={14} />
+						Create with AI
+					</Button>
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={() => void submitHarness("draft")}
+						disabled={createHarness.isPending || createSandbox.isPending}
+					>
+						Save Draft
+					</Button>
+				</div>
 			</header>
 
 			<div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 py-10">
@@ -458,6 +504,24 @@ function OnboardingPage() {
 						Configure the tools and capabilities your AI agent needs.
 					</p>
 				</div>
+
+				<button
+					type="button"
+					onClick={() => setAiAssistantOpen(true)}
+					className="mt-4 flex w-full items-center gap-3 border border-dashed border-foreground/20 bg-muted/40 px-4 py-3 text-left transition-colors hover:border-foreground/40 hover:bg-muted/60"
+				>
+					<Sparkles size={16} className="shrink-0 text-muted-foreground" />
+					<div className="min-w-0 flex-1">
+						<p className="text-sm font-medium text-foreground">
+							Not sure where to start?
+						</p>
+						<p className="text-xs text-muted-foreground">
+							Describe your use case and let AI configure your harness
+							automatically.
+						</p>
+					</div>
+					<ArrowRight size={14} className="shrink-0 text-muted-foreground" />
+				</button>
 
 				<div className="mb-10 mt-8 flex items-center justify-center gap-1">
 					{steps.map((s, i) => (
@@ -599,6 +663,12 @@ function OnboardingPage() {
 					)}
 				</div>
 			</div>
+
+			<HarnessCreationAssistant
+				open={aiAssistantOpen}
+				onOpenChange={setAiAssistantOpen}
+				onEditManually={handleAiPrefill}
+			/>
 		</div>
 	);
 }
