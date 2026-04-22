@@ -190,6 +190,8 @@ const EMPTY_STREAM_STATE: ConvoStreamState = {
 type SandboxSelection = "harness" | "none" | Id<"sandboxes">;
 const NONE_OPTION = "__none__";
 
+const LAST_CHAT_RESTORE_WINDOW_MS = 8 * 60 * 60 * 1000;
+
 function ChatPage() {
 	const navigate = useNavigate();
 	const { getToken } = useAuth();
@@ -219,6 +221,9 @@ function ChatPage() {
 			activeWorkspaceId ? { workspaceId: activeWorkspaceId } : "skip",
 		),
 	);
+
+	const prevWorkspaceIdRef = useRef<Id<"workspaces"> | null>(null);
+	const pendingRestoreWorkspaceIdRef = useRef<Id<"workspaces"> | null>(null);
 	// Session-only model override — does not persist to the harness
 	const [sessionModel, setSessionModel] = useState<string | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -540,6 +545,35 @@ function ChatPage() {
 			}
 		},
 	});
+
+	// When the active workspace changes, queue a one-shot attempt to restore the
+	// workspace's most-recent chat (if touched within LAST_CHAT_RESTORE_WINDOW_MS).
+	// Tracked via a ref so nulling activeConvoId on "New chat" doesn't re-trigger.
+	useEffect(() => {
+		if (prevWorkspaceIdRef.current === activeWorkspaceId) return;
+		prevWorkspaceIdRef.current = activeWorkspaceId;
+		pendingRestoreWorkspaceIdRef.current = activeWorkspaceId;
+	}, [activeWorkspaceId]);
+
+	useEffect(() => {
+		const pending = pendingRestoreWorkspaceIdRef.current;
+		if (!pending || pending !== activeWorkspaceId) return;
+		if (!conversations) return;
+		if (activeConvoId) {
+			pendingRestoreWorkspaceIdRef.current = null;
+			return;
+		}
+		pendingRestoreWorkspaceIdRef.current = null;
+		const cutoff = Date.now() - LAST_CHAT_RESTORE_WINDOW_MS;
+		const mostRecent = conversations.find(
+			(c) =>
+				!(c as Record<string, unknown>).editParentConversationId &&
+				c.lastMessageAt >= cutoff,
+		);
+		if (mostRecent) {
+			setActiveConvoId(mostRecent._id);
+		}
+	}, [activeWorkspaceId, conversations, activeConvoId]);
 
 	useEffect(() => {
 		if (!workspaces || workspaces.length === 0) {
