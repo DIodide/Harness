@@ -29,6 +29,7 @@ import {
 	Plus,
 	Server,
 	Shield,
+	Sparkles,
 	Terminal,
 	Trash2,
 	Wrench,
@@ -37,6 +38,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useMemo, useState } from "react";
+import { HarnessCreationAssistant } from "../components/harness-creation-assistant";
 import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../components/princeton-connect-row";
@@ -133,6 +135,7 @@ function OnboardingPage() {
 	);
 
 	const [stepIndex, setStepIndex] = useState(0);
+	const [aiAssistantOpen, setAiAssistantOpen] = useState(false);
 
 	const allMcpServers = useMemo(
 		() => [
@@ -338,14 +341,24 @@ function OnboardingPage() {
 						</p>
 					</div>
 				</div>
-				<Button
-					variant="ghost"
-					size="sm"
-					onClick={handleSaveDraft}
-					disabled={createHarness.isPending}
-				>
-					Save Draft
-				</Button>
+				<div className="flex items-center gap-2">
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={() => setAiAssistantOpen(true)}
+					>
+						<Sparkles size={14} />
+						Create with AI
+					</Button>
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={handleSaveDraft}
+						disabled={createHarness.isPending}
+					>
+						Save Draft
+					</Button>
+				</div>
 			</header>
 
 			<div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 py-10">
@@ -357,6 +370,24 @@ function OnboardingPage() {
 						Configure the tools and capabilities your AI agent needs.
 					</p>
 				</div>
+
+				<button
+					type="button"
+					onClick={() => setAiAssistantOpen(true)}
+					className="mt-4 flex w-full items-center gap-3 border border-dashed border-foreground/20 bg-muted/40 px-4 py-3 text-left transition-colors hover:border-foreground/40 hover:bg-muted/60"
+				>
+					<Sparkles size={16} className="shrink-0 text-muted-foreground" />
+					<div className="min-w-0 flex-1">
+						<p className="text-sm font-medium text-foreground">
+							Not sure where to start?
+						</p>
+						<p className="text-xs text-muted-foreground">
+							Describe your use case and let AI configure your harness
+							automatically.
+						</p>
+					</div>
+					<ArrowRight size={14} className="shrink-0 text-muted-foreground" />
+				</button>
 
 				<div className="mb-10 mt-8 flex items-center justify-center gap-1">
 					{steps.map((s, i) => (
@@ -484,6 +515,11 @@ function OnboardingPage() {
 					)}
 				</div>
 			</div>
+
+			<HarnessCreationAssistant
+				open={aiAssistantOpen}
+				onOpenChange={setAiAssistantOpen}
+			/>
 		</div>
 	);
 }
