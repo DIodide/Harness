@@ -212,9 +212,14 @@ function OnboardingPage() {
 
 			return harnessId;
 		},
-		onSuccess: (harnessId) => {
+		onSuccess: (harnessId, variables) => {
 			const id = harnessId as Id<"harnesses">;
-			navigate({ to: "/chat", search: { harnessId: id as string } });
+			if (variables.status === "draft") {
+				navigate({ to: "/harnesses" });
+				toast.success("Draft saved");
+			} else {
+				navigate({ to: "/chat", search: { harnessId: id as string } });
+			}
 
 			// Fire-and-forget: sync skill details for added skills
 			if (selectedSkills.length > 0) {

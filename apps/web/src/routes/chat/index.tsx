@@ -64,6 +64,7 @@ import {
 	MessageActions,
 } from "../../components/message-actions";
 import { MessageAttachments } from "../../components/message-attachments";
+import { PendingResponseIndicator } from "../../components/pending-response-indicator";
 import { RoseCurveSpinner } from "../../components/rose-curve-spinner";
 import { SandboxPanel } from "../../components/sandbox/sandbox-panel";
 import { SandboxResult } from "../../components/sandbox-result";
@@ -708,83 +709,98 @@ function ChatPage() {
 		),
 	);
 
-	// Health-check MCP servers when harness changes
+	// Health-check MCP servers when harness changes, or on-demand via refreshHealth.
+	const healthCheckRunRef = useRef<{ cancel: () => void } | null>(null);
+	const runHealthCheck = useCallback(
+		(
+			servers: Array<{
+				name: string;
+				url: string;
+				authType: McpAuthType;
+				authToken?: string;
+			}>,
+		) => {
+			healthCheckRunRef.current?.cancel();
+
+			if (servers.length === 0) {
+				setMcpHealthStatuses({});
+				return;
+			}
+
+			const checking: Record<string, HealthStatus> = {};
+			for (const s of servers) checking[s.url] = "checking";
+			setMcpHealthStatuses(checking);
+
+			let cancelled = false;
+			const run = async () => {
+				try {
+					const token = await getToken();
+					const res = await fetch(`${FASTAPI_URL}/api/mcp/health/check`, {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							...(token ? { Authorization: `Bearer ${token}` } : {}),
+						},
+						body: JSON.stringify({
+							mcp_servers: servers.map((s) => ({
+								name: s.name,
+								url: s.url,
+								auth_type: s.authType,
+								...(s.authToken ? { auth_token: s.authToken } : {}),
+							})),
+							force: true,
+						}),
+					});
+					if (cancelled) return;
+					if (!res.ok) {
+						const fallback: Record<string, HealthStatus> = {};
+						for (const s of servers) fallback[s.url] = "unreachable";
+						setMcpHealthStatuses(fallback);
+						return;
+					}
+					const data = await res.json();
+					if (cancelled) return;
+					const statuses: Record<string, HealthStatus> = {};
+					for (const server of data.servers) {
+						if (server.status === "ok") statuses[server.url] = "reachable";
+						else if (server.status === "auth_required")
+							statuses[server.url] = "auth_required";
+						else statuses[server.url] = "unreachable";
+					}
+					setMcpHealthStatuses(statuses);
+				} catch {
+					if (cancelled) return;
+					const fallback: Record<string, HealthStatus> = {};
+					for (const s of servers) fallback[s.url] = "unreachable";
+					setMcpHealthStatuses(fallback);
+				}
+			};
+
+			run();
+			healthCheckRunRef.current = {
+				cancel: () => {
+					cancelled = true;
+				},
+			};
+		},
+		[getToken],
+	);
+
+	const refreshHealth = useCallback(() => {
+		if (activeHarness) runHealthCheck(activeHarness.mcpServers);
+	}, [activeHarness, runHealthCheck]);
+
 	// biome-ignore lint/correctness/useExhaustiveDependencies: only re-run when harness ID changes
 	useEffect(() => {
-		if (!activeHarness || activeHarness.mcpServers.length === 0) {
+		if (!activeHarness) {
 			setMcpHealthStatuses({});
 			return;
 		}
-
-		// Set all servers to "checking"
-		const checking: Record<string, HealthStatus> = {};
-		for (const s of activeHarness.mcpServers) {
-			checking[s.url] = "checking";
-		}
-		setMcpHealthStatuses(checking);
-
-		let cancelled = false;
-
-		const runCheck = async () => {
-			try {
-				const token = await getToken();
-				const res = await fetch(`${FASTAPI_URL}/api/mcp/health/check`, {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						...(token ? { Authorization: `Bearer ${token}` } : {}),
-					},
-					body: JSON.stringify({
-						mcp_servers: activeHarness.mcpServers.map((s) => ({
-							name: s.name,
-							url: s.url,
-							auth_type: s.authType,
-							...(s.authToken ? { auth_token: s.authToken } : {}),
-						})),
-						force: true,
-					}),
-				});
-
-				if (cancelled) return;
-
-				if (!res.ok) {
-					const fallback: Record<string, HealthStatus> = {};
-					for (const s of activeHarness.mcpServers) {
-						fallback[s.url] = "unreachable";
-					}
-					setMcpHealthStatuses(fallback);
-					return;
-				}
-
-				const data = await res.json();
-				if (cancelled) return;
-
-				const statuses: Record<string, HealthStatus> = {};
-				for (const server of data.servers) {
-					if (server.status === "ok") {
-						statuses[server.url] = "reachable";
-					} else if (server.status === "auth_required") {
-						statuses[server.url] = "auth_required";
-					} else {
-						statuses[server.url] = "unreachable";
-					}
-				}
-				setMcpHealthStatuses(statuses);
-			} catch {
-				if (cancelled) return;
-				const fallback: Record<string, HealthStatus> = {};
-				for (const s of activeHarness.mcpServers) {
-					fallback[s.url] = "unreachable";
-				}
-				setMcpHealthStatuses(fallback);
-			}
-		};
-
-		runCheck();
+		runHealthCheck(activeHarness.mcpServers);
 		return () => {
-			cancelled = true;
+			healthCheckRunRef.current?.cancel();
 		};
-	}, [activeHarness?._id, getToken]);
+	}, [activeHarness?._id]);
 
 	// Sync slash commands: fetch from MCP servers, upsert into commands table,
 	// and store the resulting IDs on the harness's mcpServers.
@@ -1143,6 +1159,7 @@ function ChatPage() {
 						isStreaming={isActiveConvoStreaming}
 						mcpHealthStatuses={mcpHealthStatuses}
 						onRefreshCommands={refreshCommands}
+						onRefreshHealth={refreshHealth}
 						onAddSkill={handleAddSkill}
 						onRemoveSkill={handleRemoveSkill}
 					/>
@@ -2018,6 +2035,7 @@ function ChatHeader({
 	isStreaming,
 	mcpHealthStatuses,
 	onRefreshCommands,
+	onRefreshHealth,
 	onAddSkill,
 	onRemoveSkill,
 }: {
@@ -2059,6 +2077,7 @@ function ChatHeader({
 	isStreaming: boolean;
 	mcpHealthStatuses?: Record<string, HealthStatus>;
 	onRefreshCommands: () => void;
+	onRefreshHealth: () => void;
 	onAddSkill: (skill: SkillEntry) => void;
 	onRemoveSkill: (skill: SkillEntry) => void;
 }) {
@@ -2120,7 +2139,10 @@ function ChatHeader({
 					<McpServerStatus
 						servers={harness.mcpServers}
 						healthStatuses={mcpHealthStatuses}
-						onReconnected={onRefreshCommands}
+						onReconnected={() => {
+							onRefreshHealth();
+							onRefreshCommands();
+						}}
 					/>
 				)}
 
@@ -2529,9 +2551,13 @@ function ChatMessages({
 		lastMsg.content === pendingDoneContent;
 	const isActivelyStreaming =
 		streamingContent !== null || streamingReasoning !== null;
-	// Show the streaming bubble when we have content, reasoning, or tool calls, but Convex hasn't synced yet
+	// Show the streaming bubble while we're waiting for or receiving a response
+	// (content, reasoning, tool calls) but Convex hasn't synced yet. Include
+	// `isStreaming` so the bubble appears immediately with a pending spinner
+	// before the first chunk arrives.
 	const showStreamingBubble =
-		(streamingContent !== null ||
+		(isStreaming ||
+			streamingContent !== null ||
 			streamingReasoning !== null ||
 			activeToolCalls.length > 0) &&
 		!convexHasMessage;
@@ -2996,12 +3022,7 @@ function ChatMessages({
 										})
 									: !streamingReasoning &&
 										activeToolCalls.length === 0 &&
-										!streamingContent && (
-											<RoseCurveSpinner
-												size={14}
-												className="text-muted-foreground"
-											/>
-										)}
+										!streamingContent && <PendingResponseIndicator />}
 							</div>
 							{displayMode === "developer" && streamUsage && (
 								<div className="flex items-center gap-3 pt-1">

@@ -201,6 +201,8 @@ export const saveAssistantMessage = internalMutation({
 			}),
 		),
 		model: v.optional(v.string()),
+		interrupted: v.optional(v.boolean()),
+		interruptionReason: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const convo = await ctx.db.get(args.conversationId);
@@ -221,6 +223,10 @@ export const saveAssistantMessage = internalMutation({
 				: {}),
 			...(args.usage ? { usage: args.usage } : {}),
 			...(args.model ? { model: args.model } : {}),
+			...(args.interrupted ? { interrupted: true } : {}),
+			...(args.interruptionReason
+				? { interruptionReason: args.interruptionReason }
+				: {}),
 		});
 
 		await ctx.db.patch(args.conversationId, {

@@ -2,7 +2,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Server, Shield } from "lucide-react";
+import { AlertTriangle, GraduationCap, Server, Shield } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
@@ -98,7 +98,12 @@ export type HealthStatus =
 	| "unreachable"
 	| "auth_required";
 
-type ServerStatus = "connected" | "expired" | "disconnected" | "checking";
+type ServerStatus =
+	| "connected"
+	| "expired"
+	| "disconnected"
+	| "checking"
+	| "needs_verification";
 
 function getServerStatus(
 	server: McpServer,
@@ -126,7 +131,15 @@ function getServerStatus(
 		return "connected";
 	}
 
-	// For non-OAuth servers: use health check result
+	// For Princeton servers: auth_required means no verified netid on the account
+	if (server.authType === "tiger_junction") {
+		if (healthStatus === "auth_required") return "needs_verification";
+		if (healthStatus === "unreachable") return "disconnected";
+		if (healthStatus === "reachable") return "connected";
+		return "checking";
+	}
+
+	// For bearer / none servers: use health check result
 	if (healthStatus === "unreachable") return "disconnected";
 	if (healthStatus === "auth_required") return "disconnected";
 	if (healthStatus === "reachable") return "connected";
@@ -139,6 +152,7 @@ const STATUS_DOT: Record<ServerStatus, string> = {
 	expired: "bg-amber-400",
 	disconnected: "bg-red-400",
 	checking: "bg-muted-foreground/40",
+	needs_verification: "bg-amber-400",
 };
 
 const STATUS_LABEL: Record<ServerStatus, string> = {
@@ -146,6 +160,7 @@ const STATUS_LABEL: Record<ServerStatus, string> = {
 	expired: "Token expired",
 	disconnected: "Unreachable",
 	checking: "Checking…",
+	needs_verification: "Verify Princeton account",
 };
 
 export function McpServerStatus({
@@ -186,7 +201,10 @@ export function McpServerStatus({
 
 	const allConnected = statuses.every((s) => s.status === "connected");
 	const hasIssue = statuses.some(
-		(s) => s.status === "expired" || s.status === "disconnected",
+		(s) =>
+			s.status === "expired" ||
+			s.status === "disconnected" ||
+			s.status === "needs_verification",
 	);
 
 	const anyChecking = statuses.some((s) => s.status === "checking");
@@ -315,16 +333,43 @@ function McpServerRow({
 					Reconnect
 				</Button>
 			)}
-			{server.authType !== "oauth" && status === "connected" && (
+			{status === "connected" && server.authType === "bearer" && (
 				<Badge variant="secondary" className="shrink-0 text-[9px]">
-					{server.authType === "bearer" ? "Key" : "Open"}
+					Key
 				</Badge>
 			)}
-			{server.authType === "oauth" && status === "connected" && (
+			{status === "connected" && server.authType === "none" && (
+				<Badge variant="secondary" className="shrink-0 text-[9px]">
+					Public
+				</Badge>
+			)}
+			{status === "connected" && server.authType === "tiger_junction" && (
+				<Badge variant="secondary" className="shrink-0 gap-1 text-[9px]">
+					<GraduationCap size={8} />
+					Princeton
+				</Badge>
+			)}
+			{status === "connected" && server.authType === "oauth" && (
 				<Badge variant="secondary" className="shrink-0 gap-1 text-[9px]">
 					<div className="h-1 w-1 rounded-full bg-emerald-500" />
 					OAuth
 				</Badge>
+			)}
+			{status === "needs_verification" && (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Badge
+							variant="secondary"
+							className="shrink-0 gap-1 border border-amber-400/40 bg-amber-500/10 text-[9px] text-amber-700 dark:text-amber-400"
+						>
+							<GraduationCap size={8} />
+							Verify
+						</Badge>
+					</TooltipTrigger>
+					<TooltipContent>
+						Open this harness's settings to verify your Princeton account.
+					</TooltipContent>
+				</Tooltip>
 			)}
 		</div>
 	);
