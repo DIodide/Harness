@@ -26,6 +26,7 @@ export interface PresetMcpDefinition {
 	server: McpServerEntry;
 }
 
+// When adding/removing MCPs, also update _PRESET_MCP_CATALOG in packages/fastapi/app/routes/harness_suggest.py.
 export const PRESET_MCPS: PresetMcpDefinition[] = [
 	{
 		id: "princetoncourses",

@@ -568,3 +568,40 @@ export const discoverSkillsFromSearch = action({
 		});
 	},
 });
+
+export const searchForCreationAssistant = query({
+	args: { query: v.string() },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return [];
+
+		const [byName, byDesc] = await Promise.all([
+			ctx.db
+				.query("skillsIndex")
+				.withSearchIndex("search_skills", (q) => q.search("skillId", args.query))
+				.take(20),
+			ctx.db
+				.query("skillsIndex")
+				.withSearchIndex("search_skills_description", (q) =>
+					q.search("description", args.query),
+				)
+				.take(20),
+		]);
+
+		const seen = new Set<string>();
+		const merged = [...byName, ...byDesc].filter((s) => {
+			if (seen.has(s.fullId)) return false;
+			seen.add(s.fullId);
+			return true;
+		});
+
+		merged.sort((a, b) => b.installs - a.installs);
+
+		return merged.slice(0, 20).map((s) => ({
+			id: s.fullId,
+			fullId: s.fullId,
+			description: s.description,
+			installs: s.installs,
+		}));
+	},
+});

@@ -5,11 +5,8 @@ import {
 	useConvexMutation,
 } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
-import type {
-	Doc,
-	Id,
-} from "@harness/convex-backend/convex/_generated/dataModel";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	createFileRoute,
 	Link,
@@ -29,6 +26,7 @@ import {
 	Plus,
 	Server,
 	Shield,
+	Sparkles,
 	Terminal,
 	Trash2,
 	Wrench,
@@ -38,11 +36,13 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
+import { HarnessCreationAssistant } from "../components/harness-creation-assistant";
 import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../components/princeton-connect-row";
 import { RecommendedSkillsGrid } from "../components/recommended-skills-grid";
 import { RoseCurveSpinner } from "../components/rose-curve-spinner";
+import { SandboxConfigForm } from "../components/sandbox/sandbox-config-form";
 import { SkillsBrowser } from "../components/skills-browser";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -66,6 +66,14 @@ import {
 	toMcpServerPayload,
 } from "../lib/mcp";
 import { MODELS } from "../lib/models";
+import {
+	DEFAULT_SANDBOX_CONFIG,
+	formatSandboxMeta,
+	getDefaultSandboxSelection,
+	type Sandbox,
+	type SandboxConfig,
+	waitForSandboxRecord,
+} from "../lib/sandbox";
 import type { SkillEntry } from "../lib/skills";
 import { RECOMMENDED_SKILLS } from "../lib/skills";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "../lib/system-prompt";
@@ -90,65 +98,51 @@ const BASE_STEPS = [
 
 const CONNECT_STEP = { key: "connect", label: "Connect", icon: Link2 };
 
-type SandboxConfig = {
-	persistent: boolean;
-	autoStart: boolean;
-	defaultLanguage: string;
-	resourceTier: "basic" | "standard" | "performance";
-};
-
-type Sandbox = Doc<"sandboxes">;
-
-function getDefaultSandboxSelection(sandbox: Sandbox | undefined) {
-	if (!sandbox) return undefined;
-	return {
-		sandboxId: sandbox._id,
-		daytonaSandboxId: sandbox.daytonaSandboxId,
-		config: {
-			persistent: !sandbox.ephemeral,
-			autoStart: true,
-			defaultLanguage: sandbox.language ?? "python",
-			resourceTier: getResourceTierFromSandbox(sandbox),
-		} satisfies SandboxConfig,
-	};
-}
-
-function getResourceTierFromSandbox(
-	sandbox: Sandbox,
-): SandboxConfig["resourceTier"] {
-	if (sandbox.resources.cpu >= 4 || sandbox.resources.memoryGB >= 8) {
-		return "performance";
-	}
-	if (sandbox.resources.cpu >= 2 || sandbox.resources.memoryGB >= 4) {
-		return "standard";
-	}
-	return "basic";
-}
-
-function formatSandboxMeta(sandbox: Sandbox) {
-	const type = sandbox.ephemeral ? "Ephemeral" : "Persistent";
-	const language = sandbox.language
-		? sandbox.language.charAt(0).toUpperCase() + sandbox.language.slice(1)
-		: "Default";
-	return `${type} - ${language} - ${sandbox.resources.cpu} CPU - ${sandbox.resources.memoryGB} GB RAM`;
-}
-
 function OnboardingPage() {
 	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 
-	const [name, setName] = useState("");
-	const [model, setModel] = useState("");
+	const _prefill = (() => {
+		try {
+			const raw = sessionStorage.getItem("harness-prefill");
+			if (raw) {
+				sessionStorage.removeItem("harness-prefill");
+				return JSON.parse(raw) as {
+					name?: string;
+					model?: string;
+					selectedPresetMcps?: string[];
+					skills?: { name: string; description: string }[];
+				};
+			}
+		} catch {}
+		return null;
+	})();
+
+	const [name, setName] = useState(_prefill?.name ?? "");
+	const [model, setModel] = useState(_prefill?.model ?? "");
 	const [systemPrompt, setSystemPrompt] = useState("");
 	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>(
 		[],
 	);
 	const [sandboxEnabled, setSandboxEnabled] = useState(false);
+	const [sandboxMode, setSandboxMode] = useState<"existing" | "new">(
+		"existing",
+	);
 	const [selectedSandboxId, setSelectedSandboxId] =
 		useState<Id<"sandboxes"> | null>(null);
-	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>([]);
-	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>([]);
+	const [newSandboxName, setNewSandboxName] = useState("New sandbox");
+	const [newSandboxConfig, setNewSandboxConfig] = useState<SandboxConfig>(
+		DEFAULT_SANDBOX_CONFIG,
+	);
+	const [selectedPresetMcps, setSelectedPresetMcps] = useState<string[]>(
+		_prefill?.selectedPresetMcps ?? [],
+	);
+	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>(
+		_prefill?.skills ?? [],
+	);
 
 	const [stepIndex, setStepIndex] = useState(0);
+	const [aiAssistantOpen, setAiAssistantOpen] = useState(false);
 
 	const allMcpServers = useMemo(
 		() => [
@@ -157,6 +151,19 @@ function OnboardingPage() {
 		],
 		[customMcpServers, selectedPresetMcps],
 	);
+
+	const handleAiPrefill = (prefill: {
+		name?: string;
+		model?: string;
+		selectedPresetMcps?: string[];
+		skills?: { name: string; description: string }[];
+	}) => {
+		if (prefill.name) setName(prefill.name);
+		if (prefill.model) setModel(prefill.model);
+		if (prefill.selectedPresetMcps)
+			setSelectedPresetMcps(prefill.selectedPresetMcps);
+		if (prefill.skills) setSelectedSkills(prefill.skills);
+	};
 
 	const hasOAuthServers = allMcpServers.some((s) => s.authType === "oauth");
 	const hasTigerJunction = allMcpServers.some(
@@ -179,6 +186,7 @@ function OnboardingPage() {
 	// Clamp stepIndex if steps shrink (e.g. OAuth servers removed while on connect step)
 	const safeIndex = Math.min(stepIndex, steps.length - 1);
 	const currentStep = steps[safeIndex]?.key ?? "name";
+	type HarnessMcpServerInput = Omit<McpServerEntry, "commandIds">;
 
 	const updateHarnessMut = useMutation({
 		mutationFn: useConvexMutation(api.harnesses.update),
@@ -202,12 +210,19 @@ function OnboardingPage() {
 		setSelectedSandboxId(sandboxes[0]._id);
 	}, [sandboxes, selectedSandboxId]);
 
+	useEffect(() => {
+		if (sandboxesLoading) return;
+		if (!sandboxes?.length && sandboxMode === "existing") {
+			setSandboxMode("new");
+		}
+	}, [sandboxes, sandboxesLoading, sandboxMode]);
+
 	const createHarness = useMutation({
 		mutationFn: async (args: {
 			name: string;
 			model: string;
 			status: "started" | "stopped" | "draft";
-			mcpServers: McpServerEntry[];
+			mcpServers: HarnessMcpServerInput[];
 			skills: SkillEntry[];
 			systemPrompt?: string;
 			sandboxEnabled?: boolean;
@@ -324,11 +339,49 @@ function OnboardingPage() {
 		},
 	});
 
+	const createSandbox = useMutation({
+		mutationFn: async (args: { name: string; config: SandboxConfig }) => {
+			const token = await getToken();
+			const res = await fetch(`${API_URL}/api/sandbox`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					...(token ? { Authorization: `Bearer ${token}` } : {}),
+				},
+				body: JSON.stringify({
+					name: args.name.trim() || "New sandbox",
+					language: args.config.defaultLanguage,
+					resource_tier: args.config.resourceTier,
+					ephemeral: !args.config.persistent,
+				}),
+			});
+
+			if (!res.ok) {
+				const text = await res.text().catch(() => "");
+				throw new Error(text || `Sandbox API error ${res.status}`);
+			}
+
+			const data = (await res.json()) as { id: string };
+			const sandbox = await waitForSandboxRecord(queryClient, data.id);
+			if (!sandbox) {
+				throw new Error("Sandbox was created, but it did not sync in time");
+			}
+			return sandbox;
+		},
+		onSuccess: (sandbox) => {
+			setSelectedSandboxId(sandbox._id);
+			void queryClient.invalidateQueries({
+				queryKey: convexQuery(api.sandboxes.list, {}).queryKey,
+			});
+		},
+	});
+
 	const canProceed = () => {
 		if (currentStep === "name")
 			return name.trim().length > 0 && model.length > 0;
 		if (currentStep === "sandbox" && sandboxEnabled) {
-			return !!selectedSandbox;
+			if (sandboxMode === "existing") return !!selectedSandbox;
+			return newSandboxName.trim().length > 0;
 		}
 		return true;
 	};
@@ -342,54 +395,52 @@ function OnboardingPage() {
 	};
 
 	// Strip commandIds from servers — commands are synced after creation in the chat page
-	const mcpServersForMutation = allMcpServers.map(
+	const mcpServersForMutation: HarnessMcpServerInput[] = allMcpServers.map(
 		({ commandIds: _, ...rest }) => rest,
 	);
 
-	const handleCreate = () => {
-		const defaultSandbox = getDefaultSandboxSelection(selectedSandbox);
-		if (sandboxEnabled && !defaultSandbox) {
-			toast.error("Select an existing sandbox");
-			return;
+	const resolveDefaultSandbox = async () => {
+		if (!sandboxEnabled) return undefined;
+
+		if (sandboxMode === "existing") {
+			const defaultSandbox = getDefaultSandboxSelection(selectedSandbox);
+			if (!defaultSandbox) {
+				throw new Error("Select an existing sandbox");
+			}
+			return defaultSandbox;
 		}
-		createHarness.mutate({
-			name: name.trim(),
-			model,
-			status: "started" as const,
-			mcpServers: mcpServersForMutation,
-			skills: selectedSkills,
-			systemPrompt: systemPrompt.trim() || undefined,
-			sandboxEnabled: sandboxEnabled || undefined,
-			sandboxConfig: sandboxEnabled ? defaultSandbox?.config : undefined,
-			defaultSandbox: sandboxEnabled ? defaultSandbox : undefined,
+
+		if (!newSandboxName.trim()) {
+			throw new Error("Enter a sandbox name");
+		}
+
+		const sandbox = await createSandbox.mutateAsync({
+			name: newSandboxName,
+			config: newSandboxConfig,
 		});
+		return getDefaultSandboxSelection(sandbox);
 	};
 
-	const handleSaveDraft = () => {
-		if (!name.trim()) {
-			toast.error("Give your harness a name before saving");
-			return;
+	const submitHarness = async (status: "started" | "draft") => {
+		try {
+			const defaultSandbox = await resolveDefaultSandbox();
+			createHarness.mutate({
+				name:
+					status === "draft" ? name.trim() || "Untitled Harness" : name.trim(),
+				model: status === "draft" ? model || "gpt-4o" : model,
+				status,
+				mcpServers: mcpServersForMutation,
+				skills: selectedSkills,
+				systemPrompt: systemPrompt.trim() || undefined,
+				sandboxEnabled: sandboxEnabled || undefined,
+				sandboxConfig: sandboxEnabled ? defaultSandbox?.config : undefined,
+				defaultSandbox: sandboxEnabled ? defaultSandbox : undefined,
+			});
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Failed to configure sandbox",
+			);
 		}
-		if (!model) {
-			toast.error("Pick a model before saving");
-			return;
-		}
-		const defaultSandbox = getDefaultSandboxSelection(selectedSandbox);
-		if (sandboxEnabled && !defaultSandbox) {
-			toast.error("Select an existing sandbox");
-			return;
-		}
-		createHarness.mutate({
-			name: name.trim(),
-			model,
-			status: "draft" as const,
-			mcpServers: mcpServersForMutation,
-			skills: selectedSkills,
-			systemPrompt: systemPrompt.trim() || undefined,
-			sandboxEnabled: sandboxEnabled || undefined,
-			sandboxConfig: sandboxEnabled ? defaultSandbox?.config : undefined,
-			defaultSandbox: sandboxEnabled ? defaultSandbox : undefined,
-		});
 	};
 
 	const handleAddServer = (server: McpServerEntry) => {
@@ -424,21 +475,24 @@ function OnboardingPage() {
 						</p>
 					</div>
 				</div>
-				<Button
-					variant="ghost"
-					size="sm"
-					onClick={handleSaveDraft}
-					disabled={
-						createHarness.isPending || !name.trim() || !model
-					}
-					title={
-						!name.trim() || !model
-							? "Name the harness and pick a model first"
-							: undefined
-					}
-				>
-					Save Draft
-				</Button>
+				<div className="flex items-center gap-2">
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={() => setAiAssistantOpen(true)}
+					>
+						<Sparkles size={14} />
+						Create with AI
+					</Button>
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={() => void submitHarness("draft")}
+						disabled={createHarness.isPending || createSandbox.isPending}
+					>
+						Save Draft
+					</Button>
+				</div>
 			</header>
 
 			<div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 py-10">
@@ -450,6 +504,24 @@ function OnboardingPage() {
 						Configure the tools and capabilities your AI agent needs.
 					</p>
 				</div>
+
+				<button
+					type="button"
+					onClick={() => setAiAssistantOpen(true)}
+					className="mt-4 flex w-full items-center gap-3 border border-dashed border-foreground/20 bg-muted/40 px-4 py-3 text-left transition-colors hover:border-foreground/40 hover:bg-muted/60"
+				>
+					<Sparkles size={16} className="shrink-0 text-muted-foreground" />
+					<div className="min-w-0 flex-1">
+						<p className="text-sm font-medium text-foreground">
+							Not sure where to start?
+						</p>
+						<p className="text-xs text-muted-foreground">
+							Describe your use case and let AI configure your harness
+							automatically.
+						</p>
+					</div>
+					<ArrowRight size={14} className="shrink-0 text-muted-foreground" />
+				</button>
 
 				<div className="mb-10 mt-8 flex items-center justify-center gap-1">
 					{steps.map((s, i) => (
@@ -522,8 +594,14 @@ function OnboardingPage() {
 									setEnabled={setSandboxEnabled}
 									sandboxes={sandboxes ?? []}
 									sandboxesLoading={sandboxesLoading}
+									mode={sandboxMode}
+									setMode={setSandboxMode}
 									selectedSandboxId={selectedSandboxId}
 									setSelectedSandboxId={setSelectedSandboxId}
+									newSandboxName={newSandboxName}
+									setNewSandboxName={setNewSandboxName}
+									newSandboxConfig={newSandboxConfig}
+									setNewSandboxConfig={setNewSandboxConfig}
 								/>
 							)}
 							{currentStep === "skills" && (
@@ -561,13 +639,19 @@ function OnboardingPage() {
 					) : (
 						<Button
 							size="sm"
-							onClick={handleCreate}
-							disabled={createHarness.isPending || !canProceed()}
+							onClick={() => void submitHarness("started")}
+							disabled={
+								createHarness.isPending ||
+								createSandbox.isPending ||
+								!canProceed()
+							}
 						>
-							{createHarness.isPending ? (
+							{createHarness.isPending || createSandbox.isPending ? (
 								<span className="flex items-center gap-2">
 									<RoseCurveSpinner size={12} className="text-background" />
-									Creating...
+									{createSandbox.isPending
+										? "Creating sandbox..."
+										: "Creating..."}
 								</span>
 							) : (
 								<>
@@ -579,6 +663,12 @@ function OnboardingPage() {
 					)}
 				</div>
 			</div>
+
+			<HarnessCreationAssistant
+				open={aiAssistantOpen}
+				onOpenChange={setAiAssistantOpen}
+				onEditManually={handleAiPrefill}
+			/>
 		</div>
 	);
 }
@@ -1086,15 +1176,27 @@ function StepSandbox({
 	setEnabled,
 	sandboxes,
 	sandboxesLoading,
+	mode,
+	setMode,
 	selectedSandboxId,
 	setSelectedSandboxId,
+	newSandboxName,
+	setNewSandboxName,
+	newSandboxConfig,
+	setNewSandboxConfig,
 }: {
 	enabled: boolean;
 	setEnabled: (v: boolean) => void;
 	sandboxes: Sandbox[];
 	sandboxesLoading: boolean;
+	mode: "existing" | "new";
+	setMode: (value: "existing" | "new") => void;
 	selectedSandboxId: Id<"sandboxes"> | null;
 	setSelectedSandboxId: (v: Id<"sandboxes"> | null) => void;
+	newSandboxName: string;
+	setNewSandboxName: (value: string) => void;
+	newSandboxConfig: SandboxConfig;
+	setNewSandboxConfig: (config: SandboxConfig) => void;
 }) {
 	return (
 		<div className="space-y-4">
@@ -1118,7 +1220,7 @@ function StepSandbox({
 							Enable default sandbox
 						</p>
 						<p className="text-[11px] text-muted-foreground">
-							Attach an existing sandbox to this harness
+							Use an existing sandbox or create a new one for this harness
 						</p>
 					</div>
 					<Box size={14} className="shrink-0 text-muted-foreground" />
@@ -1132,47 +1234,106 @@ function StepSandbox({
 					exit={{ opacity: 0, height: 0 }}
 					className="space-y-4"
 				>
-					<div className="space-y-2">
-						<span className="block text-xs font-medium text-foreground">
-							Select Sandbox
-						</span>
-						{sandboxesLoading ? (
-							<p className="text-[11px] text-muted-foreground">
-								Loading sandboxes...
+					<div className="grid gap-2 sm:grid-cols-2">
+						<button
+							type="button"
+							onClick={() => setMode("existing")}
+							className={`border px-3 py-2.5 text-left transition-colors ${
+								mode === "existing"
+									? "border-foreground bg-foreground/5"
+									: "border-border hover:bg-muted/30"
+							}`}
+						>
+							<p className="text-xs font-medium text-foreground">
+								Use existing sandbox
 							</p>
-						) : sandboxes.length > 0 ? (
-							<Select
-								value={selectedSandboxId ?? undefined}
-								onValueChange={(value) =>
-									setSelectedSandboxId(value as Id<"sandboxes">)
-								}
-							>
-								<SelectTrigger className="w-full max-w-lg text-xs">
-									<SelectValue placeholder="Choose a sandbox" />
-								</SelectTrigger>
-								<SelectContent>
-									{sandboxes.map((sandbox) => (
-										<SelectItem key={sandbox._id} value={sandbox._id}>
-											<span className="truncate">{sandbox.name}</span>
-											<span className="text-[10px] text-muted-foreground">
-												{formatSandboxMeta(sandbox)}
-											</span>
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						) : (
-							<div className="border border-dashed border-border px-3 py-2.5">
-								<p className="text-xs font-medium text-foreground">
-									No existing sandboxes
-								</p>
-								<p className="mt-1 text-[11px] text-muted-foreground">
-									Create a sandbox from the Sandboxes page, then return here to
-									attach it.
-								</p>
-							</div>
-						)}
+							<p className="mt-1 text-[11px] text-muted-foreground">
+								Choose from your current sandboxes.
+							</p>
+						</button>
+						<button
+							type="button"
+							onClick={() => setMode("new")}
+							className={`border px-3 py-2.5 text-left transition-colors ${
+								mode === "new"
+									? "border-foreground bg-foreground/5"
+									: "border-border hover:bg-muted/30"
+							}`}
+						>
+							<p className="text-xs font-medium text-foreground">
+								Create new sandbox
+							</p>
+							<p className="mt-1 text-[11px] text-muted-foreground">
+								Create and link it as the default in one step.
+							</p>
+						</button>
 					</div>
+
+					{mode === "existing" ? (
+						<div className="space-y-2">
+							<span className="block text-xs font-medium text-foreground">
+								Select Sandbox
+							</span>
+							{sandboxesLoading ? (
+								<p className="text-[11px] text-muted-foreground">
+									Loading sandboxes...
+								</p>
+							) : sandboxes.length > 0 ? (
+								<Select
+									value={selectedSandboxId ?? undefined}
+									onValueChange={(value) =>
+										setSelectedSandboxId(value as Id<"sandboxes">)
+									}
+								>
+									<SelectTrigger className="w-full max-w-lg text-xs">
+										<SelectValue placeholder="Choose a sandbox" />
+									</SelectTrigger>
+									<SelectContent>
+										{sandboxes.map((sandbox) => (
+											<SelectItem key={sandbox._id} value={sandbox._id}>
+												<span className="truncate">{sandbox.name}</span>
+												<span className="text-[10px] text-muted-foreground">
+													{formatSandboxMeta(sandbox)}
+												</span>
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							) : (
+								<div className="border border-dashed border-border px-3 py-2.5">
+									<p className="text-xs font-medium text-foreground">
+										No existing sandboxes
+									</p>
+									<p className="mt-1 text-[11px] text-muted-foreground">
+										Switch to "Create new sandbox" to make and attach one here.
+									</p>
+								</div>
+							)}
+						</div>
+					) : (
+						<div className="space-y-4 border border-border p-4">
+							<div className="space-y-2">
+								<label
+									htmlFor="new-sandbox-name"
+									className="block text-xs font-medium text-foreground"
+								>
+									Sandbox Name
+								</label>
+								<Input
+									id="new-sandbox-name"
+									value={newSandboxName}
+									onChange={(event) => setNewSandboxName(event.target.value)}
+									className="max-w-sm"
+								/>
+							</div>
+
+							<SandboxConfigForm
+								config={newSandboxConfig}
+								setConfig={setNewSandboxConfig}
+								description="This uses the same sandbox creation behavior as Manage Sandboxes, then links the new sandbox as this harness's default."
+							/>
+						</div>
+					)}
 				</motion.div>
 			)}
 

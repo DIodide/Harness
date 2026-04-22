@@ -802,7 +802,8 @@ function ChatPage() {
 					const statuses: Record<string, HealthStatus> = {};
 					for (const server of data.servers) {
 						if (server.status === "ok") statuses[server.url] = "reachable";
-						else if (server.status === "auth_required") statuses[server.url] = "auth_required";
+						else if (server.status === "auth_required")
+							statuses[server.url] = "auth_required";
 						else statuses[server.url] = "unreachable";
 					}
 					setMcpHealthStatuses(statuses);

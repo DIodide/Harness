@@ -107,6 +107,7 @@ export default defineSchema({
 		forkedAtMessageCount: v.optional(v.number()),
 		editParentConversationId: v.optional(v.id("conversations")),
 		editParentMessageCount: v.optional(v.number()),
+		isCreationSession: v.optional(v.boolean()),
 	})
 		.index("by_user", ["userId"])
 		.index("by_user_last_message", ["userId", "lastMessageAt"])
@@ -264,6 +265,25 @@ export default defineSchema({
 		),
 		updatedAt: v.number(),
 	}).index("by_user_period", ["userId", "periodType", "period"]),
+
+	harnessConfigRatings: defineTable({
+		userId: v.string(),
+		rating: v.union(v.literal("up"), v.literal("down")),
+		configSnapshot: v.object({
+			name: v.string(),
+			model: v.string(),
+			mcpIds: v.array(v.string()),
+		}),
+		conversationSnapshot: v.array(
+			v.object({
+				role: v.string(),
+				content: v.string(),
+			}),
+		),
+		createdAt: v.number(),
+	})
+		.index("by_user", ["userId"])
+		.index("by_rating", ["rating"]),
 
 	usageLedger: defineTable({
 		userId: v.string(),

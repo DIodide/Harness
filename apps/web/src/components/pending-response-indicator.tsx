@@ -49,10 +49,7 @@ export function PendingResponseIndicator({
 
 	return (
 		<div
-			className={cn(
-				"flex items-center gap-2 text-muted-foreground",
-				className,
-			)}
+			className={cn("flex items-center gap-2 text-muted-foreground", className)}
 			aria-live="polite"
 		>
 			<RoseCurveSpinner size={14} />

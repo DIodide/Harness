@@ -17,6 +17,7 @@ import {
 	MoreHorizontal,
 	Play,
 	Plus,
+	Sparkles,
 	Square,
 	Trash2,
 	Zap,
@@ -24,6 +25,7 @@ import {
 import { motion } from "motion/react";
 import { useState } from "react";
 import toast from "react-hot-toast";
+import { HarnessCreationAssistant } from "../../components/harness-creation-assistant";
 import { HarnessMark } from "../../components/harness-mark";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -74,6 +76,7 @@ function HarnessesPage() {
 	const [deleteTarget, setDeleteTarget] = useState<Id<"harnesses"> | null>(
 		null,
 	);
+	const [creationAssistantOpen, setCreationAssistantOpen] = useState(false);
 
 	if (isLoading) {
 		return <LoadingSkeleton />;
@@ -123,13 +126,28 @@ function HarnessesPage() {
 						</p>
 					</div>
 				</div>
-				<Button size="sm" asChild>
-					<Link to="/onboarding">
-						<Plus size={14} />
-						Create New
-					</Link>
-				</Button>
+				<div className="flex items-center gap-2">
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={() => setCreationAssistantOpen(true)}
+					>
+						<Sparkles size={14} />
+						Create with AI
+					</Button>
+					<Button size="sm" asChild>
+						<Link to="/onboarding">
+							<Plus size={14} />
+							Create New
+						</Link>
+					</Button>
+				</div>
 			</header>
+
+			<HarnessCreationAssistant
+				open={creationAssistantOpen}
+				onOpenChange={setCreationAssistantOpen}
+			/>
 
 			<div className="flex-1 p-6">
 				{harnesses?.length === 0 ? (
@@ -231,7 +249,7 @@ function HarnessGroup({
 			authType: "none" | "bearer" | "oauth" | "tiger_junction";
 			authToken?: string;
 		}>;
-		skills: string[];
+		skills: { name: string; description: string }[];
 	}>;
 	onToggle: (
 		id: Id<"harnesses">,
@@ -286,7 +304,7 @@ function HarnessCard({
 			authType: "none" | "bearer" | "oauth" | "tiger_junction";
 			authToken?: string;
 		}>;
-		skills: string[];
+		skills: { name: string; description: string }[];
 	};
 	onToggle: (
 		id: Id<"harnesses">,
