@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { internalMutation } from "./_generated/server";
 
 export const seedAll = internalMutation({
@@ -95,7 +96,8 @@ export const seedAll = internalMutation({
 		await ctx.db.insert("messages", {
 			conversationId: c1,
 			role: "user",
-			content: "Yes, start with the JWT utility. We're using ES modules and TypeScript.",
+			content:
+				"Yes, start with the JWT utility. We're using ES modules and TypeScript.",
 		});
 		await ctx.db.insert("messages", {
 			conversationId: c1,
@@ -114,7 +116,8 @@ export const seedAll = internalMutation({
 		await ctx.db.insert("messages", {
 			conversationId: c2,
 			role: "user",
-			content: "Write comprehensive unit tests for our REST API endpoints using vitest.",
+			content:
+				"Write comprehensive unit tests for our REST API endpoints using vitest.",
 		});
 		await ctx.db.insert("messages", {
 			conversationId: c2,
@@ -140,7 +143,7 @@ export const seedAll = internalMutation({
 			conversationId: c3,
 			role: "assistant",
 			content:
-				"The 30-second timeout is almost certainly nginx's `proxy_read_timeout` default. Add these directives to your nginx location block:\n\n```nginx\nlocation /ws {\n    proxy_pass http://backend;\n    proxy_http_version 1.1;\n    proxy_set_header Upgrade $http_upgrade;\n    proxy_set_header Connection \"upgrade\";\n    proxy_read_timeout 86400s;\n    proxy_send_timeout 86400s;\n}\n```\n\nAlso implement ping/pong on the server side — send a ping frame every 25 seconds to keep the connection alive through any intermediary proxies.",
+				'The 30-second timeout is almost certainly nginx\'s `proxy_read_timeout` default. Add these directives to your nginx location block:\n\n```nginx\nlocation /ws {\n    proxy_pass http://backend;\n    proxy_http_version 1.1;\n    proxy_set_header Upgrade $http_upgrade;\n    proxy_set_header Connection "upgrade";\n    proxy_read_timeout 86400s;\n    proxy_send_timeout 86400s;\n}\n```\n\nAlso implement ping/pong on the server side — send a ping frame every 25 seconds to keep the connection alive through any intermediary proxies.',
 		});
 
 		const c4 = await ctx.db.insert("conversations", {
@@ -153,7 +156,8 @@ export const seedAll = internalMutation({
 		await ctx.db.insert("messages", {
 			conversationId: c4,
 			role: "user",
-			content: "Can you explain how Kubernetes networking works at a high level?",
+			content:
+				"Can you explain how Kubernetes networking works at a high level?",
 		});
 		await ctx.db.insert("messages", {
 			conversationId: c4,
@@ -183,9 +187,7 @@ export const clearAll = internalMutation({
 		for (const convo of conversations) {
 			const messages = await ctx.db
 				.query("messages")
-				.withIndex("by_conversation", (q) =>
-					q.eq("conversationId", convo._id),
-				)
+				.withIndex("by_conversation", (q) => q.eq("conversationId", convo._id))
 				.collect();
 			for (const msg of messages) {
 				await ctx.db.delete(msg._id);
@@ -230,9 +232,7 @@ export const clearAndReseed = internalMutation({
 		for (const convo of conversations) {
 			const messages = await ctx.db
 				.query("messages")
-				.withIndex("by_conversation", (q) =>
-					q.eq("conversationId", convo._id),
-				)
+				.withIndex("by_conversation", (q) => q.eq("conversationId", convo._id))
 				.collect();
 			for (const msg of messages) {
 				await ctx.db.delete(msg._id);
@@ -310,5 +310,294 @@ export const clearAndReseed = internalMutation({
 		});
 
 		return { harnesses: 3, conversations: 1, messages: 2 };
+	},
+});
+
+// Demo seeding for manual account testing. Pure append — does not delete
+// existing data. Run `clearAll` first if you want a fresh slate. Does not
+// create sandboxes (those live in Daytona and need API-side provisioning);
+// the harnesses set sandboxEnabled=false and leave sandboxId unset.
+//
+// Invoke via:
+//   CONVEX_DEPLOY_KEY=... bunx convex run seed:seedDemoForUser \
+//     '{"userId":"user_..."}'
+export const seedDemoForUser = internalMutation({
+	args: { userId: v.string() },
+	handler: async (ctx, { userId }) => {
+		const now = Date.now();
+		const HOUR = 60 * 60 * 1000;
+
+		// MCP server presets — kept in sync with apps/web/src/lib/mcp.ts.
+		// Auth tokens are not seeded; OAuth flows resolve on first use.
+		const MCP = {
+			github: {
+				name: "GitHub",
+				url: "https://api.githubcopilot.com/mcp/",
+				authType: "oauth" as const,
+			},
+			notion: {
+				name: "Notion",
+				url: "https://mcp.notion.com/mcp",
+				authType: "oauth" as const,
+			},
+			linear: {
+				name: "Linear",
+				url: "https://mcp.linear.app/mcp",
+				authType: "oauth" as const,
+			},
+			exa: {
+				name: "Exa",
+				url: "https://mcp.exa.ai/mcp",
+				authType: "none" as const,
+			},
+			context7: {
+				name: "Context7",
+				url: "https://mcp.context7.com/mcp",
+				authType: "none" as const,
+			},
+			awsKnowledge: {
+				name: "AWS Knowledge",
+				url: "https://knowledge-mcp.global.api.aws",
+				authType: "none" as const,
+			},
+			princetonCourses: {
+				name: "Princeton Courses",
+				url: "https://junction-engine.tigerapps.org/princetoncourses/mcp",
+				authType: "tiger_junction" as const,
+			},
+			tigerJunction: {
+				name: "TigerJunction",
+				url: "https://junction-engine.tigerapps.org/junction/mcp",
+				authType: "tiger_junction" as const,
+			},
+			tigerPath: {
+				name: "TigerPath",
+				url: "https://junction-engine.tigerapps.org/path/mcp",
+				authType: "tiger_junction" as const,
+			},
+			tigerSnatch: {
+				name: "TigerSnatch",
+				url: "https://junction-engine.tigerapps.org/snatch/mcp",
+				authType: "tiger_junction" as const,
+			},
+		};
+
+		// Eight curated harnesses spanning the requested model lineup
+		// (Sonnet 4.6, Opus 4.7, Opus 4.7 Thinking, Gemini 3.1 Flash Lite).
+		// Returned in the order they're inserted so workspaces below can
+		// reference them by index.
+		const harnessSpecs = [
+			{
+				name: "Coding Copilot",
+				model: "claude-sonnet-4.6",
+				status: "started" as const,
+				mcpServers: [MCP.github, MCP.context7],
+				skills: [
+					{ name: "coding", description: "General coding assistance" },
+					{ name: "debugging", description: "Debugging and troubleshooting" },
+				],
+				systemPrompt:
+					"You are a precise software engineering assistant. Prefer reading code and verifying with tools over guessing. Keep responses tight and reference file paths with line numbers when useful.",
+				suggestedPrompts: [
+					"Review my recent commits and flag anything risky",
+					"Find every TODO/FIXME in this repo and group them by file",
+					"Refactor the auth middleware to use JWT with refresh tokens",
+				],
+				lastUsedAt: now - 1 * HOUR,
+			},
+			{
+				name: "Frontend Designer",
+				model: "claude-opus-4.7-thinking",
+				status: "started" as const,
+				mcpServers: [MCP.github, MCP.context7],
+				skills: [
+					{
+						name: "design",
+						description: "UI/UX patterns and visual polish",
+					},
+					{ name: "frontend", description: "React, Tailwind, and CSS" },
+				],
+				systemPrompt:
+					"You design distinctive, production-grade frontend interfaces. Think hard about typography, layout rhythm, and color before writing code. Prefer concrete component implementations over abstract suggestions.",
+				suggestedPrompts: [
+					"Design a pricing page that doesn't feel generic",
+					"Audit my Tailwind config for inconsistent spacing scale",
+					"Convert this Figma frame into a React component",
+				],
+				lastUsedAt: now - 2 * HOUR,
+			},
+			{
+				name: "Research Analyst",
+				model: "claude-opus-4.7",
+				status: "started" as const,
+				mcpServers: [MCP.exa, MCP.context7, MCP.awsKnowledge],
+				skills: [
+					{
+						name: "research",
+						description: "Deep research with citations",
+					},
+					{ name: "writing", description: "Long-form technical writing" },
+				],
+				systemPrompt:
+					"You are a careful research analyst. Search the web for primary sources, cite each non-trivial claim, and flag where evidence conflicts. Prefer concrete data over vibes.",
+				suggestedPrompts: [
+					"Compare the latest pricing across major LLM providers",
+					"Summarize the state-of-the-art in retrieval-augmented generation",
+					"Research AWS Bedrock vs. self-hosting Llama 3 for our workload",
+				],
+				lastUsedAt: now - 3 * HOUR,
+			},
+			{
+				name: "Quick Search",
+				model: "gemini-3.1-flash-lite",
+				status: "started" as const,
+				mcpServers: [MCP.exa, MCP.context7],
+				skills: [],
+				systemPrompt:
+					"You answer quick factual questions with one or two sentences. Use search tools when the answer might be time-sensitive. Avoid preambles.",
+				suggestedPrompts: [
+					"What changed in the latest Bun release?",
+					"Look up the current AWS us-east-1 status",
+					"Find the docs for Convex internalMutation",
+				],
+				lastUsedAt: now - 4 * HOUR,
+			},
+			{
+				name: "DevOps Sidekick",
+				model: "claude-sonnet-4.6",
+				status: "started" as const,
+				mcpServers: [MCP.github, MCP.awsKnowledge],
+				skills: [
+					{
+						name: "devops",
+						description: "Infrastructure, deploys, and incidents",
+					},
+				],
+				systemPrompt:
+					"You are an SRE-minded assistant. Diagnose root causes before suggesting fixes, prefer reversible operations, and call out blast radius for any destructive action.",
+				suggestedPrompts: [
+					"Walk me through canarying a new ECS service",
+					"Why might my Lambda be throttled in us-east-1?",
+					"Audit my GitHub Actions workflow for caching wins",
+				],
+				lastUsedAt: now - 5 * HOUR,
+			},
+			{
+				name: "Princeton Course Planner",
+				model: "claude-sonnet-4.6",
+				status: "started" as const,
+				mcpServers: [
+					MCP.princetonCourses,
+					MCP.tigerJunction,
+					MCP.tigerPath,
+					MCP.tigerSnatch,
+				],
+				skills: [],
+				systemPrompt:
+					"You help Princeton students plan their semester. Pull live registrar data via the TigerApps MCPs, surface scheduling conflicts, and give honest takes from course evaluations.",
+				suggestedPrompts: [
+					"Find me 4 COS electives that don't conflict on Tue/Thu mornings",
+					"Plan a 4-year track for the SML certificate",
+					"Show enrollment trends for COS 333",
+				],
+				lastUsedAt: now - 6 * HOUR,
+			},
+			{
+				name: "Project Tracker",
+				model: "claude-opus-4.7",
+				status: "started" as const,
+				mcpServers: [MCP.linear, MCP.notion, MCP.github],
+				skills: [
+					{
+						name: "project-management",
+						description: "Issue tracking and standups",
+					},
+				],
+				systemPrompt:
+					"You triage work across Linear, Notion, and GitHub. Connect related issues, surface blockers, and draft concise updates suitable for standups.",
+				suggestedPrompts: [
+					"Summarize what shipped this week across our repos",
+					"Draft a standup update from my open Linear issues",
+					"Find Notion docs that reference the inference-pipeline epic",
+				],
+				lastUsedAt: now - 7 * HOUR,
+			},
+			{
+				name: "Notion Scribe",
+				model: "gemini-3.1-flash-lite",
+				status: "started" as const,
+				mcpServers: [MCP.notion],
+				skills: [
+					{
+						name: "writing",
+						description: "Doc capture and cleanup",
+					},
+				],
+				systemPrompt:
+					"You capture meeting notes and clean up Notion pages. Be terse, structured, and faithful to source material — never invent facts.",
+				suggestedPrompts: [
+					"Reformat this meeting transcript into action items",
+					"Tidy up the heading hierarchy on my onboarding doc",
+					"Summarize the last week of changes in our team page",
+				],
+				lastUsedAt: now - 8 * HOUR,
+			},
+		];
+
+		const harnessIds: Id<"harnesses">[] = [];
+		for (const spec of harnessSpecs) {
+			const id = await ctx.db.insert("harnesses", {
+				name: spec.name,
+				model: spec.model,
+				status: spec.status,
+				mcpServers: spec.mcpServers.map((s) => ({
+					name: s.name,
+					url: s.url,
+					authType: s.authType,
+				})),
+				skills: spec.skills,
+				systemPrompt: spec.systemPrompt,
+				suggestedPrompts: spec.suggestedPrompts,
+				userId,
+				lastUsedAt: spec.lastUsedAt,
+				sandboxEnabled: false,
+			});
+			harnessIds.push(id);
+		}
+
+		// Eight workspaces — one per color in WORKSPACE_COLORS, each linked
+		// to a harness by index so the user lands in a usable state.
+		// Order matches harnessSpecs above so colors line up sensibly.
+		const workspaceSpecs: Array<{ name: string; color: string }> = [
+			{ name: "Coding", color: "sky" },
+			{ name: "Design Lab", color: "rose" },
+			{ name: "Research", color: "lilac" },
+			{ name: "Quick Lookups", color: "butter" },
+			{ name: "Infra", color: "sand" },
+			{ name: "Course Planning", color: "peach" },
+			{ name: "Project Tracking", color: "mint" },
+			{ name: "Writing", color: "blush" },
+		];
+
+		for (let i = 0; i < workspaceSpecs.length; i++) {
+			const ws = workspaceSpecs[i];
+			const harnessId = harnessIds[i];
+			const lastUsedAt = now - (i + 1) * HOUR;
+			await ctx.db.insert("workspaces", {
+				userId,
+				name: ws.name,
+				color: ws.color,
+				harnessId,
+				createdAt: now,
+				lastUsedAt,
+			});
+		}
+
+		return {
+			harnesses: harnessIds.length,
+			workspaces: workspaceSpecs.length,
+			sandboxesSkipped:
+				"Sandboxes not seeded — provision manually via Daytona, then attach via workspaces:update or harnesses:setSandbox.",
+		};
 	},
 });
