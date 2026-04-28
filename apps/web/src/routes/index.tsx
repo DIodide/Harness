@@ -1,17 +1,20 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
-	ArrowLeftRight,
 	ArrowRight,
-	Code,
-	Database,
-	Globe,
+	Check,
+	FolderTree,
+	GitBranch,
+	GraduationCap,
 	Layers,
 	Menu,
-	MessageSquare,
-	Terminal,
+	Plug,
+	Plus,
+	Server,
+	Sparkles,
+	TerminalSquare,
+	Wallet,
 	X,
-	Zap,
 } from "lucide-react";
 import {
 	AnimatePresence,
@@ -34,11 +37,11 @@ export const Route = createFileRoute("/")({
 	component: LandingPage,
 	head: () => ({
 		meta: [
-			{ title: "Harness — The toolkit for AI agents" },
+			{ title: "Harness — One chat, every tool your agent needs" },
 			{
 				name: "description",
 				content:
-					"Create, manage, and deploy custom tool configurations for AI agents. Switch contexts in seconds.",
+					"Bundle your model, MCP servers, skills, and a live sandbox into a harness. Switch from coding to research to coursework in one click.",
 			},
 		],
 	}),
@@ -47,31 +50,51 @@ export const Route = createFileRoute("/")({
 /* ─────────────────────── Constants ─────────────────────── */
 
 const rotatingWords = [
-	"anything",
-	"coding",
-	"research",
-	"browsing",
-	"learning",
+	"code review",
+	"course planning",
+	"deep research",
+	"weekly notes",
 ];
 
-const features = [
+const primaryFeatures = [
 	{
-		icon: ArrowLeftRight,
-		title: "Instant Context Switching",
+		icon: Layers,
+		title: "One agent, many contexts",
 		description:
-			"Swap between agent profiles on the fly. Go from coding to research to browsing — without missing a beat.",
+			"A harness saves your model, system prompt, MCPs, skills, and sandbox. Switch from a coding agent to a research agent in one click.",
 	},
 	{
-		icon: MessageSquare,
-		title: "Unified Chat Interface",
+		icon: Plug,
+		title: "Plug in any tool",
 		description:
-			"Talk to your configured agents through a powerful chat interface. Every tool at your fingertips, one conversation away.",
+			"Twelve MCPs in the catalog — GitHub, Notion, Linear, Slack, Jira, plus four built for Princeton students. OAuth handled. Custom URLs welcome.",
 	},
 	{
-		icon: Code,
-		title: "Developer-First API",
+		icon: TerminalSquare,
+		title: "Real code, not just chat",
 		description:
-			"Access your harnesses programmatically through a clean REST API. Build downstream applications with our SDK.",
+			"Each harness can attach a Daytona-backed sandbox: file explorer, terminal, git. Your agent edits, runs, and ships — you watch it land.",
+	},
+];
+
+const secondaryFeatures = [
+	{
+		icon: Sparkles,
+		title: "Skills from skills.sh",
+		description:
+			"Pull battle-tested instructions for code review, debugging, web search, PDFs. Your agent learns your team's playbook on import.",
+	},
+	{
+		icon: Server,
+		title: "Slash commands & rich attachments",
+		description:
+			"Every MCP tool becomes a / command. Drop in images, PDFs, audio. Streaming reasoning across Claude, GPT, and Gemini.",
+	},
+	{
+		icon: Wallet,
+		title: "Transparent budgets",
+		description:
+			"Daily and weekly cost caps with per-model and per-harness breakdowns. No surprise bills at the end of the month.",
 	},
 ];
 
@@ -80,72 +103,44 @@ const steps = [
 		num: "01",
 		title: "Configure",
 		description:
-			"Define your harness with the tools, MCPs, and environments your agent needs.",
+			"Name a harness. Pick a model — Claude, GPT, or Gemini. Attach the MCPs and skills your agent needs. Optionally add a Daytona sandbox.",
 	},
 	{
 		num: "02",
-		title: "Deploy",
+		title: "Connect",
 		description:
-			"We handle provisioning and orchestration. Your harness goes live instantly.",
+			"OAuth into GitHub, Notion, Linear, or any provider in one popup. Princeton accounts auto-detect — no token wrangling for tiger_junction servers.",
 	},
 	{
 		num: "03",
-		title: "Use",
+		title: "Chat",
 		description:
-			"Chat with your agent or integrate via API. Fully equipped, ready to go.",
+			"Streaming reasoning, slash commands, tool calls, attachments, and live sandbox output — all in one conversation.",
 	},
 ];
 
-const toolNodes = [
-	{ icon: Globe, label: "Browser" },
-	{ icon: Terminal, label: "Terminal" },
-	{ icon: Code, label: "Editor" },
-	{ icon: Database, label: "Storage" },
-	{ icon: Zap, label: "API" },
-	{ icon: Layers, label: "MCP" },
+const integrations = [
+	"GitHub",
+	"Notion",
+	"Linear",
+	"Slack",
+	"Jira",
+	"Exa",
+	"Context7",
+	"AWS Knowledge",
+	"TigerJunction",
+	"TigerPath",
+	"TigerSnatch",
+	"PrincetonCourses",
 ];
 
-const terminalLines: {
-	prefix: string;
-	text: string;
-	color: string;
-}[] = [
-	{
-		prefix: "$",
-		text: "harness deploy --profile coding",
-		color: "text-emerald-400",
-	},
-	{
-		prefix: "→",
-		text: "Loading tools: editor, terminal, git",
-		color: "text-white/60",
-	},
-	{
-		prefix: "→",
-		text: "MCP servers: 3 connected",
-		color: "text-white/60",
-	},
-	{
-		prefix: "✓",
-		text: "Agent equipped. Ready.",
-		color: "text-emerald-400",
-	},
-	{ prefix: "", text: "", color: "" },
-	{
-		prefix: "$",
-		text: "harness switch research",
-		color: "text-emerald-400",
-	},
-	{
-		prefix: "→",
-		text: "Switching context...",
-		color: "text-white/60",
-	},
-	{
-		prefix: "✓",
-		text: "Research profile active. 4 tools loaded.",
-		color: "text-emerald-400",
-	},
+const modelLine = [
+	"Claude Opus 4.7",
+	"Claude Sonnet 4.6",
+	"GPT-5.5",
+	"GPT-5.4",
+	"Gemini 3.1 Pro",
+	"Gemini 3 Flash",
 ];
 
 const ease = [0.16, 1, 0.3, 1] as const;
@@ -200,219 +195,6 @@ function RotatingWord() {
 				</motion.span>
 			</AnimatePresence>
 		</span>
-	);
-}
-
-/* ─────────────────────── Animated Graphics ─────────────────────── */
-
-function NetworkGraph() {
-	const containerRef = useRef<HTMLDivElement>(null);
-	const isInView = useInView(containerRef, { once: true, margin: "-80px" });
-
-	const nodeCount = toolNodes.length;
-	const radius = 135;
-	const center = { x: 200, y: 200 };
-
-	const positions = toolNodes.map((_, i) => {
-		const angle = (i * 2 * Math.PI) / nodeCount - Math.PI / 2;
-		return {
-			x: center.x + radius * Math.cos(angle),
-			y: center.y + radius * Math.sin(angle),
-		};
-	});
-
-	return (
-		<div
-			ref={containerRef}
-			className="relative mx-auto aspect-square w-full max-w-[440px]"
-		>
-			<div className="absolute left-1/2 top-1/2 h-72 w-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black/[0.015] blur-[80px]" />
-
-			<svg
-				viewBox="0 0 400 400"
-				className="absolute inset-0 h-full w-full"
-				fill="none"
-				role="img"
-				aria-label="Animated network graph showing AI agent connected to tools"
-			>
-				{positions.map((pos, i) => (
-					<g key={toolNodes[i].label}>
-						<motion.path
-							d={`M${center.x},${center.y} L${pos.x},${pos.y}`}
-							stroke="rgba(0,0,0,0.07)"
-							strokeWidth="1"
-							initial={{ pathLength: 0, opacity: 0 }}
-							animate={isInView ? { pathLength: 1, opacity: 1 } : {}}
-							transition={{
-								duration: 1,
-								delay: 0.4 + i * 0.1,
-								ease: "easeOut",
-							}}
-						/>
-
-						{isInView && (
-							<circle r="2.5" fill="rgba(0,0,0,0.12)">
-								<animateMotion
-									dur={`${2.5 + i * 0.3}s`}
-									repeatCount="indefinite"
-									begin={`${1.5 + i * 0.1}s`}
-									path={`M${center.x},${center.y} L${pos.x},${pos.y}`}
-								/>
-							</circle>
-						)}
-
-						{isInView && (
-							<circle r="1.8" fill="rgba(0,0,0,0.06)">
-								<animateMotion
-									dur={`${3.2 + i * 0.4}s`}
-									repeatCount="indefinite"
-									begin={`${2 + i * 0.2}s`}
-									path={`M${pos.x},${pos.y} L${center.x},${center.y}`}
-								/>
-							</circle>
-						)}
-					</g>
-				))}
-
-				{isInView &&
-					[0, 1.5].map((delay) => (
-						<circle
-							key={delay}
-							cx={center.x}
-							cy={center.y}
-							r="28"
-							fill="none"
-							stroke="rgba(0,0,0,0.05)"
-							strokeWidth="1"
-						>
-							<animate
-								attributeName="r"
-								from="28"
-								to="70"
-								dur="3s"
-								begin={`${delay}s`}
-								repeatCount="indefinite"
-							/>
-							<animate
-								attributeName="opacity"
-								from="0.3"
-								to="0"
-								dur="3s"
-								begin={`${delay}s`}
-								repeatCount="indefinite"
-							/>
-						</circle>
-					))}
-			</svg>
-
-			<motion.div
-				className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2"
-				initial={{ scale: 0, opacity: 0 }}
-				animate={isInView ? { scale: 1, opacity: 1 } : {}}
-				transition={{ duration: 0.5, delay: 0.15, ease }}
-			>
-				<div className="flex h-16 w-16 items-center justify-center bg-primary shadow-xl shadow-primary/20">
-					<HarnessMark size={28} className="text-primary-foreground" />
-				</div>
-			</motion.div>
-
-			{toolNodes.map((node, i) => {
-				const pos = positions[i];
-				const pctLeft = (pos.x / 400) * 100;
-				const pctTop = (pos.y / 400) * 100;
-
-				return (
-					<motion.div
-						key={node.label}
-						className="absolute z-10 -translate-x-1/2 -translate-y-1/2"
-						style={{ left: `${pctLeft}%`, top: `${pctTop}%` }}
-						initial={{ scale: 0, opacity: 0 }}
-						animate={isInView ? { scale: 1, opacity: 1 } : {}}
-						transition={{ duration: 0.4, delay: 0.6 + i * 0.08, ease }}
-					>
-						<motion.div
-							animate={{ y: [0, -5, 0] }}
-							transition={{
-								duration: 3 + i * 0.4,
-								repeat: Number.POSITIVE_INFINITY,
-								ease: "easeInOut",
-								delay: i * 0.3,
-							}}
-						>
-							<div className="flex h-12 w-12 items-center justify-center border border-black/[0.06] bg-white shadow-sm transition-shadow hover:shadow-md">
-								<node.icon
-									size={20}
-									strokeWidth={1.5}
-									className="text-black/70"
-								/>
-							</div>
-							<p className="mt-1.5 text-center text-[10px] font-medium text-black/40">
-								{node.label}
-							</p>
-						</motion.div>
-					</motion.div>
-				);
-			})}
-		</div>
-	);
-}
-
-function AnimatedTerminal() {
-	const ref = useRef<HTMLDivElement>(null);
-	const isInView = useInView(ref, { once: true, margin: "-80px" });
-
-	return (
-		<div ref={ref} className="mx-auto w-full max-w-2xl">
-			<div className="overflow-hidden border border-white/[0.06] bg-[#0a0a0a] shadow-2xl shadow-black/40">
-				<div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
-					<div className="h-3 w-3 rounded-full bg-white/10" />
-					<div className="h-3 w-3 rounded-full bg-white/10" />
-					<div className="h-3 w-3 rounded-full bg-white/10" />
-					<span className="ml-3 font-mono text-xs text-white/20">terminal</span>
-				</div>
-
-				<div className="space-y-1.5 p-5 font-mono text-sm leading-relaxed">
-					{terminalLines.map((line) => {
-						if (!line.text) {
-							return (
-								<motion.div
-									key="spacer"
-									className="h-3"
-									initial={{ opacity: 0 }}
-									animate={isInView ? { opacity: 1 } : {}}
-									transition={{ delay: 1.2 }}
-								/>
-							);
-						}
-
-						return (
-							<motion.div
-								key={`${line.prefix}-${line.text}`}
-								initial={{ opacity: 0, x: -10 }}
-								animate={isInView ? { opacity: 1, x: 0 } : {}}
-								transition={{
-									delay: 0.2 + terminalLines.indexOf(line) * 0.3,
-									duration: 0.4,
-									ease,
-								}}
-							>
-								<span className="mr-2 text-white/25">{line.prefix}</span>
-								<span className={line.color}>{line.text}</span>
-							</motion.div>
-						);
-					})}
-
-					<motion.div
-						initial={{ opacity: 0 }}
-						animate={isInView ? { opacity: 1 } : {}}
-						transition={{ delay: terminalLines.length * 0.3 + 0.5 }}
-					>
-						<span className="mr-2 text-white/25">$</span>
-						<span className="inline-block h-4 w-[7px] translate-y-[2px] animate-pulse bg-emerald-400/80" />
-					</motion.div>
-				</div>
-			</div>
-		</div>
 	);
 }
 
@@ -475,6 +257,372 @@ function FloatingDots() {
 	);
 }
 
+/* ─────────────────────── Product Mocks ─────────────────────── */
+
+/**
+ * MockChatPanel — visual stand-in for the real chat surface, used in the hero.
+ * Not interactive. Shows a Princeton coursework example to highlight the
+ * tiger_junction integration and the agent → tool-call → answer loop.
+ */
+function MockChatPanel() {
+	const ref = useRef<HTMLDivElement>(null);
+	const isInView = useInView(ref, { once: true, margin: "-60px" });
+
+	return (
+		<div ref={ref} className="relative w-full max-w-[460px]">
+			<div className="absolute -inset-6 -z-10 bg-black/[0.015] blur-3xl" />
+			<motion.div
+				initial={{ opacity: 0, y: 20 }}
+				animate={isInView ? { opacity: 1, y: 0 } : {}}
+				transition={{ duration: 0.6, ease }}
+				className="border border-black/[0.08] bg-white shadow-[0_24px_64px_-32px_rgba(0,0,0,0.18)]"
+			>
+				{/* Header */}
+				<div className="flex items-center gap-2 border-b border-black/[0.06] px-4 py-2.5">
+					<div className="flex h-6 w-6 items-center justify-center bg-black">
+						<HarnessMark size={12} className="text-white" />
+					</div>
+					<div className="flex min-w-0 flex-1 items-center gap-2 text-[11px]">
+						<span className="font-medium">Coursework agent</span>
+						<span className="text-black/30">·</span>
+						<span className="text-black/50">claude-sonnet-4.6</span>
+					</div>
+					<div className="flex items-center gap-1 text-[10px] text-black/40">
+						<div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+						<span>3 MCPs</span>
+					</div>
+				</div>
+
+				{/* Messages */}
+				<div className="space-y-3 px-4 py-4 text-[12px] leading-relaxed">
+					<motion.div
+						initial={{ opacity: 0, y: 6 }}
+						animate={isInView ? { opacity: 1, y: 0 } : {}}
+						transition={{ duration: 0.4, delay: 0.4, ease }}
+						className="ml-auto max-w-[85%] bg-[#fafafa] px-3 py-2 text-black/80"
+					>
+						Plan my fall semester — I want to take COS 333 and any prereqs I'm
+						missing.
+					</motion.div>
+
+					<motion.div
+						initial={{ opacity: 0, y: 6 }}
+						animate={isInView ? { opacity: 1, y: 0 } : {}}
+						transition={{ duration: 0.4, delay: 0.9, ease }}
+						className="space-y-2"
+					>
+						<MockToolCall
+							server="tigerpath"
+							tool="check_prereqs"
+							arg="COS 333"
+							ms={142}
+						/>
+						<MockToolCall
+							server="princetoncourses"
+							tool="get_evaluations"
+							arg="COS 333"
+							ms={208}
+						/>
+
+						<div className="text-black/85">
+							You've completed COS 217 and 226 — you're cleared for{" "}
+							<span className="bg-emerald-500/10 px-1 text-emerald-700">
+								COS 333
+							</span>
+							. Past students rate it{" "}
+							<span className="font-medium">4.6 / 5</span>. Recommended pairing:{" "}
+							<span className="font-medium">COS 432</span> (light load that
+							semester).
+						</div>
+
+						<MockStreamingDot />
+					</motion.div>
+				</div>
+
+				{/* Composer with slash hint */}
+				<div className="border-t border-black/[0.06] px-3 py-2">
+					<div className="flex items-center gap-2 border border-black/[0.08] bg-white px-2.5 py-1.5">
+						<span className="font-mono text-[11px] text-emerald-600">/</span>
+						<span className="font-mono text-[11px] text-black/45">
+							tigerjunction_search_courses
+						</span>
+						<span className="ml-auto text-[10px] text-black/30">↵ run</span>
+					</div>
+				</div>
+			</motion.div>
+		</div>
+	);
+}
+
+function MockToolCall({
+	server,
+	tool,
+	arg,
+	ms,
+}: {
+	server: string;
+	tool: string;
+	arg: string;
+	ms: number;
+}) {
+	return (
+		<div className="flex items-center gap-2 border border-black/[0.06] bg-[#fafafa] px-2 py-1.5 font-mono text-[10.5px]">
+			<Check size={10} className="shrink-0 text-emerald-600" />
+			<span className="text-black/55">{server}</span>
+			<span className="text-black/30">·</span>
+			<span className="text-black/80">{tool}</span>
+			<span className="truncate text-black/40">("{arg}")</span>
+			<span className="ml-auto shrink-0 text-black/35">{ms}ms</span>
+		</div>
+	);
+}
+
+function MockStreamingDot() {
+	return (
+		<div className="flex items-center gap-1">
+			{[0, 0.15, 0.3].map((delay) => (
+				<motion.div
+					key={delay}
+					className="h-1.5 w-1.5 rounded-full bg-black/30"
+					animate={{ opacity: [0.3, 1, 0.3] }}
+					transition={{
+						duration: 1.2,
+						repeat: Number.POSITIVE_INFINITY,
+						delay,
+						ease: "easeInOut",
+					}}
+				/>
+			))}
+		</div>
+	);
+}
+
+/**
+ * MockMcpPopover — visual stand-in for the new inline MCP add popover.
+ * Mirrors the real component (mcp-server-status.tsx) at a glance.
+ */
+function MockMcpPopover() {
+	return (
+		<div className="border border-black/[0.08] bg-white shadow-[0_16px_48px_-20px_rgba(0,0,0,0.18)]">
+			<div className="flex items-center gap-2 border-b border-black/[0.06] px-3 py-2">
+				<span className="flex-1 text-[10px] font-medium uppercase tracking-wider text-black/50">
+					MCP Servers
+				</span>
+				<div className="flex h-4 w-4 items-center justify-center text-black/50">
+					<Plus size={11} />
+				</div>
+			</div>
+			<div className="py-1">
+				{[
+					{ name: "GitHub", status: "Connected", badge: "OAuth", oauth: true },
+					{
+						name: "TigerJunction",
+						status: "Connected",
+						badge: "Princeton",
+						princeton: true,
+					},
+					{
+						name: "Context7",
+						status: "Connected",
+						badge: "Public",
+					},
+					{ name: "Notion", status: "Token expired", warn: true },
+				].map((s) => (
+					<div
+						key={s.name}
+						className="flex items-center gap-2 px-3 py-1.5 text-[11px]"
+					>
+						<div
+							className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+								s.warn ? "bg-amber-400" : "bg-emerald-500"
+							}`}
+						/>
+						<div className="min-w-0 flex-1">
+							<div className="truncate font-medium text-black/85">{s.name}</div>
+							<div className="text-[10px] text-black/45">{s.status}</div>
+						</div>
+						{s.badge && (
+							<span className="flex shrink-0 items-center gap-0.5 bg-black/[0.05] px-1.5 py-0.5 text-[9px] text-black/65">
+								{s.princeton && <GraduationCap size={8} />}
+								{s.oauth && (
+									<span className="h-1 w-1 rounded-full bg-emerald-500" />
+								)}
+								{s.badge}
+							</span>
+						)}
+					</div>
+				))}
+			</div>
+		</div>
+	);
+}
+
+/**
+ * MockSlashPalette — visual stand-in for the / command palette.
+ */
+function MockSlashPalette() {
+	const commands = [
+		{ name: "github_search_repositories", desc: "Search public + your repos" },
+		{ name: "notion_create_page", desc: "Create a page in a database" },
+		{ name: "linear_create_issue", desc: "Open an issue in your team" },
+		{
+			name: "tigerjunction_search_courses",
+			desc: "Find Princeton courses by name",
+		},
+		{ name: "exa_search", desc: "Semantic web search" },
+	];
+	return (
+		<div className="border border-black/[0.08] bg-white shadow-[0_16px_48px_-20px_rgba(0,0,0,0.18)]">
+			<div className="flex items-center gap-2 border-b border-black/[0.06] px-3 py-2 font-mono text-[11px]">
+				<span className="text-emerald-600">/</span>
+				<span className="text-black/85">github</span>
+				<span className="ml-auto text-[9px] uppercase tracking-wider text-black/35">
+					commands
+				</span>
+			</div>
+			<div className="py-1">
+				{commands.map((c, i) => (
+					<div
+						key={c.name}
+						className={`flex items-center gap-2 px-3 py-1.5 ${
+							i === 0 ? "bg-black/[0.03]" : ""
+						}`}
+					>
+						<span
+							className={`shrink-0 font-mono text-[11px] ${
+								i === 0 ? "text-emerald-600" : "text-black/35"
+							}`}
+						>
+							/
+						</span>
+						<div className="min-w-0 flex-1">
+							<div className="truncate font-mono text-[11px] text-black/85">
+								{c.name}
+							</div>
+							<div className="truncate text-[10px] text-black/45">{c.desc}</div>
+						</div>
+						{i === 0 && (
+							<span className="shrink-0 text-[9px] text-black/40">↵</span>
+						)}
+					</div>
+				))}
+			</div>
+		</div>
+	);
+}
+
+/**
+ * MockSandboxTabs — visual stand-in for the Daytona sandbox panel.
+ */
+function MockSandboxTabs() {
+	const ref = useRef<HTMLDivElement>(null);
+	const isInView = useInView(ref, { once: true, margin: "-60px" });
+	const lines = [
+		{ t: "$", c: "npm test", color: "text-emerald-400" },
+		{ t: "→", c: "Test Suites: 12 passed, 12 total", color: "text-white/60" },
+		{ t: "→", c: "Tests:       148 passed, 148 total", color: "text-white/60" },
+		{ t: "✓", c: "All green. Committing.", color: "text-emerald-400" },
+		{
+			t: "$",
+			c: "git commit -m 'feat: streaming retries'",
+			color: "text-emerald-400",
+		},
+		{
+			t: "→",
+			c: "[main 2f1e9a0] feat: streaming retries",
+			color: "text-white/60",
+		},
+	];
+
+	return (
+		<div
+			ref={ref}
+			className="border border-black/[0.08] bg-[#0a0a0a] shadow-[0_24px_64px_-28px_rgba(0,0,0,0.45)]"
+		>
+			{/* Tab strip */}
+			<div className="flex items-center border-b border-white/[0.06] px-1 py-1">
+				{[
+					{ icon: FolderTree, label: "Files" },
+					{ icon: TerminalSquare, label: "Terminal", active: true },
+					{ icon: GitBranch, label: "Git" },
+				].map((tab) => (
+					<div
+						key={tab.label}
+						className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] ${
+							tab.active ? "bg-white/[0.06] text-white" : "text-white/40"
+						}`}
+					>
+						<tab.icon size={11} />
+						{tab.label}
+					</div>
+				))}
+				<span className="ml-auto px-2 text-[10px] text-white/30">
+					sandbox · running
+				</span>
+			</div>
+
+			{/* Terminal body */}
+			<div className="space-y-1 px-4 py-3 font-mono text-[11px] leading-relaxed">
+				{lines.map((line, i) => (
+					<motion.div
+						key={`${line.t}-${line.c}`}
+						initial={{ opacity: 0, x: -8 }}
+						animate={isInView ? { opacity: 1, x: 0 } : {}}
+						transition={{ duration: 0.35, delay: 0.2 + i * 0.18, ease }}
+					>
+						<span className="mr-2 text-white/25">{line.t}</span>
+						<span className={line.color}>{line.c}</span>
+					</motion.div>
+				))}
+				<motion.div
+					initial={{ opacity: 0 }}
+					animate={isInView ? { opacity: 1 } : {}}
+					transition={{ delay: lines.length * 0.18 + 0.3 }}
+				>
+					<span className="mr-2 text-white/25">$</span>
+					<span className="inline-block h-3 w-[6px] translate-y-[2px] animate-pulse bg-emerald-400/80" />
+				</motion.div>
+			</div>
+		</div>
+	);
+}
+
+/* ─────────────────────── Marquee strip ─────────────────────── */
+
+function IntegrationsStrip() {
+	return (
+		<section className="relative border-y border-black/[0.05] bg-white py-12 md:py-14">
+			<div className="mx-auto max-w-[76rem] px-6 lg:px-12">
+				<FadeIn>
+					<p className="mb-6 text-center text-[11px] font-medium uppercase tracking-[0.18em] text-black/40">
+						Connects out of the box
+					</p>
+					<div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 md:gap-x-12">
+						{integrations.map((label) => (
+							<span
+								key={label}
+								className="text-[14px] font-medium tracking-tight text-black/55 transition-colors hover:text-black/90"
+							>
+								{label}
+							</span>
+						))}
+					</div>
+					<div className="mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
+						<span className="text-[10px] uppercase tracking-[0.18em] text-black/35">
+							Built on
+						</span>
+						{modelLine.map((label) => (
+							<span key={label} className="font-mono text-[11px] text-black/45">
+								{label}
+							</span>
+						))}
+					</div>
+				</FadeIn>
+			</div>
+		</section>
+	);
+}
+
 /* ─────────────────────── Nav ─────────────────────── */
 
 function LandingNav() {
@@ -514,6 +662,12 @@ function LandingNav() {
 						Features
 					</a>
 					<a
+						href="#product"
+						className="text-[15px] font-medium text-black/70 transition-colors hover:text-black"
+					>
+						Product
+					</a>
+					<a
 						href="#how-it-works"
 						className="text-[15px] font-medium text-black/70 transition-colors hover:text-black"
 					>
@@ -525,7 +679,7 @@ function LandingNav() {
 					{isSignedIn ? (
 						<Button size="sm" asChild>
 							<Link to="/app">
-								Chat
+								Open Harness
 								<ArrowRight size={14} />
 							</Link>
 						</Button>
@@ -564,36 +718,31 @@ function LandingNav() {
 						className="overflow-hidden border-t border-black/5 bg-white lg:hidden"
 					>
 						<nav className="flex flex-col gap-1 px-6 py-4">
-							<button
-								type="button"
-								onClick={() => {
-									setOpen(false);
-									document
-										.getElementById("features")
-										?.scrollIntoView({ behavior: "smooth" });
-								}}
-								className="px-3 py-2.5 text-left text-[15px] font-medium transition-colors hover:bg-black/[0.03]"
-							>
-								Features
-							</button>
-							<button
-								type="button"
-								onClick={() => {
-									setOpen(false);
-									document
-										.getElementById("how-it-works")
-										?.scrollIntoView({ behavior: "smooth" });
-								}}
-								className="px-3 py-2.5 text-left text-[15px] font-medium transition-colors hover:bg-black/[0.03]"
-							>
-								How It Works
-							</button>
+							{[
+								["Features", "features"],
+								["Product", "product"],
+								["How It Works", "how-it-works"],
+							].map(([label, id]) => (
+								<button
+									key={id}
+									type="button"
+									onClick={() => {
+										setOpen(false);
+										document
+											.getElementById(id)
+											?.scrollIntoView({ behavior: "smooth" });
+									}}
+									className="px-3 py-2.5 text-left text-[15px] font-medium transition-colors hover:bg-black/[0.03]"
+								>
+									{label}
+								</button>
+							))}
 							<Separator className="my-2" />
 							<div className="flex flex-col gap-2 pt-1">
 								{isSignedIn ? (
 									<Button asChild>
-										<Link to="/chat" onClick={() => setOpen(false)}>
-											Enter Harness
+										<Link to="/app" onClick={() => setOpen(false)}>
+											Open Harness
 											<ArrowRight size={14} />
 										</Link>
 									</Button>
@@ -631,7 +780,7 @@ function HeroSection() {
 			<FloatingDots />
 
 			<div className="relative mx-auto max-w-[76rem] px-6 lg:px-12">
-				<div className="grid items-center gap-12 lg:grid-cols-2 lg:gap-16">
+				<div className="grid items-center gap-12 lg:grid-cols-[1.1fr_1fr] lg:gap-16">
 					<div>
 						<motion.div
 							initial={{ opacity: 0, y: 16 }}
@@ -639,7 +788,7 @@ function HeroSection() {
 							transition={{ duration: 0.5, ease }}
 						>
 							<Badge variant="secondary" className="mb-6 font-medium">
-								The Agent Platform
+								AI toolkit, not a platform
 							</Badge>
 						</motion.div>
 
@@ -650,17 +799,18 @@ function HeroSection() {
 							className="mb-6 text-[clamp(2.25rem,5vw,4.5rem)] font-medium leading-[1.05] tracking-tight"
 							style={{ textWrap: "balance" }}
 						>
-							Equip your AI agents for <RotatingWord />.
+							Equip your AI agent for <RotatingWord />.
 						</motion.h1>
 
 						<motion.p
 							initial={{ opacity: 0, y: 20 }}
 							animate={{ opacity: 1, y: 0 }}
 							transition={{ duration: 0.6, delay: 0.16, ease }}
-							className="mb-10 max-w-[28rem] text-[clamp(1rem,1.8vw,1.125rem)] leading-[1.6] text-black/55"
+							className="mb-10 max-w-[32rem] text-[clamp(1rem,1.8vw,1.125rem)] leading-[1.6] text-black/55"
 						>
-							Create, manage, and deploy custom tool configurations for AI
-							agents — switching contexts in seconds, not hours.
+							A harness bundles your model, MCP servers, skills, and a live
+							sandbox. Switch contexts in one click — your agent gets a
+							different brain for every job.
 						</motion.p>
 
 						<motion.div
@@ -670,27 +820,47 @@ function HeroSection() {
 							className="flex flex-wrap items-center gap-4"
 						>
 							<Button size="lg" asChild>
-								<Link to={isSignedIn ? "/chat" : "/sign-up"}>
-									{isSignedIn ? "Go to Chat" : "Get Started"}
+								<Link to={isSignedIn ? "/app" : "/sign-up"}>
+									{isSignedIn ? "Open Harness" : "Get Started"}
 									<ArrowRight size={16} />
 								</Link>
 							</Button>
 							<Button variant="ghost" size="lg" asChild>
-								<a href="#features">
-									Learn more
+								<a href="#product">
+									See it in action
 									<ArrowRight size={14} />
 								</a>
 							</Button>
 						</motion.div>
+
+						<motion.div
+							initial={{ opacity: 0 }}
+							animate={{ opacity: 1 }}
+							transition={{ duration: 0.6, delay: 0.4, ease }}
+							className="mt-10 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12px] text-black/45"
+						>
+							<span className="flex items-center gap-1.5">
+								<Check size={12} className="text-emerald-600" />
+								Bring your own MCPs
+							</span>
+							<span className="flex items-center gap-1.5">
+								<Check size={12} className="text-emerald-600" />
+								Daily + weekly cost caps
+							</span>
+							<span className="flex items-center gap-1.5">
+								<Check size={12} className="text-emerald-600" />
+								Princeton-ready
+							</span>
+						</motion.div>
 					</div>
 
 					<motion.div
-						initial={{ opacity: 0, scale: 0.95 }}
+						initial={{ opacity: 0, scale: 0.96 }}
 						animate={{ opacity: 1, scale: 1 }}
 						transition={{ duration: 0.8, delay: 0.3, ease }}
-						className="hidden lg:block"
+						className="hidden justify-self-center lg:flex"
 					>
-						<NetworkGraph />
+						<MockChatPanel />
 					</motion.div>
 				</div>
 			</div>
@@ -712,16 +882,18 @@ function FeaturesSection() {
 						Features
 					</Badge>
 					<h2
-						className="mb-16 max-w-[32rem] text-[clamp(1.75rem,4vw,3rem)] font-medium leading-[1.1] tracking-tight md:mb-20"
+						className="mb-16 max-w-[34rem] text-[clamp(1.75rem,4vw,3rem)] font-medium leading-[1.1] tracking-tight md:mb-20"
 						style={{ textWrap: "balance" }}
 					>
-						Everything your agents need.{" "}
-						<span className="text-black/40">Nothing they don't.</span>
+						Built for the agent you actually use.{" "}
+						<span className="text-black/40">
+							Not the demo your boss saw on Twitter.
+						</span>
 					</h2>
 				</FadeIn>
 
 				<div className="grid gap-5 md:grid-cols-3">
-					{features.map((f, i) => (
+					{primaryFeatures.map((f, i) => (
 						<FadeIn key={f.title} delay={0.1 * i}>
 							<motion.div
 								whileHover={{ y: -4 }}
@@ -747,16 +919,41 @@ function FeaturesSection() {
 						</FadeIn>
 					))}
 				</div>
+
+				{/* Secondary features — smaller, denser */}
+				<FadeIn delay={0.2}>
+					<div className="mt-12 grid gap-4 md:grid-cols-3">
+						{secondaryFeatures.map((f) => (
+							<div
+								key={f.title}
+								className="flex gap-3 border border-black/[0.05] bg-white p-5 transition-shadow hover:shadow-md hover:shadow-black/[0.03]"
+							>
+								<div className="flex h-8 w-8 shrink-0 items-center justify-center border border-black/[0.06] bg-[#fafafa]">
+									<f.icon size={14} strokeWidth={1.5} />
+								</div>
+								<div>
+									<h3 className="mb-1 text-[14px] font-medium">{f.title}</h3>
+									<p className="text-[13px] leading-[1.55] text-black/55">
+										{f.description}
+									</p>
+								</div>
+							</div>
+						))}
+					</div>
+				</FadeIn>
 			</div>
 		</section>
 	);
 }
 
-/* ─────────────────────── Terminal Demo Section ─────────────────────── */
+/* ─────────────────────── Product Mocks Section ─────────────────────── */
 
-function TerminalSection() {
+function ProductSection() {
 	return (
-		<section className="relative overflow-hidden bg-white pb-20 pt-20 text-black md:pb-28 md:pt-28 lg:pb-36 lg:pt-36">
+		<section
+			id="product"
+			className="relative overflow-hidden bg-white pb-20 pt-20 text-black md:pb-28 md:pt-28 lg:pb-36 lg:pt-36"
+		>
 			<GradientOrb
 				className="left-[5%] top-[10%] h-80 w-80 bg-black/[0.02]"
 				delay={0}
@@ -767,27 +964,79 @@ function TerminalSection() {
 			/>
 
 			<div className="relative mx-auto max-w-[76rem] px-6 lg:px-12">
-				<div className="grid items-center gap-12 lg:grid-cols-2 lg:gap-20">
-					<FadeIn>
-						<Badge variant="outline" className="mb-5">
-							In Action
-						</Badge>
-						<h2
-							className="mb-6 text-[clamp(1.75rem,4vw,3rem)] font-medium leading-[1.1] tracking-tight"
-							style={{ textWrap: "balance" }}
-						>
-							Deploy and switch{" "}
-							<span className="text-black/40">in seconds.</span>
-						</h2>
-						<p className="max-w-[26rem] text-[15px] leading-[1.6] text-black/55">
-							Watch your agent come alive. Deploy a fully-equipped coding agent,
-							then switch to research mode — instantly. No restarts, no
-							reconfiguration.
-						</p>
+				<FadeIn>
+					<Badge variant="outline" className="mb-5">
+						The Product
+					</Badge>
+					<h2
+						className="mb-4 max-w-[36rem] text-[clamp(1.75rem,4vw,3rem)] font-medium leading-[1.1] tracking-tight"
+						style={{ textWrap: "balance" }}
+					>
+						Three real surfaces.{" "}
+						<span className="text-black/40">No mockups.</span>
+					</h2>
+					<p className="mb-16 max-w-[36rem] text-[15px] leading-[1.6] text-black/55 md:mb-20">
+						This is what you'll see five minutes after signup — the same UI we
+						use every day.
+					</p>
+				</FadeIn>
+
+				<div className="grid gap-12 lg:grid-cols-2 lg:gap-16">
+					<FadeIn delay={0.05}>
+						<div>
+							<p className="mb-3 text-[11px] font-medium uppercase tracking-[0.16em] text-black/40">
+								MCP Status & Add
+							</p>
+							<h3 className="mb-3 text-xl font-medium tracking-tight">
+								Add servers without leaving the chat.
+							</h3>
+							<p className="mb-6 max-w-md text-[14px] leading-[1.6] text-black/55">
+								Click the MCP indicator in the header. Pick from the catalog or
+								paste a custom URL. OAuth pops automatically. Status badges
+								update live.
+							</p>
+							<div className="max-w-[300px]">
+								<MockMcpPopover />
+							</div>
+						</div>
 					</FadeIn>
 
 					<FadeIn delay={0.15}>
-						<AnimatedTerminal />
+						<div>
+							<p className="mb-3 text-[11px] font-medium uppercase tracking-[0.16em] text-black/40">
+								Slash Command Palette
+							</p>
+							<h3 className="mb-3 text-xl font-medium tracking-tight">
+								Every MCP tool. One keystroke away.
+							</h3>
+							<p className="mb-6 max-w-md text-[14px] leading-[1.6] text-black/55">
+								Type <span className="font-mono text-black/80">/</span> to
+								filter across every connected server's tools. Keyboard-first,
+								typo-forgiving, scoped to the active harness.
+							</p>
+							<div className="max-w-[380px]">
+								<MockSlashPalette />
+							</div>
+						</div>
+					</FadeIn>
+
+					<FadeIn delay={0.2} className="lg:col-span-2">
+						<div className="grid gap-8 lg:grid-cols-[1fr_1.1fr] lg:gap-12 lg:items-center">
+							<div>
+								<p className="mb-3 text-[11px] font-medium uppercase tracking-[0.16em] text-black/40">
+									Live Sandbox
+								</p>
+								<h3 className="mb-3 text-xl font-medium tracking-tight">
+									A real dev environment, attached to the chat.
+								</h3>
+								<p className="max-w-md text-[14px] leading-[1.6] text-black/55">
+									Daytona-backed sandboxes give your agent file editing, a real
+									terminal, and git — persistent across sessions. Watch tests
+									pass before the agent commits.
+								</p>
+							</div>
+							<MockSandboxTabs />
+						</div>
 					</FadeIn>
 				</div>
 			</div>
@@ -823,7 +1072,8 @@ function HowItWorksSection() {
 						className="mb-16 text-[clamp(1.75rem,4vw,3rem)] font-medium leading-[1.1] tracking-tight md:mb-20"
 						style={{ textWrap: "balance" }}
 					>
-						Set up in minutes. <span className="text-white/40">Not weeks.</span>
+						Three minutes from signup to first answer.{" "}
+						<span className="text-white/40">No SDK to install.</span>
 					</h2>
 				</FadeIn>
 
@@ -914,21 +1164,21 @@ function CTASection() {
 							className="mb-6 text-[clamp(1.75rem,4vw,3.5rem)] font-medium leading-[1.1] tracking-tight"
 							style={{ textWrap: "balance" }}
 						>
-							Ready to equip your agents?
+							Build your first harness.
 						</h2>
 						<p className="mx-auto mb-10 max-w-md text-[15px] leading-[1.6] text-black/55">
-							Join the next generation of AI-powered workflows. Set up your
-							first harness in minutes.
+							Free to try. Bring your own MCPs and your own model preferences.
+							Three minutes to your first answer.
 						</p>
 						<div className="flex flex-wrap items-center justify-center gap-4">
 							<Button size="lg" asChild>
-								<Link to={isSignedIn ? "/chat" : "/sign-up"}>
-									{isSignedIn ? "Go to Chat" : "Get Started Free"}
+								<Link to={isSignedIn ? "/app" : "/sign-up"}>
+									{isSignedIn ? "Open Harness" : "Get Started"}
 									<ArrowRight size={16} />
 								</Link>
 							</Button>
 							<Button size="lg" variant="outline" asChild>
-								<a href="#features">See Features</a>
+								<a href="#features">See features</a>
 							</Button>
 						</div>
 					</FadeIn>
@@ -945,17 +1195,17 @@ function LandingFooter() {
 		<footer className="bg-[#fafafa] py-12 text-black md:py-16">
 			<div className="mx-auto max-w-[76rem] px-6 lg:px-12">
 				<div className="grid gap-10 sm:grid-cols-12 sm:gap-8">
-					<div className="sm:col-span-4">
+					<div className="sm:col-span-5">
 						<span className="flex items-center gap-2 text-lg font-semibold tracking-tight">
 							<HarnessMark size={20} />
 							Harness
 						</span>
-						<p className="mt-2 max-w-[14rem] text-sm leading-relaxed text-black/40">
-							The toolkit for AI agents. Create, manage, and deploy custom tool
-							configurations.
+						<p className="mt-2 max-w-[18rem] text-sm leading-relaxed text-black/45">
+							The toolkit for AI agents. Bundle your model, MCPs, skills, and a
+							live sandbox into one chat.
 						</p>
 					</div>
-					<div className="grid grid-cols-2 gap-8 sm:col-span-8 sm:grid-cols-3">
+					<div className="grid grid-cols-2 gap-8 sm:col-span-7 sm:grid-cols-2">
 						<div>
 							<h3 className="mb-4 text-sm font-medium">Product</h3>
 							<ul className="space-y-3">
@@ -969,33 +1219,40 @@ function LandingFooter() {
 								</li>
 								<li>
 									<a
+										href="#product"
+										className="text-sm text-black/50 transition-colors hover:text-black"
+									>
+										Product
+									</a>
+								</li>
+								<li>
+									<a
 										href="#how-it-works"
 										className="text-sm text-black/50 transition-colors hover:text-black"
 									>
-										How It Works
+										How it works
 									</a>
 								</li>
 							</ul>
 						</div>
 						<div>
-							<h3 className="mb-4 text-sm font-medium">Company</h3>
+							<h3 className="mb-4 text-sm font-medium">Get started</h3>
 							<ul className="space-y-3">
 								<li>
-									<span className="text-sm text-black/50">About</span>
+									<Link
+										to="/sign-up"
+										className="text-sm text-black/50 transition-colors hover:text-black"
+									>
+										Sign up
+									</Link>
 								</li>
 								<li>
-									<span className="text-sm text-black/50">GitHub</span>
-								</li>
-							</ul>
-						</div>
-						<div>
-							<h3 className="mb-4 text-sm font-medium">Legal</h3>
-							<ul className="space-y-3">
-								<li>
-									<span className="text-sm text-black/50">Privacy</span>
-								</li>
-								<li>
-									<span className="text-sm text-black/50">Terms</span>
+									<Link
+										to="/sign-in"
+										className="text-sm text-black/50 transition-colors hover:text-black"
+									>
+										Log in
+									</Link>
 								</li>
 							</ul>
 						</div>
@@ -1018,8 +1275,9 @@ function LandingPage() {
 			<LandingNav />
 			<main>
 				<HeroSection />
+				<IntegrationsStrip />
 				<FeaturesSection />
-				<TerminalSection />
+				<ProductSection />
 				<HowItWorksSection />
 				<CTASection />
 			</main>
