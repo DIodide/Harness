@@ -255,6 +255,19 @@ export async function fetchCommandsFromApi(
 export const sanitizeServerName = (n: string) =>
 	n.replace(/[^a-zA-Z0-9_-]/g, "_");
 
+/** Validate an MCP server URL. Returns an error string or null if valid. */
+export function validateMcpUrl(url: string): string | null {
+	if (/\s/.test(url)) return "URL must not contain spaces";
+	try {
+		const parsed = new URL(url);
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+			return "URL must start with http:// or https://";
+	} catch {
+		return "Please enter a valid URL";
+	}
+	return null;
+}
+
 /** Converts an array of selected preset IDs into their McpServerEntry objects. */
 export function presetIdsToServerEntries(ids: string[]): McpServerEntry[] {
 	return ids.flatMap((id) => {
