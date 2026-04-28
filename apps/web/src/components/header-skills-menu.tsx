@@ -127,18 +127,20 @@ export function HeaderSkillsMenu({
 			/>
 
 			<Dialog open={browseOpen} onOpenChange={setBrowseOpen}>
-				<DialogContent className="max-w-2xl">
+				<DialogContent className="flex max-h-[85vh] max-w-2xl flex-col overflow-hidden">
 					<DialogHeader>
 						<DialogTitle>Manage skills</DialogTitle>
 					</DialogHeader>
-					<SkillsBrowser
-						currentSkills={skills}
-						onToggle={(skill) => {
-							const exists = skills.some((s) => s.name === skill.name);
-							if (exists) onRemove(skill);
-							else onAdd(skill);
-						}}
-					/>
+					<div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+						<SkillsBrowser
+							currentSkills={skills}
+							onToggle={(skill) => {
+								const exists = skills.some((s) => s.name === skill.name);
+								if (exists) onRemove(skill);
+								else onAdd(skill);
+							}}
+						/>
+					</div>
 				</DialogContent>
 			</Dialog>
 		</div>
