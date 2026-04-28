@@ -20,6 +20,7 @@ import { Toaster } from "react-hot-toast";
 import { CommandPalette } from "../components/command-palette/command-palette";
 import { GlobalCommands } from "../components/command-palette/commands/global-commands";
 import { TooltipProvider } from "../components/ui/tooltip";
+import { ChatStreamProvider } from "../lib/chat-stream-context";
 import { CommandPaletteProvider } from "../lib/command-palette/context";
 import appCss from "../styles.css?url";
 
@@ -125,26 +126,28 @@ function RootComponent() {
 			<ConvexProviderWithClerk client={context.convexClient} useAuth={useAuth}>
 				<TooltipProvider delayDuration={300}>
 					<CommandPaletteProvider>
-						{isChromeless ? (
-							<Outlet />
-						) : (
-							<div className="flex h-screen overflow-hidden">
-								<div className="flex flex-1 flex-col overflow-hidden">
-									<Outlet />
+						<ChatStreamProvider>
+							{isChromeless ? (
+								<Outlet />
+							) : (
+								<div className="flex h-screen overflow-hidden">
+									<div className="flex flex-1 flex-col overflow-hidden">
+										<Outlet />
+									</div>
 								</div>
-							</div>
-						)}
-						<GlobalCommands />
-						<CommandPalette />
-						<Toaster
-							position="bottom-right"
-							toastOptions={{
-								style: {
-									borderRadius: "0px",
-									fontSize: "13px",
-								},
-							}}
-						/>
+							)}
+							<GlobalCommands />
+							<CommandPalette />
+							<Toaster
+								position="bottom-right"
+								toastOptions={{
+									style: {
+										borderRadius: "0px",
+										fontSize: "13px",
+									},
+								}}
+							/>
+						</ChatStreamProvider>
 					</CommandPaletteProvider>
 				</TooltipProvider>
 			</ConvexProviderWithClerk>
