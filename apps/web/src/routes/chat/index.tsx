@@ -727,9 +727,16 @@ function ChatPage() {
 				return;
 			}
 
-			const checking: Record<string, HealthStatus> = {};
-			for (const s of servers) checking[s.url] = "checking";
-			setMcpHealthStatuses(checking);
+			// Mark unknown URLs as checking; preserve already-known statuses so
+			// previously-healthy servers don't flash to "Checking…" during a
+			// refresh triggered by adding/removing a server.
+			setMcpHealthStatuses((prev) => {
+				const next: Record<string, HealthStatus> = {};
+				for (const s of servers) {
+					next[s.url] = prev[s.url] ?? "checking";
+				}
+				return next;
+			});
 
 			let cancelled = false;
 			const run = async () => {
@@ -790,7 +797,11 @@ function ChatPage() {
 		if (activeHarness) runHealthCheck(activeHarness.mcpServers);
 	}, [activeHarness, runHealthCheck]);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: only re-run when harness ID changes
+	// Re-run when the harness or its set of MCP server URLs changes. The URL
+	// key catches inline adds/removes from the header tooltip without making
+	// every harness-doc edit (name, model, etc.) trigger a health re-check.
+	const mcpUrlKey = activeHarness?.mcpServers.map((s) => s.url).join("|") ?? "";
+	// biome-ignore lint/correctness/useExhaustiveDependencies: deps are id + url-set; runHealthCheck is stable
 	useEffect(() => {
 		if (!activeHarness) {
 			setMcpHealthStatuses({});
@@ -800,7 +811,7 @@ function ChatPage() {
 		return () => {
 			healthCheckRunRef.current?.cancel();
 		};
-	}, [activeHarness?._id]);
+	}, [activeHarness?._id, mcpUrlKey]);
 
 	// Sync slash commands: fetch from MCP servers, upsert into commands table,
 	// and store the resulting IDs on the harness's mcpServers.
