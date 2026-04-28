@@ -53,7 +53,6 @@ const rotatingWords = [
 	"code review",
 	"course planning",
 	"deep research",
-	"incident response",
 	"weekly notes",
 ];
 
