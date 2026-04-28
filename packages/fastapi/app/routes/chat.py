@@ -11,7 +11,7 @@ from app.models import ChatRequest
 from app.services.convex import query_convex, save_assistant_message, patch_message_usage
 from app.services.mcp_client import UserContext, call_tool, resolve_princeton_netid, list_tools
 from app.services.mcp_oauth import get_valid_token, GITHUB_STANDALONE_URL
-from app.services.openrouter import stream_chat
+from app.services.openrouter import stream_chat, get_max_tokens
 from app.services.usage import check_user_budget, record_usage
 from app.services.sandbox_tools import (
     SANDBOX_TOOL_DEFINITIONS,
@@ -24,6 +24,12 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_ITERATIONS = 120
+
+# Cap on consecutive truncations (response hits max_tokens with no usable
+# tool calls). Each retry costs a full output budget worth of tokens, so
+# we bail out after a few rather than burning $30+ per chat in a pathological
+# loop. Reset whenever the model produces tool calls or finishes normally.
+MAX_CONSECUTIVE_TRUNCATIONS = 5
 
 SKILL_TOOL_NAME = "get_skill_content"
 
@@ -504,12 +510,24 @@ async def chat_stream(
         collected_usage: dict | None = None
         collected_model: str | None = None
 
+        # The output cap we send to OpenRouter for this harness model.
+        # Used below to detect truncation by usage rather than relying on
+        # finish_reason — Anthropic via OpenRouter sometimes reports "stop"
+        # even when extended-thinking exhausted the budget.
+        requested_max_tokens = get_max_tokens(body.harness.model)
+        consecutive_truncations = 0
+
         # Agentic loop: stream response, handle tool calls, repeat
         for iteration in range(MAX_TOOL_ITERATIONS):
             collected_content = ""
             collected_reasoning = ""
             collected_tool_calls: list[dict] = []
             finish_reason: str | None = None
+            # Per-iteration usage so we can compare this turn's
+            # completion_tokens against the cap (collected_usage may carry
+            # stale values from a prior iteration if the current stream
+            # disconnects before sending its usage chunk).
+            iter_usage: dict | None = None
 
             client_disconnected = False
 
@@ -544,6 +562,7 @@ async def chat_stream(
                         collected_model = chunk["model"]
                     if chunk.get("usage"):
                         collected_usage = chunk["usage"]
+                        iter_usage = chunk["usage"]
 
                     # After disconnect, just drain chunks without yielding
                     if client_disconnected:
@@ -724,24 +743,70 @@ async def chat_stream(
             if collected_content:
                 all_parts.append({"type": "text", "content": collected_content})
 
-            # Truncated by max_tokens with no usable tool calls — append the
-            # partial output to history and let the next iteration continue
-            # generation. With tool calls we fall through to the normal
-            # tool-execution path below (truncated JSON args would have failed
-            # parsing earlier and been dropped).
-            if finish_reason == "length" and not collected_tool_calls:
+            # Truncation detection. Anthropic via OpenRouter has been observed
+            # returning finish_reason="stop" even when extended-thinking
+            # exhausted the entire output budget, so finish_reason alone isn't
+            # reliable — we also flag truncation when reported completion
+            # tokens reach the cap we requested.
+            iter_completion_tokens = (
+                iter_usage.get("completion_tokens", 0) if iter_usage else 0
+            )
+            hit_cap = iter_completion_tokens >= requested_max_tokens
+            truncated = finish_reason == "length" or hit_cap
+
+            if truncated and not collected_tool_calls:
+                consecutive_truncations += 1
                 logger.warning(
-                    "Response truncated by max_tokens for conversation '%s'; "
-                    "continuing (content_len=%d)",
+                    "Response truncated for conversation '%s' "
+                    "(finish_reason=%s, completion_tokens=%d, cap=%d, "
+                    "content_len=%d, consecutive=%d)",
                     body.conversation_id,
+                    finish_reason,
+                    iter_completion_tokens,
+                    requested_max_tokens,
                     len(collected_content),
+                    consecutive_truncations,
                 )
+
+                if consecutive_truncations >= MAX_CONSECUTIVE_TRUNCATIONS:
+                    logger.error(
+                        "Aborting conversation '%s' after %d consecutive "
+                        "truncations with no tool calls",
+                        body.conversation_id,
+                        consecutive_truncations,
+                    )
+                    await _save_interrupted(
+                        http_client,
+                        body,
+                        user_id,
+                        collected_content,
+                        all_reasoning,
+                        all_tool_calls_history,
+                        all_parts,
+                        collected_usage,
+                        collected_model,
+                        f"Response repeatedly hit max_tokens "
+                        f"({MAX_CONSECUTIVE_TRUNCATIONS}× in a row) without "
+                        f"making progress",
+                    )
+                    yield {
+                        "event": "error",
+                        "data": json.dumps(
+                            {"message": "Response repeatedly truncated"}
+                        ),
+                    }
+                    return
+
+                # Prefill the partial output so the model resumes coherently
+                # rather than restarting from scratch on the next iteration.
                 if collected_content:
                     messages.append(
                         {"role": "assistant", "content": collected_content}
                     )
-                # Loop again — model resumes from the truncated point.
                 continue
+
+            # Forward progress was made — reset the truncation counter.
+            consecutive_truncations = 0
 
             # If no tool calls, we're done
             if finish_reason != "tool_calls" or not collected_tool_calls:
