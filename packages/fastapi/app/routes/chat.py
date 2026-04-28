@@ -724,6 +724,25 @@ async def chat_stream(
             if collected_content:
                 all_parts.append({"type": "text", "content": collected_content})
 
+            # Truncated by max_tokens with no usable tool calls — append the
+            # partial output to history and let the next iteration continue
+            # generation. With tool calls we fall through to the normal
+            # tool-execution path below (truncated JSON args would have failed
+            # parsing earlier and been dropped).
+            if finish_reason == "length" and not collected_tool_calls:
+                logger.warning(
+                    "Response truncated by max_tokens for conversation '%s'; "
+                    "continuing (content_len=%d)",
+                    body.conversation_id,
+                    len(collected_content),
+                )
+                if collected_content:
+                    messages.append(
+                        {"role": "assistant", "content": collected_content}
+                    )
+                # Loop again — model resumes from the truncated point.
+                continue
+
             # If no tool calls, we're done
             if finish_reason != "tool_calls" or not collected_tool_calls:
                 # Remap usage keys from snake_case to camelCase for Convex
