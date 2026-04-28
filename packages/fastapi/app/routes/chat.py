@@ -23,7 +23,7 @@ from app.services.daytona_service import get_daytona_service
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ITERATIONS = 50
+MAX_TOOL_ITERATIONS = 120
 
 SKILL_TOOL_NAME = "get_skill_content"
 
