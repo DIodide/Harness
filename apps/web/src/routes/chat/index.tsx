@@ -115,6 +115,11 @@ import { UsageDialog } from "../../components/usage-dialog";
 import { formatResetTime, UsageBadge } from "../../components/usage-display";
 import { env } from "../../env";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
+import {
+	EMPTY_STREAM_STATE,
+	useChatStreamContext,
+	useChatStreamSideEffects,
+} from "../../lib/chat-stream-context";
 import type { McpAuthType, McpServerCommand } from "../../lib/mcp";
 import { fetchCommandsFromApi, sanitizeServerName } from "../../lib/mcp";
 import {
@@ -130,13 +135,11 @@ import {
 	useSandboxPanel,
 } from "../../lib/sandbox-panel-context";
 import type { SkillEntry } from "../../lib/skills";
-import {
-	type BudgetExceededInfo,
-	type ConvoStreamState,
-	type StreamPart,
-	type ToolCallEvent,
-	type UsageData,
-	useChatStream,
+import type {
+	BudgetExceededInfo,
+	StreamPart,
+	ToolCallEvent,
+	UsageData,
 } from "../../lib/use-chat-stream";
 import { cn } from "../../lib/utils";
 
@@ -170,16 +173,6 @@ const SUGGESTED_PROMPTS = [
 	"Review my API design and suggest improvements",
 	"Create a deployment checklist for production",
 ];
-
-const EMPTY_STREAM_STATE: ConvoStreamState = {
-	content: null,
-	reasoning: null,
-	toolCalls: [],
-	parts: [],
-	pendingDoneContent: null,
-	usage: null,
-	model: null,
-};
 
 type SandboxSelection = "harness" | "none" | Id<"sandboxes">;
 
@@ -217,14 +210,11 @@ function ChatPage() {
 	const [budgetExceeded, setBudgetExceeded] =
 		useState<BudgetExceededInfo | null>(null);
 
-	// Per-conversation streaming state
-	const [streamStates, setStreamStates] = useState<
-		Record<string, ConvoStreamState>
-	>({});
-	const streamStatesRef = useRef(streamStates);
-	useEffect(() => {
-		streamStatesRef.current = streamStates;
-	}, [streamStates]);
+	// Streaming state lives in the global provider so an in-flight stream
+	// survives navigation away from /chat (e.g. to /harnesses) and back.
+	const chatStream = useChatStreamContext();
+	const { streamStates, streamStatesRef, clearStreamState, setStreamState } =
+		chatStream;
 
 	// MCP server failures reported during stream start
 	type McpFailure = {
@@ -320,95 +310,7 @@ function ChatPage() {
 		mutationFn: useConvexMutation(api.messages.send),
 	});
 
-	const chatStream = useChatStream({
-		onToken: (convoId, content) => {
-			setStreamStates((prev) => {
-				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
-				const parts = [...state.parts];
-				const last = parts[parts.length - 1];
-				if (last?.type === "text") {
-					parts[parts.length - 1] = {
-						...last,
-						content: (last.content ?? "") + content,
-					};
-				} else {
-					parts.push({ type: "text", content });
-				}
-				return {
-					...prev,
-					[convoId]: {
-						...state,
-						content: (state.content ?? "") + content,
-						parts,
-					},
-				};
-			});
-		},
-		onThinking: (convoId, content) => {
-			setStreamStates((prev) => {
-				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
-				const parts = [...state.parts];
-				const last = parts[parts.length - 1];
-				if (last?.type === "reasoning") {
-					parts[parts.length - 1] = {
-						...last,
-						content: (last.content ?? "") + content,
-					};
-				} else {
-					parts.push({ type: "reasoning", content });
-				}
-				return {
-					...prev,
-					[convoId]: {
-						...state,
-						reasoning: (state.reasoning ?? "") + content,
-						parts,
-					},
-				};
-			});
-		},
-		onToolCall: (convoId, event) => {
-			setStreamStates((prev) => {
-				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
-				return {
-					...prev,
-					[convoId]: {
-						...state,
-						toolCalls: [...state.toolCalls, event],
-						parts: [
-							...state.parts,
-							{
-								type: "tool_call" as const,
-								tool: event.tool,
-								arguments: event.arguments,
-								call_id: event.call_id,
-							},
-						],
-					},
-				};
-			});
-		},
-		onToolResult: (convoId, event) => {
-			setStreamStates((prev) => {
-				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
-				return {
-					...prev,
-					[convoId]: {
-						...state,
-						toolCalls: state.toolCalls.map((tc) =>
-							tc.call_id === event.call_id
-								? { ...tc, result: event.result }
-								: tc,
-						),
-						parts: state.parts.map((p) =>
-							p.type === "tool_call" && p.call_id === event.call_id
-								? { ...p, result: event.result }
-								: p,
-						),
-					},
-				};
-			});
-		},
+	useChatStreamSideEffects({
 		onMcpError: (_convoId, event) => {
 			setMcpFailures((prev) => [
 				...prev,
@@ -420,20 +322,6 @@ function ChatPage() {
 				},
 			]);
 		},
-		onDone: (convoId, fullContent, usage, model) => {
-			setStreamStates((prev) => ({
-				...prev,
-				[convoId]: {
-					content: prev[convoId]?.content ?? fullContent,
-					reasoning: prev[convoId]?.reasoning ?? null,
-					toolCalls: prev[convoId]?.toolCalls ?? [],
-					parts: prev[convoId]?.parts ?? [],
-					pendingDoneContent: fullContent,
-					usage: usage ?? prev[convoId]?.usage ?? null,
-					model: model ?? prev[convoId]?.model ?? null,
-				},
-			}));
-		},
 		onBudgetExceeded: (_convoId, info) => {
 			setBudgetExceeded(info);
 			const which = info.dailyPct >= 100 ? "daily" : "weekly";
@@ -441,13 +329,8 @@ function ChatPage() {
 				`${which.charAt(0).toUpperCase() + which.slice(1)} usage limit reached`,
 			);
 		},
-		onError: (convoId, error) => {
+		onError: (_convoId, error) => {
 			toast.error(error);
-			setStreamStates((prev) => {
-				const next = { ...prev };
-				delete next[convoId];
-				return next;
-			});
 		},
 		onAbort: (convoId) => {
 			const state = streamStatesRef.current[convoId];
@@ -476,11 +359,7 @@ function ChatPage() {
 				(!state.content && !state.reasoning && state.toolCalls.length === 0)
 			) {
 				// Nothing accumulated — just clear state
-				setStreamStates((prev) => {
-					const next = { ...prev };
-					delete next[convoId];
-					return next;
-				});
+				clearStreamState(convoId);
 			} else {
 				// Filter: only keep completed tool calls (those with results)
 				const completedToolCalls = state.toolCalls.filter(
@@ -515,15 +394,12 @@ function ChatPage() {
 
 				// Keep streaming bubble visible until Convex syncs the interrupted message
 				// (same pattern as onDone — set pendingDoneContent so convexHasMessage can match)
-				setStreamStates((prev) => ({
-					...prev,
-					[convoId]: {
-						...state,
-						toolCalls: completedToolCalls,
-						parts: cleanedParts,
-						pendingDoneContent: partialContent,
-						model,
-					},
+				setStreamState(convoId, () => ({
+					...state,
+					toolCalls: completedToolCalls,
+					parts: cleanedParts,
+					pendingDoneContent: partialContent,
+					model,
 				}));
 			}
 
@@ -605,11 +481,7 @@ function ChatPage() {
 
 	const handleStreamSynced = useCallback(
 		(convoId: string) => {
-			setStreamStates((prev) => {
-				const next = { ...prev };
-				delete next[convoId];
-				return next;
-			});
+			clearStreamState(convoId);
 
 			// Process next queued message now that Convex has synced
 			if (messageQueueRef.current.length > 0) {
@@ -619,7 +491,7 @@ function ChatPage() {
 				}
 			}
 		},
-		[shiftQueue],
+		[clearStreamState, shiftQueue],
 	);
 
 	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
