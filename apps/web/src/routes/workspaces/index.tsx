@@ -2655,11 +2655,13 @@ function ChatHeader({
 					)}
 				</div>
 
-				{harness && harness.mcpServers.length > 0 && (
+				{harness && (
 					<McpServerStatus
 						servers={harness.mcpServers}
+						harnessId={harness._id}
 						healthStatuses={mcpHealthStatuses}
 						onReconnected={onRefreshHealth}
+						onChanged={onRefreshHealth}
 					/>
 				)}
 

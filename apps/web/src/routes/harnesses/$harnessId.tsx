@@ -70,6 +70,7 @@ import {
 	PRESET_MCPS,
 	sanitizeServerName,
 	toMcpServerPayload,
+	validateMcpUrl,
 } from "../../lib/mcp";
 import { MODELS } from "../../lib/models";
 import type { SkillEntry } from "../../lib/skills";
@@ -860,18 +861,6 @@ function HarnessEditPage() {
 			</div>
 		</div>
 	);
-}
-
-function validateMcpUrl(url: string): string | null {
-	if (/\s/.test(url)) return "URL must not contain spaces";
-	try {
-		const parsed = new URL(url);
-		if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-			return "URL must start with http:// or https://";
-	} catch {
-		return "Please enter a valid URL";
-	}
-	return null;
 }
 
 function McpServerRow({
