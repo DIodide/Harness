@@ -4,6 +4,7 @@ import {
 	useCallback,
 	useContext,
 	useEffect,
+	useId,
 	useMemo,
 	useRef,
 	useState,
@@ -63,19 +64,35 @@ interface ChatStreamContextValue {
 
 const ChatStreamContext = createContext<ChatStreamContextValue | null>(null);
 
-const SideEffectsRefContext =
-	createContext<React.MutableRefObject<ChatStreamSideEffects> | null>(null);
+type SideEffectsRegistry = Map<
+	string,
+	React.MutableRefObject<ChatStreamSideEffects>
+>;
+
+const SideEffectsRegistryContext =
+	createContext<React.MutableRefObject<SideEffectsRegistry> | null>(null);
 
 export function ChatStreamProvider({ children }: { children: ReactNode }) {
 	const [streamStates, setStreamStates] = useState<
 		Record<string, ConvoStreamState>
 	>({});
 	const streamStatesRef = useRef(streamStates);
-	useEffect(() => {
-		streamStatesRef.current = streamStates;
-	}, [streamStates]);
+	streamStatesRef.current = streamStates;
 
-	const sideEffectsRef = useRef<ChatStreamSideEffects>({});
+	const sideEffectsRegistryRef = useRef<SideEffectsRegistry>(new Map());
+
+	const dispatchSideEffect = useCallback(
+		<K extends keyof ChatStreamSideEffects>(
+			key: K,
+			invoke: (handler: NonNullable<ChatStreamSideEffects[K]>) => void,
+		) => {
+			for (const ref of sideEffectsRegistryRef.current.values()) {
+				const handler = ref.current[key];
+				if (handler) invoke(handler as NonNullable<ChatStreamSideEffects[K]>);
+			}
+		},
+		[],
+	);
 
 	const chatStream = useChatStream({
 		onToken: (convoId, content) => {
@@ -167,10 +184,10 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 			});
 		},
 		onMcpError: (convoId, event) => {
-			sideEffectsRef.current.onMcpError?.(convoId, event);
+			dispatchSideEffect("onMcpError", (h) => h(convoId, event));
 		},
 		onSandboxStatus: (convoId, event) => {
-			sideEffectsRef.current.onSandboxStatus?.(convoId, event);
+			dispatchSideEffect("onSandboxStatus", (h) => h(convoId, event));
 		},
 		onDone: (convoId, fullContent, usage, model) => {
 			setStreamStates((prev) => ({
@@ -185,10 +202,12 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 					model: model ?? prev[convoId]?.model ?? null,
 				},
 			}));
-			sideEffectsRef.current.onDone?.(convoId, fullContent, usage, model);
+			dispatchSideEffect("onDone", (h) =>
+				h(convoId, fullContent, usage, model),
+			);
 		},
 		onBudgetExceeded: (convoId, info) => {
-			sideEffectsRef.current.onBudgetExceeded?.(convoId, info);
+			dispatchSideEffect("onBudgetExceeded", (h) => h(convoId, info));
 		},
 		onError: (convoId, message) => {
 			setStreamStates((prev) => {
@@ -196,10 +215,10 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 				delete next[convoId];
 				return next;
 			});
-			sideEffectsRef.current.onError?.(convoId, message);
+			dispatchSideEffect("onError", (h) => h(convoId, message));
 		},
 		onAbort: (convoId) => {
-			sideEffectsRef.current.onAbort?.(convoId);
+			dispatchSideEffect("onAbort", (h) => h(convoId));
 		},
 	});
 
@@ -246,9 +265,9 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 
 	return (
 		<ChatStreamContext.Provider value={value}>
-			<SideEffectsRefContext.Provider value={sideEffectsRef}>
+			<SideEffectsRegistryContext.Provider value={sideEffectsRegistryRef}>
 				{children}
-			</SideEffectsRefContext.Provider>
+			</SideEffectsRegistryContext.Provider>
 		</ChatStreamContext.Provider>
 	);
 }
@@ -264,16 +283,21 @@ export function useChatStreamContext() {
 }
 
 export function useChatStreamSideEffects(effects: ChatStreamSideEffects) {
-	const ref = useContext(SideEffectsRefContext);
-	if (!ref) {
+	const registry = useContext(SideEffectsRegistryContext);
+	if (!registry) {
 		throw new Error(
 			"useChatStreamSideEffects must be used within ChatStreamProvider",
 		);
 	}
+	const id = useId();
+	const effectsRef = useRef(effects);
+	effectsRef.current = effects;
+
 	useEffect(() => {
-		ref.current = effects;
+		const map = registry.current;
+		map.set(id, effectsRef);
 		return () => {
-			ref.current = {};
+			map.delete(id);
 		};
-	}, [ref, effects]);
+	}, [registry, id]);
 }
