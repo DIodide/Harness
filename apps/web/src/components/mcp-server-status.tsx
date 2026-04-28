@@ -12,6 +12,7 @@ import {
 	Plus,
 	Server,
 	Shield,
+	Trash2,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -205,9 +206,89 @@ export function McpServerStatus({
 	const { data: oauthStatuses } = useQuery(
 		convexQuery(api.mcpOAuthTokens.listStatuses, {}),
 	);
+	const { getToken } = useAuth();
+	const updateHarnessFn = useConvexMutation(api.harnesses.update);
+	const upsertCommandsFn = useConvexMutation(api.commands.upsert);
 	const [open, setOpen] = useState(false);
 	const [mode, setMode] = useState<"list" | "add">("list");
+	const [removingUrl, setRemovingUrl] = useState<string | null>(null);
 	const ref = useRef<HTMLDivElement>(null);
+
+	const removeServer = useCallback(
+		async (url: string) => {
+			if (!harnessId) return;
+			const target = servers.find((s) => s.url === url);
+			if (!target) return;
+			setRemovingUrl(url);
+			const next = servers
+				.filter((s) => s.url !== url)
+				.map((s) => ({
+					name: s.name,
+					url: s.url,
+					authType: s.authType,
+					...(s.authToken ? { authToken: s.authToken } : {}),
+				}));
+			try {
+				await updateHarnessFn({ id: harnessId, mcpServers: next });
+				toast.success(`Removed ${target.name}`);
+				onChanged?.();
+			} catch (err) {
+				toast.error(
+					err instanceof Error ? err.message : "Failed to remove MCP server",
+				);
+				setRemovingUrl(null);
+				return;
+			}
+
+			// Fire-and-forget: rebuild commandIds for the remaining servers so
+			// orphaned slash commands from the removed server stop appearing.
+			(async () => {
+				try {
+					if (next.length === 0) return;
+					const token = await getToken();
+					const cmds = await fetchCommandsFromApi(API_URL, next, token);
+					if (!cmds || cmds.length === 0) return;
+
+					const ids = await upsertCommandsFn({
+						commands: cmds.map((c) => ({
+							name: c.name,
+							server: c.server,
+							tool: c.tool,
+							description: c.description,
+							parametersJson: JSON.stringify(c.parameters),
+						})),
+					});
+
+					const idByName = new Map(cmds.map((c, i) => [c.name, ids[i]]));
+					const enriched = next.map((s) => ({
+						name: s.name,
+						url: s.url,
+						authType: s.authType,
+						...(s.authToken ? { authToken: s.authToken } : {}),
+						commandIds: [...idByName.entries()]
+							.filter(([name]) =>
+								name.startsWith(`${sanitizeServerName(s.name)}__`),
+							)
+							.map(([, cmdId]) => cmdId),
+					}));
+
+					await updateHarnessFn({ id: harnessId, mcpServers: enriched });
+				} catch {
+					// Non-blocking
+				} finally {
+					setRemovingUrl(null);
+				}
+			})();
+		},
+		[
+			harnessId,
+			servers,
+			updateHarnessFn,
+			upsertCommandsFn,
+			getToken,
+			onChanged,
+		],
+	);
 
 	// Close on outside click
 	useEffect(() => {
@@ -338,6 +419,10 @@ export function McpServerStatus({
 											server={server}
 											status={status}
 											onReconnected={onReconnected}
+											onRemove={
+												canAdd ? () => removeServer(server.url) : undefined
+											}
+											removing={removingUrl === server.url}
 										/>
 									))}
 								</div>
@@ -382,10 +467,14 @@ function McpServerRow({
 	server,
 	status,
 	onReconnected,
+	onRemove,
+	removing = false,
 }: {
 	server: McpServer;
 	status: ServerStatus;
 	onReconnected?: () => void;
+	onRemove?: () => void;
+	removing?: boolean;
 }) {
 	const { getToken } = useAuth();
 	const [connecting, setConnecting] = useState(false);
@@ -406,8 +495,12 @@ function McpServerRow({
 		server.authType === "oauth" &&
 		(status === "expired" || status === "disconnected");
 
+	const showBadges = !needsReconnect;
+
 	return (
-		<div className="flex items-center gap-2 px-3 py-1.5">
+		<div
+			className={`group flex items-center gap-2 px-3 py-1.5 transition-opacity ${removing ? "opacity-50" : ""}`}
+		>
 			{status === "checking" ? (
 				<RoseCurveSpinner
 					size={10}
@@ -436,42 +529,64 @@ function McpServerRow({
 					Reconnect
 				</Button>
 			)}
-			{status === "connected" && server.authType === "bearer" && (
-				<Badge variant="secondary" className="shrink-0 text-[9px]">
-					Key
-				</Badge>
+			{showBadges && (
+				<div
+					className={`flex shrink-0 items-center ${onRemove ? "group-hover:hidden" : ""}`}
+				>
+					{status === "connected" && server.authType === "bearer" && (
+						<Badge variant="secondary" className="text-[9px]">
+							Key
+						</Badge>
+					)}
+					{status === "connected" && server.authType === "none" && (
+						<Badge variant="secondary" className="text-[9px]">
+							Public
+						</Badge>
+					)}
+					{status === "connected" && server.authType === "tiger_junction" && (
+						<Badge variant="secondary" className="gap-1 text-[9px]">
+							<GraduationCap size={8} />
+							Princeton
+						</Badge>
+					)}
+					{status === "connected" && server.authType === "oauth" && (
+						<Badge variant="secondary" className="gap-1 text-[9px]">
+							<div className="h-1 w-1 rounded-full bg-emerald-500" />
+							OAuth
+						</Badge>
+					)}
+					{status === "needs_verification" && (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Badge
+									variant="secondary"
+									className="gap-1 border border-amber-400/40 bg-amber-500/10 text-[9px] text-amber-700 dark:text-amber-400"
+								>
+									<GraduationCap size={8} />
+									Verify
+								</Badge>
+							</TooltipTrigger>
+							<TooltipContent>
+								Open this harness's settings to verify your Princeton account.
+							</TooltipContent>
+						</Tooltip>
+					)}
+				</div>
 			)}
-			{status === "connected" && server.authType === "none" && (
-				<Badge variant="secondary" className="shrink-0 text-[9px]">
-					Public
-				</Badge>
-			)}
-			{status === "connected" && server.authType === "tiger_junction" && (
-				<Badge variant="secondary" className="shrink-0 gap-1 text-[9px]">
-					<GraduationCap size={8} />
-					Princeton
-				</Badge>
-			)}
-			{status === "connected" && server.authType === "oauth" && (
-				<Badge variant="secondary" className="shrink-0 gap-1 text-[9px]">
-					<div className="h-1 w-1 rounded-full bg-emerald-500" />
-					OAuth
-				</Badge>
-			)}
-			{status === "needs_verification" && (
+			{onRemove && (
 				<Tooltip>
 					<TooltipTrigger asChild>
-						<Badge
-							variant="secondary"
-							className="shrink-0 gap-1 border border-amber-400/40 bg-amber-500/10 text-[9px] text-amber-700 dark:text-amber-400"
+						<button
+							type="button"
+							onClick={onRemove}
+							disabled={removing}
+							className="hidden shrink-0 rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive group-hover:block disabled:opacity-30"
+							aria-label={`Remove ${server.name}`}
 						>
-							<GraduationCap size={8} />
-							Verify
-						</Badge>
+							{removing ? <RoseCurveSpinner size={10} /> : <Trash2 size={11} />}
+						</button>
 					</TooltipTrigger>
-					<TooltipContent>
-						Open this harness's settings to verify your Princeton account.
-					</TooltipContent>
+					<TooltipContent>Remove from harness</TooltipContent>
 				</Tooltip>
 			)}
 		</div>
