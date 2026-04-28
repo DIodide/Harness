@@ -176,7 +176,7 @@ class TestRecordUsage:
     async def test_skips_when_cost_missing(self, convex_settings):
         async with httpx.AsyncClient() as client:
             await record_usage(
-                client, "u1", "c1", None, None, "gpt-4o",
+                client, "u1", "c1", None, None, "gpt-5.4",
                 {"prompt_tokens": 100, "completion_tokens": 50},
             )
         # no exception — cost absent means noop
@@ -184,7 +184,7 @@ class TestRecordUsage:
     async def test_skips_when_not_configured(self, no_convex_settings):
         async with httpx.AsyncClient() as client:
             await record_usage(
-                client, "u1", "c1", None, None, "gpt-4o",
+                client, "u1", "c1", None, None, "gpt-5.4",
                 {"cost": 0.01},
             )
 
@@ -195,7 +195,7 @@ class TestRecordUsage:
         )
         async with httpx.AsyncClient() as client:
             await record_usage(
-                client, "u1", "c1", "h1", "My Harness", "gpt-4o",
+                client, "u1", "c1", "h1", "My Harness", "gpt-5.4",
                 {
                     "cost": 0.0123,
                     "prompt_tokens": 100,
@@ -220,7 +220,7 @@ class TestRecordUsage:
         )
         async with httpx.AsyncClient() as client:
             await record_usage(
-                client, "u1", "c1", None, None, "gpt-4o",
+                client, "u1", "c1", None, None, "gpt-5.4",
                 {"cost": 0.001},
             )
         import json as _json
@@ -235,7 +235,7 @@ class TestRecordUsage:
         )
         async with httpx.AsyncClient() as client:
             await record_usage(
-                client, "u1", "c1", None, None, "gpt-4o",
+                client, "u1", "c1", None, None, "gpt-5.4",
                 {"cost": 0.001},
             )
         # no exception propagates

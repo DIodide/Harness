@@ -427,7 +427,7 @@ function OnboardingPage() {
 			createHarness.mutate({
 				name:
 					status === "draft" ? name.trim() || "Untitled Harness" : name.trim(),
-				model: status === "draft" ? model || "gpt-4o" : model,
+				model: status === "draft" ? model || "gpt-5.4" : model,
 				status,
 				mcpServers: mcpServersForMutation,
 				skills: selectedSkills,

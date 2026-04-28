@@ -12,8 +12,8 @@ def test_model_map_covers_thinking_models():
 
 def test_thinking_variants_alias_base():
     # -thinking variants map to the same provider ID as their base.
-    assert MODEL_MAP["claude-sonnet-4"] == MODEL_MAP["claude-sonnet-4-thinking"]
-    assert MODEL_MAP["claude-opus-4"] == MODEL_MAP["claude-opus-4-thinking"]
+    assert MODEL_MAP["claude-sonnet-4.6"] == MODEL_MAP["claude-sonnet-4.6-thinking"]
+    assert MODEL_MAP["claude-opus-4.7"] == MODEL_MAP["claude-opus-4.7-thinking"]
 
 
 def test_available_models_have_required_fields():

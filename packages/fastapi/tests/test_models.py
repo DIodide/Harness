@@ -40,27 +40,27 @@ class TestSandboxConfig:
 
 class TestHarnessConfig:
     def test_minimal(self):
-        h = HarnessConfig(model="gpt-4o", name="test")
+        h = HarnessConfig(model="gpt-5.4", name="test")
         assert h.mcp_servers == []
         assert h.skills == []
         assert h.system_prompt is None
         assert h.sandbox_enabled is False
 
     def test_system_prompt_at_limit(self):
-        h = HarnessConfig(model="gpt-4o", name="t", system_prompt="x" * 4000)
+        h = HarnessConfig(model="gpt-5.4", name="t", system_prompt="x" * 4000)
         assert h.system_prompt is not None
         assert len(h.system_prompt) == 4000
 
     def test_system_prompt_over_limit_rejected(self):
         with pytest.raises(ValidationError):
-            HarnessConfig(model="gpt-4o", name="t", system_prompt="x" * 4001)
+            HarnessConfig(model="gpt-5.4", name="t", system_prompt="x" * 4001)
 
 
 class TestChatRequest:
     def test_requires_messages_and_harness(self):
         req = ChatRequest(
             messages=[MessagePayload(role="user", content="hi")],
-            harness=HarnessConfig(model="gpt-4o", name="t"),
+            harness=HarnessConfig(model="gpt-5.4", name="t"),
             conversation_id="c1",
         )
         assert req.forced_tool is None

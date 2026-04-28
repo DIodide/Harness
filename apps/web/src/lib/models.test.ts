@@ -25,15 +25,13 @@ describe("MODELS catalog", () => {
 
 describe("modelSupportsMedia", () => {
 	it("true for image-capable models", () => {
-		expect(modelSupportsMedia("gpt-4o")).toBe(true);
-		expect(modelSupportsMedia("claude-opus-4")).toBe(true);
-		expect(modelSupportsMedia("gemini-2.5-pro")).toBe(true);
+		expect(modelSupportsMedia("gpt-5.4")).toBe(true);
+		expect(modelSupportsMedia("claude-opus-4.7")).toBe(true);
+		expect(modelSupportsMedia("gemini-3.1-pro")).toBe(true);
 	});
 
-	it("false for text-only models", () => {
-		expect(modelSupportsMedia("deepseek-r1")).toBe(false);
-		expect(modelSupportsMedia("deepseek-v3")).toBe(false);
-		expect(modelSupportsMedia("grok-3-mini")).toBe(false);
+	it("false for unknown models", () => {
+		expect(modelSupportsMedia("made-up-model-2")).toBe(false);
 	});
 
 	it("false for undefined / unknown models", () => {
@@ -44,13 +42,13 @@ describe("modelSupportsMedia", () => {
 
 describe("modelSupportsAudio", () => {
 	it("true for gemini audio-capable models", () => {
-		expect(modelSupportsAudio("gemini-2.5-pro")).toBe(true);
-		expect(modelSupportsAudio("gemini-2.5-flash")).toBe(true);
+		expect(modelSupportsAudio("gemini-3.1-pro")).toBe(true);
+		expect(modelSupportsAudio("gemini-3-flash")).toBe(true);
 	});
 
 	it("false for non-audio models", () => {
-		expect(modelSupportsAudio("gpt-4o")).toBe(false);
-		expect(modelSupportsAudio("claude-sonnet-4")).toBe(false);
+		expect(modelSupportsAudio("gpt-5.4")).toBe(false);
+		expect(modelSupportsAudio("claude-sonnet-4.6")).toBe(false);
 	});
 
 	it("false for undefined", () => {
@@ -60,19 +58,19 @@ describe("modelSupportsAudio", () => {
 
 describe("allowedMimeTypes", () => {
 	it("returns empty set for text-only model", () => {
-		expect(allowedMimeTypes("deepseek-r1").size).toBe(0);
+		expect(allowedMimeTypes("made-up-model").size).toBe(0);
 	});
 
-	it("returns images + pdf for gpt-4o", () => {
-		const mimes = allowedMimeTypes("gpt-4o");
+	it("returns images + pdf for gpt-5.4", () => {
+		const mimes = allowedMimeTypes("gpt-5.4");
 		expect(mimes.has("image/png")).toBe(true);
 		expect(mimes.has("image/jpeg")).toBe(true);
 		expect(mimes.has("application/pdf")).toBe(true);
 		expect(mimes.has("audio/wav")).toBe(false);
 	});
 
-	it("returns image + pdf + audio for gemini-2.5-pro", () => {
-		const mimes = allowedMimeTypes("gemini-2.5-pro");
+	it("returns image + pdf + audio for gemini-3.1-pro", () => {
+		const mimes = allowedMimeTypes("gemini-3.1-pro");
 		expect(mimes.has("image/png")).toBe(true);
 		expect(mimes.has("application/pdf")).toBe(true);
 		expect(mimes.has("audio/wav")).toBe(true);
@@ -86,14 +84,14 @@ describe("allowedMimeTypes", () => {
 
 describe("acceptString", () => {
 	it("returns comma-separated mime list", () => {
-		const accept = acceptString("gpt-4o");
+		const accept = acceptString("gpt-5.4");
 		expect(accept).toContain("image/png");
 		expect(accept).toContain("application/pdf");
 		expect(accept.split(",")).toHaveLength(5);
 	});
 
 	it("returns empty string when no modalities", () => {
-		expect(acceptString("deepseek-r1")).toBe("");
+		expect(acceptString("made-up-model")).toBe("");
 	});
 });
 

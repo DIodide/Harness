@@ -7,55 +7,46 @@ export const MODELS: Array<{
 	label: string;
 	modalities: Modality[];
 }> = [
-	// Audio input: only Gemini models are confirmed on OpenRouter
-	{ value: "openai/gpt-5.4", label: "GPT-5.4", modalities: ["image", "pdf"] },
-	{ value: "gpt-4o", label: "GPT-4o", modalities: ["image", "pdf"] },
-	{ value: "gpt-4.1", label: "GPT-4.1", modalities: ["image", "pdf"] },
+	// OpenAI
+	{ value: "gpt-5.5", label: "GPT-5.5", modalities: ["image", "pdf"] },
+	{ value: "gpt-5.4", label: "GPT-5.4", modalities: ["image", "pdf"] },
+	// Anthropic
 	{
-		value: "gpt-4.1-mini",
-		label: "GPT-4.1 Mini",
+		value: "claude-sonnet-4.6",
+		label: "Claude Sonnet 4.6",
 		modalities: ["image", "pdf"],
 	},
 	{
-		value: "claude-sonnet-4",
-		label: "Claude Sonnet 4",
+		value: "claude-sonnet-4.6-thinking",
+		label: "Claude Sonnet 4.6 (Thinking)",
 		modalities: ["image", "pdf"],
 	},
 	{
-		value: "claude-sonnet-4-thinking",
-		label: "Claude Sonnet 4 (Thinking)",
+		value: "claude-opus-4.7",
+		label: "Claude Opus 4.7",
 		modalities: ["image", "pdf"],
 	},
 	{
-		value: "claude-opus-4",
-		label: "Claude Opus 4",
+		value: "claude-opus-4.7-thinking",
+		label: "Claude Opus 4.7 (Thinking)",
 		modalities: ["image", "pdf"],
 	},
+	// Google — audio input confirmed on OpenRouter
 	{
-		value: "claude-opus-4-thinking",
-		label: "Claude Opus 4 (Thinking)",
-		modalities: ["image", "pdf"],
+		value: "gemini-3.1-pro",
+		label: "Gemini 3.1 Pro Preview",
+		modalities: ["image", "pdf", "audio"],
 	},
 	{
-		value: "google/gemini-3.1-flash-lite-preview",
+		value: "gemini-3-flash",
+		label: "Gemini 3 Flash Preview",
+		modalities: ["image", "pdf", "audio"],
+	},
+	{
+		value: "gemini-3.1-flash-lite",
 		label: "Gemini 3.1 Flash Lite Preview",
 		modalities: ["image", "pdf", "audio"],
 	},
-	{
-		value: "gemini-2.5-pro",
-		label: "Gemini 2.5 Pro",
-		modalities: ["image", "pdf", "audio"],
-	},
-	{
-		value: "gemini-2.5-flash",
-		label: "Gemini 2.5 Flash",
-		modalities: ["image", "pdf", "audio"],
-	},
-	{ value: "kimi-k2", label: "Kimi K2", modalities: ["image"] },
-	{ value: "deepseek-r1", label: "DeepSeek R1", modalities: [] },
-	{ value: "deepseek-v3", label: "DeepSeek V3", modalities: [] },
-	{ value: "grok-3", label: "Grok 3", modalities: ["image"] },
-	{ value: "grok-3-mini", label: "Grok 3 Mini", modalities: [] },
 ];
 
 // Lookup index built once from the MODELS array

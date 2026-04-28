@@ -23,7 +23,7 @@ async def stream_chat(
     Args:
         client: Shared httpx.AsyncClient (from app.state).
         messages: OpenAI-format message list.
-        model: Short model name (e.g. "claude-sonnet-4") or full OpenRouter ID.
+        model: Short model name (e.g. "claude-sonnet-4.6") or full OpenRouter ID.
         tools: Optional OpenAI-format tool definitions.
         tool_choice: Optional tool_choice override (e.g. to force a specific tool).
     """
@@ -107,7 +107,7 @@ async def stream_chat(
 async def complete_chat(
     client: httpx.AsyncClient,
     messages: list[dict],
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-5.4",
     max_tokens: int = 512,
 ) -> str:
     """Non-streaming chat completion for lightweight tasks like prompt generation.

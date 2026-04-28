@@ -16,7 +16,7 @@ export const seedAll = internalMutation({
 
 		const h1 = await ctx.db.insert("harnesses", {
 			name: "Coding Assistant",
-			model: "claude-sonnet-4",
+			model: "claude-sonnet-4.6",
 			status: "started",
 			mcpServers: [],
 			skills: [
@@ -30,7 +30,7 @@ export const seedAll = internalMutation({
 
 		const h2 = await ctx.db.insert("harnesses", {
 			name: "Research Agent",
-			model: "gpt-4o",
+			model: "gpt-5.4",
 			status: "started",
 			mcpServers: [],
 			skills: [
@@ -43,7 +43,7 @@ export const seedAll = internalMutation({
 
 		await ctx.db.insert("harnesses", {
 			name: "DevOps Helper",
-			model: "gemini-2.5-pro",
+			model: "gemini-3.1-pro",
 			status: "stopped",
 			mcpServers: [],
 			skills: [{ name: "devops", description: "DevOps and infrastructure" }],
@@ -53,7 +53,7 @@ export const seedAll = internalMutation({
 
 		await ctx.db.insert("harnesses", {
 			name: "Data Pipeline",
-			model: "gpt-4o",
+			model: "gpt-5.4",
 			status: "stopped",
 			mcpServers: [],
 			skills: [{ name: "analysis", description: "Data analysis" }],
@@ -63,7 +63,7 @@ export const seedAll = internalMutation({
 
 		await ctx.db.insert("harnesses", {
 			name: "Content Writer",
-			model: "claude-opus-4",
+			model: "claude-opus-4.7",
 			status: "draft",
 			mcpServers: [],
 			skills: [
@@ -254,7 +254,7 @@ export const clearAndReseed = internalMutation({
 		// Re-run seed inline (can't call other mutations from a mutation)
 		const h1 = await ctx.db.insert("harnesses", {
 			name: "Coding Assistant",
-			model: "claude-sonnet-4",
+			model: "claude-sonnet-4.6",
 			status: "started",
 			mcpServers: [],
 			skills: [
@@ -268,7 +268,7 @@ export const clearAndReseed = internalMutation({
 
 		await ctx.db.insert("harnesses", {
 			name: "Research Agent",
-			model: "gpt-4o",
+			model: "gpt-5.4",
 			status: "started",
 			mcpServers: [],
 			skills: [
@@ -281,7 +281,7 @@ export const clearAndReseed = internalMutation({
 
 		await ctx.db.insert("harnesses", {
 			name: "DevOps Helper",
-			model: "gemini-2.5-pro",
+			model: "gemini-3.1-pro",
 			status: "stopped",
 			mcpServers: [],
 			skills: [{ name: "devops", description: "DevOps and infrastructure" }],

@@ -87,12 +87,12 @@ class TestSaveAssistantMessage:
                 tool_calls=[{"name": "t"}],
                 parts=[{"type": "text"}],
                 usage={"cost": 0.01},
-                model="gpt-4o",
+                model="gpt-5.4",
             )
         body = json.loads(route.calls.last.request.content)
         assert body["args"]["reasoning"] == "thinking"
         assert body["args"]["toolCalls"] == [{"name": "t"}]
-        assert body["args"]["model"] == "gpt-4o"
+        assert body["args"]["model"] == "gpt-5.4"
 
     @respx.mock
     async def test_includes_interrupted_fields_when_provided(self, convex_settings):
@@ -148,12 +148,12 @@ class TestPatchMessageUsage:
             return_value=httpx.Response(200, json={"value": None})
         )
         async with httpx.AsyncClient() as client:
-            await patch_message_usage(client, "c1", {"cost": 0.01}, model="gpt-4o")
+            await patch_message_usage(client, "c1", {"cost": 0.01}, model="gpt-5.4")
         body = json.loads(route.calls.last.request.content)
         assert body["path"] == "messages:patchMessageUsage"
         assert body["args"]["conversationId"] == "c1"
         assert body["args"]["usage"] == {"cost": 0.01}
-        assert body["args"]["model"] == "gpt-4o"
+        assert body["args"]["model"] == "gpt-5.4"
 
     @respx.mock
     async def test_swallows_errors(self, convex_settings):

@@ -21,7 +21,7 @@ const baseHarness = (overrides: Partial<{
 	systemPrompt?: string;
 }> = {}) => ({
 	name: "test",
-	model: "claude-opus-4-7",
+	model: "claude-opus-4.7",
 	status: "stopped" as const,
 	mcpServers: [],
 	skills: [],

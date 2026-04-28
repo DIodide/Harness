@@ -170,7 +170,7 @@ describe("messages.patchMessageUsage (internal)", () => {
 		await t.raw.mutation(internal.messages.patchMessageUsage, {
 			conversationId,
 			usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
-			model: "claude-opus-4-7",
+			model: "claude-opus-4.7",
 		});
 		const msgs = await user.query(api.messages.list, { conversationId });
 		const last = msgs[msgs.length - 1];
@@ -179,7 +179,7 @@ describe("messages.patchMessageUsage (internal)", () => {
 			completionTokens: 2,
 			totalTokens: 3,
 		});
-		expect(last.model).toBe("claude-opus-4-7");
+		expect(last.model).toBe("claude-opus-4.7");
 	});
 
 	it("does nothing when the last message is from the user", async () => {

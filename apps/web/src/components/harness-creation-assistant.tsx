@@ -96,7 +96,7 @@ export function HarnessCreationAssistant({
 		useState<HarnessConfigPreview | null>(null);
 	const [editedConfig, setEditedConfig] = useState<HarnessConfigPreview>({
 		name: "",
-		model: "claude-sonnet-4",
+		model: "claude-sonnet-4.6",
 		mcpIds: [],
 		skillIds: [],
 	});
@@ -492,7 +492,7 @@ export function HarnessCreationAssistant({
 			setHarnessConfig(null);
 			setEditedConfig({
 				name: "",
-				model: "claude-sonnet-4",
+				model: "claude-sonnet-4.6",
 				mcpIds: [],
 				skillIds: [],
 			});
