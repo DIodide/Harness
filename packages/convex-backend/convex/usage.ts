@@ -4,8 +4,8 @@ import type { MutationCtx } from "./_generated/server";
 
 // Single source of truth for default cost limits (USD).
 // Per-user overrides are stored in usageBudgets.costLimit via adminSetLimits.
-const DEFAULT_DAILY_COST_LIMIT = 2.0;
-const DEFAULT_WEEKLY_COST_LIMIT = 10.0;
+const DEFAULT_DAILY_COST_LIMIT = 20.0;
+const DEFAULT_WEEKLY_COST_LIMIT = 100.0;
 
 /**
  * Check whether a user is within their daily and weekly cost budgets.
