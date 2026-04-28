@@ -40,9 +40,9 @@ async def stream_chat(
         "stream_options": {"include_usage": True},
     }
     if is_thinking:
-        payload["max_tokens"] = 4096
+        payload["max_tokens"] = 8192
     else:
-        payload["max_tokens"] = 16384
+        payload["max_tokens"] = 32768
     if is_thinking:
         payload["reasoning"] = {"effort": "high"}
     if tools:
