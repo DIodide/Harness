@@ -412,6 +412,39 @@ export const adminSetLimits = internalMutation({
 	},
 });
 
+/**
+ * Reset every usageBudgets row's costLimit to the current defaults.
+ * Run via: `bunx convex run usage:resetAllCostLimits` (or the Convex dashboard).
+ *
+ * Does not touch totalCostUsed — only the limit. Returns counts for verification.
+ */
+export const resetAllCostLimits = internalMutation({
+	args: {},
+	handler: async (ctx) => {
+		const rows = await ctx.db.query("usageBudgets").collect();
+		const now = Date.now();
+		let dailyPatched = 0;
+		let weeklyPatched = 0;
+		for (const row of rows) {
+			const newLimit =
+				row.periodType === "daily"
+					? DEFAULT_DAILY_COST_LIMIT
+					: DEFAULT_WEEKLY_COST_LIMIT;
+			if (row.costLimit === newLimit) continue;
+			await ctx.db.patch(row._id, { costLimit: newLimit, updatedAt: now });
+			if (row.periodType === "daily") dailyPatched++;
+			else weeklyPatched++;
+		}
+		return {
+			dailyPatched,
+			weeklyPatched,
+			total: rows.length,
+			dailyLimit: DEFAULT_DAILY_COST_LIMIT,
+			weeklyLimit: DEFAULT_WEEKLY_COST_LIMIT,
+		};
+	},
+});
+
 // --- Helpers ---
 
 function formatDay(date: Date): string {
