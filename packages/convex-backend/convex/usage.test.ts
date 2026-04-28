@@ -32,8 +32,8 @@ describe("usage.checkBudget", () => {
 			week: "2026-W17",
 		});
 		expect(res.allowed).toBe(true);
-		expect(res.daily.costLimit).toBe(2);
-		expect(res.weekly.costLimit).toBe(10);
+		expect(res.daily.costLimit).toBe(20);
+		expect(res.weekly.costLimit).toBe(100);
 		expect(res.daily.pctUsed).toBe(0);
 	});
 
