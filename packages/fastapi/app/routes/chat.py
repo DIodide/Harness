@@ -29,7 +29,7 @@ MAX_TOOL_ITERATIONS = 120
 # tool calls). Each retry costs a full output budget worth of tokens, so
 # we bail out after a few rather than burning $30+ per chat in a pathological
 # loop. Reset whenever the model produces tool calls or finishes normally.
-MAX_CONSECUTIVE_TRUNCATIONS = 5
+MAX_CONSECUTIVE_TRUNCATIONS = 20
 
 SKILL_TOOL_NAME = "get_skill_content"
 
