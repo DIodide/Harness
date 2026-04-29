@@ -22,6 +22,11 @@ export const MODELS: Array<{
 		modalities: ["image", "pdf"],
 	},
 	{
+		value: "claude-opus-4.6-fast",
+		label: "Claude Opus 4.6 (Fast)",
+		modalities: ["image", "pdf"],
+	},
+	{
 		value: "claude-opus-4.7",
 		label: "Claude Opus 4.7",
 		modalities: ["image", "pdf"],
