@@ -18,6 +18,7 @@ import toast from "react-hot-toast";
 import { env } from "../env";
 import { PRESET_MCPS, presetIdsToServerEntries } from "../lib/mcp";
 import { MODELS } from "../lib/models";
+import { MarkdownMessage } from "./markdown-message";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
@@ -530,26 +531,31 @@ export function HarnessCreationAssistant({
 							key={msg.id}
 							className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
 						>
-							<div
-								className={`max-w-[85%] rounded px-3 py-2 text-sm leading-relaxed ${
-									msg.role === "user"
-										? "bg-foreground text-background"
-										: "bg-muted text-foreground"
-								}`}
-							>
-								{msg.content}
-							</div>
+							{msg.role === "user" ? (
+								<div className="max-w-[85%] rounded px-3 py-2 text-sm leading-relaxed bg-foreground text-background">
+									{msg.content}
+								</div>
+							) : (
+								<div className="max-w-[85%] text-sm text-foreground">
+									<MarkdownMessage content={msg.content} />
+								</div>
+							)}
 						</div>
 					))}
 
 					{/* Streaming response */}
 					{isStreaming && (
 						<div className="flex justify-start">
-							<div className="max-w-[85%] rounded bg-muted px-3 py-2 text-sm text-foreground leading-relaxed">
+							<div className="max-w-[85%] text-sm text-foreground">
 								{streamingContent ? (
-									stripConfigBlock(streamingContent) || (
-										<span className="text-muted-foreground">…</span>
-									)
+									(() => {
+										const stripped = stripConfigBlock(streamingContent);
+										return stripped ? (
+											<MarkdownMessage content={stripped} />
+										) : (
+											<span className="text-muted-foreground">…</span>
+										);
+									})()
 								) : (
 									<span className="text-muted-foreground text-xs">
 										Thinking…
