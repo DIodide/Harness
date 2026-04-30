@@ -109,7 +109,7 @@ const steps = [
 		num: "02",
 		title: "Connect",
 		description:
-			"OAuth into GitHub, Notion, Linear, or any provider in one popup. Princeton accounts auto-detect — no token wrangling for tiger_junction servers.",
+			"OAuth into GitHub, Notion, Linear, or any provider in one popup. Tokens are stored encrypted and refreshed on demand — no manual key wrangling.",
 	},
 	{
 		num: "03",
@@ -117,30 +117,6 @@ const steps = [
 		description:
 			"Streaming reasoning, slash commands, tool calls, attachments, and live sandbox output — all in one conversation.",
 	},
-];
-
-const integrations = [
-	"GitHub",
-	"Notion",
-	"Linear",
-	"Slack",
-	"Jira",
-	"Exa",
-	"Context7",
-	"AWS Knowledge",
-	"TigerJunction",
-	"TigerPath",
-	"TigerSnatch",
-	"PrincetonCourses",
-];
-
-const modelLine = [
-	"Claude Opus 4.7",
-	"Claude Sonnet 4.6",
-	"GPT-5.5",
-	"GPT-5.4",
-	"Gemini 3.1 Pro",
-	"Gemini 3 Flash",
 ];
 
 const ease = [0.16, 1, 0.3, 1] as const;
@@ -261,8 +237,8 @@ function FloatingDots() {
 
 /**
  * MockChatPanel — visual stand-in for the real chat surface, used in the hero.
- * Not interactive. Shows a Princeton coursework example to highlight the
- * tiger_junction integration and the agent → tool-call → answer loop.
+ * Not interactive. Shows a generic issue-triage agent example wired to GitHub
+ * + Linear MCPs to highlight the agent → tool-call → answer loop.
  */
 function MockChatPanel() {
 	const ref = useRef<HTMLDivElement>(null);
@@ -283,7 +259,7 @@ function MockChatPanel() {
 						<HarnessMark size={12} className="text-white" />
 					</div>
 					<div className="flex min-w-0 flex-1 items-center gap-2 text-[11px]">
-						<span className="font-medium">Coursework agent</span>
+						<span className="font-medium">Issue triage agent</span>
 						<span className="text-black/30">·</span>
 						<span className="text-black/50">claude-sonnet-4.6</span>
 					</div>
@@ -301,8 +277,8 @@ function MockChatPanel() {
 						transition={{ duration: 0.4, delay: 0.4, ease }}
 						className="ml-auto max-w-[85%] bg-[#fafafa] px-3 py-2 text-black/80"
 					>
-						Plan my fall semester — I want to take COS 333 and any prereqs I'm
-						missing.
+						Pull this week's open auth-related bug reports and file the
+						highest-signal ones in Linear.
 					</motion.div>
 
 					<motion.div
@@ -312,27 +288,27 @@ function MockChatPanel() {
 						className="space-y-2"
 					>
 						<MockToolCall
-							server="tigerpath"
-							tool="check_prereqs"
-							arg="COS 333"
+							server="github"
+							tool="search_issues"
+							arg="auth is:open"
 							ms={142}
 						/>
 						<MockToolCall
-							server="princetoncourses"
-							tool="get_evaluations"
-							arg="COS 333"
-							ms={208}
+							server="linear"
+							tool="create_issue"
+							arg="Auth: SSO token refresh"
+							ms={268}
 						/>
 
 						<div className="text-black/85">
-							You've completed COS 217 and 226 — you're cleared for{" "}
+							Found 7 open issues mentioning auth. The top theme — SSO token
+							refresh failing — appears in{" "}
+							<span className="font-medium">4 reports</span>. Filed{" "}
 							<span className="bg-emerald-500/10 px-1 text-emerald-700">
-								COS 333
-							</span>
-							. Past students rate it{" "}
-							<span className="font-medium">4.6 / 5</span>. Recommended pairing:{" "}
-							<span className="font-medium">COS 432</span> (light load that
-							semester).
+								LIN-481
+							</span>{" "}
+							and grouped the long tail under{" "}
+							<span className="font-medium">LIN-482</span>.
 						</div>
 
 						<MockStreamingDot />
@@ -344,7 +320,7 @@ function MockChatPanel() {
 					<div className="flex items-center gap-2 border border-black/[0.08] bg-white px-2.5 py-1.5">
 						<span className="font-mono text-[11px] text-emerald-600">/</span>
 						<span className="font-mono text-[11px] text-black/45">
-							tigerjunction_search_courses
+							linear_create_issue
 						</span>
 						<span className="ml-auto text-[10px] text-black/30">↵ run</span>
 					</div>
@@ -584,42 +560,6 @@ function MockSandboxTabs() {
 				</motion.div>
 			</div>
 		</div>
-	);
-}
-
-/* ─────────────────────── Marquee strip ─────────────────────── */
-
-function IntegrationsStrip() {
-	return (
-		<section className="relative border-y border-black/[0.05] bg-white py-12 md:py-14">
-			<div className="mx-auto max-w-[76rem] px-6 lg:px-12">
-				<FadeIn>
-					<p className="mb-6 text-center text-[11px] font-medium uppercase tracking-[0.18em] text-black/40">
-						Connects out of the box
-					</p>
-					<div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 md:gap-x-12">
-						{integrations.map((label) => (
-							<span
-								key={label}
-								className="text-[14px] font-medium tracking-tight text-black/55 transition-colors hover:text-black/90"
-							>
-								{label}
-							</span>
-						))}
-					</div>
-					<div className="mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
-						<span className="text-[10px] uppercase tracking-[0.18em] text-black/35">
-							Built on
-						</span>
-						{modelLine.map((label) => (
-							<span key={label} className="font-mono text-[11px] text-black/45">
-								{label}
-							</span>
-						))}
-					</div>
-				</FadeIn>
-			</div>
-		</section>
 	);
 }
 
@@ -1275,7 +1215,6 @@ function LandingPage() {
 			<LandingNav />
 			<main>
 				<HeroSection />
-				<IntegrationsStrip />
 				<FeaturesSection />
 				<ProductSection />
 				<HowItWorksSection />
