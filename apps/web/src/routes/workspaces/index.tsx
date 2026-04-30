@@ -220,6 +220,8 @@ function ChatPage() {
 	// Session-only model override — does not persist to the harness
 	const [sessionModel, setSessionModel] = useState<string | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
+	const [pendingEditWorkspaceId, setPendingEditWorkspaceId] =
+		useState<Id<"workspaces"> | null>(null);
 	const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
 	const [editingMessageId, setEditingMessageId] =
 		useState<Id<"messages"> | null>(null);
@@ -1040,6 +1042,8 @@ function ChatPage() {
 								onClose={() => setSidebarOpen(false)}
 								streamingConvoIds={chatStream.streamingConvoIds}
 								doneConvoIds={doneConvoIds}
+								pendingEditWorkspaceId={pendingEditWorkspaceId}
+								onPendingEditConsumed={() => setPendingEditWorkspaceId(null)}
 							/>
 						</motion.aside>
 					)}
@@ -1096,6 +1100,14 @@ function ChatPage() {
 
 					{!activeWorkspace ? (
 						<EmptyWorkspaceState />
+					) : !activeHarness ? (
+						<NoHarnessAttachedState
+							workspaceName={activeWorkspace.name}
+							onAttachHarness={() => {
+								setSidebarOpen(true);
+								setPendingEditWorkspaceId(activeWorkspace._id);
+							}}
+						/>
 					) : activeConvoId ? (
 						<ChatMessages
 							conversationId={activeConvoId}
@@ -1148,6 +1160,14 @@ function ChatPage() {
 					<ChatInput
 						conversationId={activeConvoId}
 						activeHarness={activeWorkspace ? activeHarness : undefined}
+						disabled={!activeWorkspace || !activeHarness}
+						placeholder={
+							!activeWorkspace
+								? "Select a workspace to start chatting"
+								: !activeHarness
+									? "Attach a harness to this workspace to start chatting"
+									: "Send a message..."
+						}
 						sessionModel={
 							userSettings?.modelSelectorMode === "harness"
 								? null
@@ -1241,6 +1261,8 @@ function WorkspaceSidebar({
 	onClose,
 	streamingConvoIds,
 	doneConvoIds,
+	pendingEditWorkspaceId,
+	onPendingEditConsumed,
 }: {
 	workspaces: Array<{
 		_id: Id<"workspaces">;
@@ -1279,6 +1301,8 @@ function WorkspaceSidebar({
 	onClose: () => void;
 	streamingConvoIds: Set<string>;
 	doneConvoIds: Set<string>;
+	pendingEditWorkspaceId?: Id<"workspaces"> | null;
+	onPendingEditConsumed?: () => void;
 }) {
 	const removeConvo = useMutation({
 		mutationFn: useConvexMutation(api.conversations.remove),
@@ -1446,6 +1470,16 @@ function WorkspaceSidebar({
 		setRenameWorkspaceColor(workspace.color ?? null);
 		setConfirmDeleteWorkspace(false);
 	};
+
+	// Open the edit dialog when an external trigger (e.g. the empty-state
+	// "Attach a harness" CTA) requests it for a specific workspace.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: only react to id changes
+	useEffect(() => {
+		if (!pendingEditWorkspaceId) return;
+		const workspace = workspaces.find((w) => w._id === pendingEditWorkspaceId);
+		if (workspace) startRenameWorkspace(workspace);
+		onPendingEditConsumed?.();
+	}, [pendingEditWorkspaceId]);
 
 	const saveWorkspaceName = () => {
 		if (!renameWorkspace) return;
@@ -3698,6 +3732,41 @@ function EmptyWorkspaceState() {
 	);
 }
 
+function NoHarnessAttachedState({
+	workspaceName,
+	onAttachHarness,
+}: {
+	workspaceName: string;
+	onAttachHarness: () => void;
+}) {
+	return (
+		<div className="flex flex-1 flex-col items-center justify-center px-4">
+			<motion.div
+				initial={{ opacity: 0, y: 12 }}
+				animate={{ opacity: 1, y: 0 }}
+				transition={{ duration: 0.4 }}
+				className="max-w-sm text-center"
+			>
+				<div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center bg-foreground">
+					<Wrench size={24} className="text-background" />
+				</div>
+				<h2 className="mb-2 text-lg font-medium text-foreground">
+					No harness attached
+				</h2>
+				<p className="mb-6 text-sm text-muted-foreground">
+					<span className="font-medium text-foreground">{workspaceName}</span>{" "}
+					doesn't have a harness yet. Attach one to choose the model, MCP
+					servers, and skills your agent uses in this workspace.
+				</p>
+				<Button onClick={onAttachHarness} className="gap-2">
+					<Wrench size={14} />
+					Attach a harness
+				</Button>
+			</motion.div>
+		</div>
+	);
+}
+
 function ChatInput({
 	conversationId,
 	activeHarness,
@@ -3719,6 +3788,8 @@ function ChatInput({
 	pendingPrompt,
 	onPendingPromptConsumed,
 	budgetExceeded,
+	disabled = false,
+	placeholder = "Send a message...",
 }: {
 	conversationId: Id<"conversations"> | null;
 	activeHarness?: {
@@ -3797,6 +3868,8 @@ function ChatInput({
 	onSessionModelChange: (model: string | null) => void;
 	onPendingPromptConsumed?: () => void;
 	budgetExceeded?: boolean;
+	disabled?: boolean;
+	placeholder?: string;
 }) {
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -4263,9 +4336,10 @@ function ChatInput({
 						}}
 						onKeyDown={handleKeyDown}
 						onPaste={handlePaste}
-						placeholder="Send a message..."
+						placeholder={placeholder}
 						rows={1}
-						className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+						disabled={disabled}
+						className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
 					/>
 					{activeHarness && (
 						<DropdownMenu>
@@ -4340,7 +4414,8 @@ function ChatInput({
 								}}
 								disabled={
 									!showStopButton &&
-									(budgetExceeded ||
+									(disabled ||
+										budgetExceeded ||
 										!text.trim() ||
 										hasUploading ||
 										sendMessage.isPending ||
