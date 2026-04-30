@@ -5,7 +5,6 @@ import {
 	Check,
 	FolderTree,
 	GitBranch,
-	GraduationCap,
 	Layers,
 	Menu,
 	Plug,
@@ -41,7 +40,7 @@ export const Route = createFileRoute("/")({
 			{
 				name: "description",
 				content:
-					"Bundle your model, MCP servers, skills, and a live sandbox into a harness. Switch from coding to research to coursework in one click.",
+					"Bundle your model, MCP servers, skills, and a live sandbox into a harness. Switch from coding to research to ops in one click.",
 			},
 		],
 	}),
@@ -51,7 +50,7 @@ export const Route = createFileRoute("/")({
 
 const rotatingWords = [
 	"code review",
-	"course planning",
+	"issue triage",
 	"deep research",
 	"weekly notes",
 ];
@@ -67,7 +66,7 @@ const primaryFeatures = [
 		icon: Plug,
 		title: "Plug in any tool",
 		description:
-			"Twelve MCPs in the catalog — GitHub, Notion, Linear, Slack, Jira, plus four built for Princeton students. OAuth handled. Custom URLs welcome.",
+			"A growing catalog — GitHub, Notion, Linear, Slack, Jira, Exa, Context7, and more. OAuth handled. Custom MCP URLs welcome.",
 	},
 	{
 		icon: TerminalSquare,
@@ -392,10 +391,10 @@ function MockMcpPopover() {
 				{[
 					{ name: "GitHub", status: "Connected", badge: "OAuth", oauth: true },
 					{
-						name: "TigerJunction",
+						name: "Linear",
 						status: "Connected",
-						badge: "Princeton",
-						princeton: true,
+						badge: "OAuth",
+						oauth: true,
 					},
 					{
 						name: "Context7",
@@ -419,7 +418,6 @@ function MockMcpPopover() {
 						</div>
 						{s.badge && (
 							<span className="flex shrink-0 items-center gap-0.5 bg-black/[0.05] px-1.5 py-0.5 text-[9px] text-black/65">
-								{s.princeton && <GraduationCap size={8} />}
 								{s.oauth && (
 									<span className="h-1 w-1 rounded-full bg-emerald-500" />
 								)}
@@ -442,8 +440,8 @@ function MockSlashPalette() {
 		{ name: "notion_create_page", desc: "Create a page in a database" },
 		{ name: "linear_create_issue", desc: "Open an issue in your team" },
 		{
-			name: "tigerjunction_search_courses",
-			desc: "Find Princeton courses by name",
+			name: "slack_send_message",
+			desc: "Post to a channel or thread",
 		},
 		{ name: "exa_search", desc: "Semantic web search" },
 	];
@@ -789,7 +787,7 @@ function HeroSection() {
 							</span>
 							<span className="flex items-center gap-1.5">
 								<Check size={12} className="text-emerald-600" />
-								Princeton-ready
+								Live sandbox built in
 							</span>
 						</motion.div>
 					</div>
