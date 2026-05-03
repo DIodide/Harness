@@ -764,13 +764,6 @@ def _get_preregistered_client(
             client_id=settings.github_oauth_client_id,
             client_secret=settings.github_oauth_client_secret or None,
         )
-    # Slack OAuth
-    if "slack.com" in issuer and settings.slack_oauth_client_id:
-        return RegisteredClient(
-            client_id=settings.slack_oauth_client_id,
-            client_secret=settings.slack_oauth_client_secret or None,
-        )
-  
     return None
 
 

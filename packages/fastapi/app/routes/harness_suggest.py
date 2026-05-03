@@ -31,10 +31,6 @@ _PRESET_MCP_CATALOG: list[dict] = [
      "description": "Read and write pages, databases, and blocks in your workspace."},
     {"id": "linear", "name": "Linear", "auth": "oauth",
      "description": "Create and track issues, manage projects, and streamline engineering workflows."},
-    {"id": "slack", "name": "Slack", "auth": "oauth",
-     "description": "Send messages, read channel history, and search conversations."},
-    {"id": "jira", "name": "Jira", "auth": "oauth",
-     "description": "Create tickets, track sprints, and manage Agile releases."},
     {"id": "awsknowledge", "name": "AWS Knowledge", "auth": "none",
      "description": "Search AWS documentation and knowledge bases for services and best practices."},
     {"id": "exa", "name": "Exa", "auth": "none",
@@ -343,7 +339,7 @@ Batch multiple unknowns into a single message rather than asking one-by-one.
 Users often describe their goal at a high level rather than listing specific tools.
 Read intent carefully:
 
-- "Help me stay on top of my projects" → likely wants Linear or Jira + Notion
+- "Help me stay on top of my projects" → likely wants Linear + Notion
 - "I want to write better code" → likely wants code-review skills
 - "Research assistant for my thesis" → Exa for web search
 - "Automate my workflow" → depends heavily on which workflow; ask one question
@@ -446,7 +442,7 @@ an option and let them decide.
   - Exa: semantic web search, finding recent papers or articles
   - AWS Knowledge: infrastructure and cloud architecture questions
   - Context7: framework documentation lookups
-  - Avoid adding productivity MCPs (Notion, Jira) unless explicitly requested
+  - Avoid adding productivity MCPs (Notion) unless explicitly requested
 
 **Princeton student workflows:**
   - Princeton Courses: searching for courses, reading evaluations
@@ -459,17 +455,13 @@ an option and let them decide.
 **Project and team management:**
   - Notion: personal knowledge bases, project wikis, meeting notes
   - Linear: software project tracking
-  - Jira: larger team or enterprise project tracking
-  - Slack: message search and channel monitoring
-  - Don't combine Jira and Linear — they serve the same purpose
 
 **MCP compatibility notes:**
-  - Jira and Linear overlap — recommend one, not both
   - Princeton MCPs (princetoncourses, tigerjunction, tigersnatch, tigerpath)
     all require the same tiger_junction auth — bundling them adds no extra
     sign-in friction
   - Exa and AWS Knowledge are auth-free — safe to add without user friction
-  - OAuth MCPs (GitHub, Notion, Linear, Slack, Jira) each require a separate
+  - OAuth MCPs (GitHub, Notion, Linear) each require a separate
     sign-in after creation; avoid bundling too many if the user seems unfamiliar
     with OAuth flows
 
@@ -515,8 +507,6 @@ more OAuth permissions to the model, and clutters the tool list. A focused
 harness with 1–2 MCPs outperforms a cluttered one with 6.
 
 **Sensitive MCPs:**
-- Slack can read private channel history — only suggest it if the user
-  explicitly needs message search or monitoring
 - GitHub with write access can push code — flag this if the user seems
   unaware of the scope
 - Notion can modify all pages in a workspace — mention this if the user
@@ -564,7 +554,6 @@ Before outputting the final config, verify:
 - [ ] All mcpIds are exact IDs from the catalog
 - [ ] All skillIds are exact IDs from the provided skills list (if any)
 - [ ] The harness name is 2–4 words and describes the use case clearly
-- [ ] No conflicting MCPs are included (e.g. both Jira and Linear)
 - [ ] OAuth MCPs are only included if the user is likely willing to sign in
 
 ---

@@ -66,7 +66,7 @@ const primaryFeatures = [
 		icon: Plug,
 		title: "Plug in any tool",
 		description:
-			"A growing catalog — GitHub, Notion, Linear, Slack, Jira, Exa, Context7, and more. OAuth handled. Custom MCP URLs welcome.",
+			"A growing catalog — GitHub, Notion, Linear, Exa, Context7, and more. OAuth handled. Custom MCP URLs welcome.",
 	},
 	{
 		icon: TerminalSquare,
@@ -439,10 +439,6 @@ function MockSlashPalette() {
 		{ name: "github_search_repositories", desc: "Search public + your repos" },
 		{ name: "notion_create_page", desc: "Create a page in a database" },
 		{ name: "linear_create_issue", desc: "Open an issue in your team" },
-		{
-			name: "slack_send_message",
-			desc: "Post to a channel or thread",
-		},
 		{ name: "exa_search", desc: "Semantic web search" },
 	];
 	return (
