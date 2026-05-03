@@ -2,11 +2,13 @@ import logging
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.routes import chat, commands, harness_suggest, health, mcp_health, mcp_oauth, sandbox, terminal
+from app.services.daytona_service import SandboxStoppedByUserError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,6 +65,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(SandboxStoppedByUserError)
+async def _sandbox_stopped_handler(_: Request, exc: SandboxStoppedByUserError) -> JSONResponse:
+    """Translate user-stopped intent into a 409 with a stable error code so
+    the browser panel can render a friendly empty state instead of a 500.
+    """
+    return JSONResponse(
+        status_code=409,
+        content={
+            "code": "sandbox_stopped_by_user",
+            "message": str(exc),
+            "sandbox_status": exc.status,
+        },
+    )
+
 
 app.include_router(health.router)
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])

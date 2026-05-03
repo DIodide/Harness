@@ -11,7 +11,7 @@ import json
 import logging
 import traceback
 
-from app.services.daytona_service import DaytonaService
+from app.services.daytona_service import DaytonaService, SandboxStoppedByUserError
 
 logger = logging.getLogger(__name__)
 
@@ -661,6 +661,20 @@ def execute_sandbox_tool(
         else:
             return json.dumps({"type": "error", "message": f"Unknown sandbox tool: {tool_name}"})
 
+    except SandboxStoppedByUserError as e:
+        # User explicitly stopped/archived via the dashboard. Surface the
+        # intent to the agent without a stack trace so it doesn't think the
+        # sandbox is broken.
+        logger.info(
+            "Sandbox tool '%s' refused: user-stopped sandbox '%s'",
+            tool_name, sandbox_id,
+        )
+        return json.dumps({
+            "type": "error",
+            "code": "sandbox_stopped_by_user",
+            "message": str(e),
+            "sandbox_status": e.status,
+        })
     except Exception as e:
         logger.error("Sandbox tool '%s' failed: %s\n%s", tool_name, e, traceback.format_exc())
         return json.dumps({
