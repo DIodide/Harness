@@ -44,18 +44,39 @@ function getDaytona(): Daytona {
 }
 
 function getConvexDeployKey(): string {
-	if (!env.CONVEX_DEPLOY_KEY) {
+	// Read the admin credential directly from process.env rather than through
+	// the shared `env` object. `env.ts` is imported by client code, and any
+	// reference there to `process.env.CONVEX_DEPLOY_KEY` would be inlined by
+	// Vite's `define` into the client bundle. This function is only ever
+	// called from `.handler()` bodies, which TanStack Start strips from the
+	// client build, so the key stays server-side.
+	const key = process.env.CONVEX_DEPLOY_KEY;
+	if (!key) {
 		throw new Error(
 			"CONVEX_DEPLOY_KEY is not configured. Set it in apps/web/.env.local " +
 				"to enable browser-initiated sandbox lifecycle ops.",
 		);
 	}
-	return env.CONVEX_DEPLOY_KEY;
+	return key;
 }
+
+// Allowlist of Convex function paths used by this module. Centralizing them
+// as string literals lets TypeScript catch typos (e.g. "updateStatu") at
+// compile time — a free-form string would silently 404 at runtime and leave
+// the cached status stale.
+const ConvexFns = {
+	getOwnerByDaytonaId: "sandboxes:getOwnerByDaytonaId",
+	listForReconcile: "sandboxes:listForReconcile",
+	updateStatus: "sandboxes:updateStatus",
+	removeByDaytonaIdInternal: "sandboxes:removeByDaytonaIdInternal",
+	updateMetadataInternal: "sandboxes:updateMetadataInternal",
+} as const;
+
+type ConvexFnPath = (typeof ConvexFns)[keyof typeof ConvexFns];
 
 async function callConvex(
 	kind: "query" | "mutation",
-	path: string,
+	path: ConvexFnPath,
 	args: Record<string, unknown>,
 ): Promise<unknown> {
 	const url = env.VITE_CONVEX_URL.replace(/\/$/, "");
@@ -78,7 +99,7 @@ async function callConvex(
 async function assertOwner(daytonaSandboxId: string): Promise<string> {
 	const { userId } = await auth();
 	if (!userId) throw new Error("Unauthorized");
-	const ownerId = await callConvex("query", "sandboxes:getOwnerByDaytonaId", {
+	const ownerId = await callConvex("query", ConvexFns.getOwnerByDaytonaId, {
 		daytonaSandboxId,
 	});
 	if (ownerId !== userId) throw new Error("Forbidden");
@@ -95,10 +116,12 @@ async function setStatus(
 		status,
 	};
 	if (errorMessage !== undefined) args.errorMessage = errorMessage;
-	await callConvex("mutation", "sandboxes:updateStatus", args);
+	await callConvex("mutation", ConvexFns.updateStatus, args);
 }
 
-// Daytona statuses → our Convex enum
+// Daytona's full SandboxState enum (from `@daytona/api-client`) → our Convex
+// enum. Every state Daytona's API can return is covered explicitly so a status
+// the dashboard knows nothing about doesn't get classified as "error".
 const DAYTONA_STATUS_MAP: Record<string, ConvexStatus> = {
 	started: "running",
 	running: "running",
@@ -106,18 +129,34 @@ const DAYTONA_STATUS_MAP: Record<string, ConvexStatus> = {
 	stopping: "stopping",
 	stopped: "stopped",
 	archived: "archived",
+	archiving: "stopping",
 	creating: "creating",
+	pending_build: "creating",
+	building_snapshot: "creating",
+	pulling_snapshot: "starting",
+	restoring: "starting",
+	resizing: "starting",
+	snapshotting: "running",
+	forking: "creating",
+	destroying: "stopping",
 	destroyed: "archived",
 	error: "error",
+	build_failed: "error",
 };
 
-function normalizeDaytonaStatus(raw: unknown): ConvexStatus {
-	if (raw == null) return "error";
+/**
+ * Normalize a raw Daytona state value (string or enum-like `{ value }` object)
+ * into a Convex status. Returns `null` for genuinely unknown values — callers
+ * should skip the write in that case, since defaulting to "error" would
+ * mis-classify any new state Daytona adds in the future.
+ */
+function normalizeDaytonaStatus(raw: unknown): ConvexStatus | null {
+	if (raw == null) return null;
 	const value =
 		typeof raw === "object" && raw !== null && "value" in raw
 			? String((raw as { value: unknown }).value)
 			: String(raw);
-	return DAYTONA_STATUS_MAP[value.toLowerCase()] ?? "error";
+	return DAYTONA_STATUS_MAP[value.toLowerCase()] ?? null;
 }
 
 /**
@@ -156,6 +195,10 @@ export const startSandbox = createServerFn({ method: "POST" })
 		try {
 			const sandbox = await getDaytona().get(data.sandboxId);
 			await sandbox.start();
+			// Inside the try so a Convex write blip on the success path doesn't
+			// leave the row stuck on "starting" — the catch below will record
+			// "error" and the user can retry or sync.
+			await setStatus(data.sandboxId, "running");
 		} catch (e) {
 			console.error("[startSandbox] error from Daytona:", e);
 			if (isDaytonaNotFoundError(e)) {
@@ -171,7 +214,6 @@ export const startSandbox = createServerFn({ method: "POST" })
 			await setStatus(data.sandboxId, "error", msg);
 			throw new Error(`Failed to start sandbox: ${msg}`);
 		}
-		await setStatus(data.sandboxId, "running");
 		return { success: true, status: "running" };
 	});
 
@@ -183,6 +225,7 @@ export const stopSandbox = createServerFn({ method: "POST" })
 		try {
 			const sandbox = await getDaytona().get(data.sandboxId);
 			await sandbox.stop();
+			await setStatus(data.sandboxId, "stopped");
 		} catch (e) {
 			if (isDaytonaNotFoundError(e)) {
 				// Already gone on Daytona's side — stopped is the desired state.
@@ -193,7 +236,6 @@ export const stopSandbox = createServerFn({ method: "POST" })
 			await setStatus(data.sandboxId, "error", msg);
 			throw new Error(`Failed to stop sandbox: ${msg}`);
 		}
-		await setStatus(data.sandboxId, "stopped");
 		return { success: true, status: "stopped" };
 	});
 
@@ -206,15 +248,18 @@ export const archiveSandbox = createServerFn({ method: "POST" })
 			const daytona = getDaytona();
 			const sandbox = await daytona.get(data.sandboxId);
 			const status = normalizeDaytonaStatus(
-				(sandbox as { state?: unknown; status?: unknown }).state ??
-					(sandbox as { status?: unknown }).status,
+				(sandbox as { state?: unknown }).state,
 			);
+			// If status is null we can't tell what state Daytona is in — try
+			// stop+archive defensively; Daytona's API will reject the call if
+			// it's a no-op for the actual state.
 			if (status !== "stopped" && status !== "archived") {
 				await sandbox.stop();
 			}
 			if (status !== "archived") {
 				await sandbox.archive();
 			}
+			await setStatus(data.sandboxId, "archived");
 		} catch (e) {
 			if (isDaytonaNotFoundError(e)) {
 				// Daytona-side sandbox is already gone; mark Convex archived
@@ -227,7 +272,6 @@ export const archiveSandbox = createServerFn({ method: "POST" })
 			await setStatus(data.sandboxId, "error", msg);
 			throw new Error(`Failed to archive sandbox: ${msg}`);
 		}
-		await setStatus(data.sandboxId, "archived");
 		return { success: true, status: "archived" };
 	});
 
@@ -247,7 +291,7 @@ export const deleteSandbox = createServerFn({ method: "POST" })
 			// Daytona-side already gone — fall through to Convex cleanup,
 			// since "deleted" is the desired end state regardless.
 		}
-		await callConvex("mutation", "sandboxes:removeByDaytonaIdInternal", {
+		await callConvex("mutation", ConvexFns.removeByDaytonaIdInternal, {
 			daytonaSandboxId: data.sandboxId,
 		});
 		return { success: true };
@@ -270,7 +314,7 @@ export const updateSandboxMetadata = createServerFn({ method: "POST" })
 				// update fails, the Convex rename below still lands.
 				console.warn("Failed to mirror name to Daytona label:", e);
 			}
-			await callConvex("mutation", "sandboxes:updateMetadataInternal", {
+			await callConvex("mutation", ConvexFns.updateMetadataInternal, {
 				daytonaSandboxId: data.sandboxId,
 				name: data.name,
 			});
@@ -285,9 +329,16 @@ export const syncSandbox = createServerFn({ method: "POST" })
 		try {
 			const sandbox = await getDaytona().get(data.sandboxId);
 			const status = normalizeDaytonaStatus(
-				(sandbox as { state?: unknown; status?: unknown }).state ??
-					(sandbox as { status?: unknown }).status,
+				(sandbox as { state?: unknown }).state,
 			);
+			if (status === null) {
+				// Daytona returned a state the dashboard doesn't recognize.
+				// Don't overwrite Convex with a guess — surface it.
+				const raw = (sandbox as { state?: unknown }).state;
+				throw new Error(
+					`Daytona returned an unrecognized state for sync: ${String(raw)}`,
+				);
+			}
 			await setStatus(data.sandboxId, status);
 			return { success: true, status };
 		} catch (e) {
@@ -300,4 +351,81 @@ export const syncSandbox = createServerFn({ method: "POST" })
 			}
 			throw e;
 		}
+	});
+
+export interface ReconcileResult {
+	checked: number;
+	updated: number;
+	errors: number;
+}
+
+/**
+ * Reconcile every Convex sandbox status for the calling user against
+ * Daytona's true state. Called from the `/sandboxes` route on mount so the
+ * dashboard reflects out-of-band drift — Daytona's 15-minute idle auto-stop,
+ * LRU evictions (which deliberately don't write Convex), and any Daytona
+ * admin-side changes. Transient states (`creating`, `starting`, `stopping`)
+ * are skipped to avoid racing in-flight ops.
+ */
+export const reconcileSandboxStatuses = createServerFn({ method: "POST" })
+	.handler(async (): Promise<ReconcileResult> => {
+		const { userId } = await auth();
+		if (!userId) throw new Error("Unauthorized");
+
+		const sandboxes = (await callConvex(
+			"query",
+			ConvexFns.listForReconcile,
+			{ userId },
+		)) as Array<{ daytonaSandboxId: string; status: ConvexStatus }>;
+
+		let updated = 0;
+		let errors = 0;
+		const daytona = getDaytona();
+
+		await Promise.all(
+			sandboxes.map(async (s) => {
+				if (
+					s.status === "creating" ||
+					s.status === "starting" ||
+					s.status === "stopping"
+				) {
+					return;
+				}
+				try {
+					const sandbox = await daytona.get(s.daytonaSandboxId);
+					const trueStatus = normalizeDaytonaStatus(
+						(sandbox as { state?: unknown }).state,
+					);
+					if (trueStatus === null) {
+						// Daytona returned a state the dashboard doesn't recognize.
+						// Skip the write — keeping the last-known Convex status is
+						// safer than guessing "error".
+						console.warn(
+							`[reconcileSandboxStatuses] unmapped Daytona state for ${s.daytonaSandboxId}:`,
+							(sandbox as { state?: unknown }).state,
+						);
+						return;
+					}
+					if (trueStatus !== s.status) {
+						await setStatus(s.daytonaSandboxId, trueStatus);
+						updated++;
+					}
+				} catch (e) {
+					if (isDaytonaNotFoundError(e)) {
+						if (s.status !== "archived") {
+							await setStatus(s.daytonaSandboxId, "archived");
+							updated++;
+						}
+						return;
+					}
+					errors++;
+					console.error(
+						`[reconcileSandboxStatuses] failed for ${s.daytonaSandboxId}:`,
+						e,
+					);
+				}
+			}),
+		);
+
+		return { checked: sandboxes.length, updated, errors };
 	});

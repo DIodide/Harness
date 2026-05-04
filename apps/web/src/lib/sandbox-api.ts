@@ -2,6 +2,7 @@ import { env } from "../env";
 import {
 	archiveSandbox as archiveSandboxFn,
 	deleteSandbox as deleteSandboxFn,
+	reconcileSandboxStatuses as reconcileSandboxStatusesFn,
 	startSandbox as startSandboxFn,
 	stopSandbox as stopSandboxFn,
 	syncSandbox as syncSandboxFn,
@@ -153,6 +154,13 @@ export function createSandboxApi(getToken: () => Promise<string | null>) {
 
 		syncSandbox(sandboxId: string) {
 			return syncSandboxFn({ data: { sandboxId } });
+		},
+
+		// Reconciles every sandbox the caller owns against Daytona truth in
+		// one round-trip. Called on dashboard mount to catch drift caused by
+		// Daytona's idle auto-stop, LRU evictions, and admin actions.
+		reconcileSandboxStatuses() {
+			return reconcileSandboxStatusesFn();
 		},
 
 		listFiles(sandboxId: string, path = "/home/daytona") {

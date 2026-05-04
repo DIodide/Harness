@@ -271,47 +271,6 @@ def touch_sandbox_sync(daytona_sandbox_id: str) -> None:
         )
 
 
-def read_sandbox_intent_sync(daytona_sandbox_id: str) -> str | None:
-    """Synchronously read the user-recorded sandbox status from Convex.
-
-    Used by `_ensure_running` to honor user intent: if the user explicitly
-    stopped or archived a sandbox via the dashboard, FastAPI must not
-    silently re-launch it on the next agent tool call.
-
-    Architectural note: FastAPI **never writes** Convex sandbox state. That
-    layer is owned by the TanStack Start backend (browser CRUD). FastAPI
-    only *reads* it here to respect user-set intent.
-
-    Returns the Convex status string ("running" | "stopped" | ...), or None
-    if the record cannot be read (network error, missing record, missing
-    config). Callers should treat None as "no recorded intent" and proceed
-    as if the user has not stopped the sandbox.
-    """
-    if not settings.convex_url or not settings.convex_deploy_key:
-        return None
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            resp = client.post(
-                f"{settings.convex_url}/api/query",
-                headers={
-                    "Authorization": f"Convex {settings.convex_deploy_key}",
-                },
-                json={
-                    "path": "sandboxes:getStatusByDaytonaId",
-                    "args": {"daytonaSandboxId": daytona_sandbox_id},
-                    "format": "json",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            value = data.get("value")
-            return value if isinstance(value, str) else None
-    except Exception:
-        logger.exception(
-            "Failed to read sandbox intent from Convex for '%s'",
-            daytona_sandbox_id,
-        )
-        return None
 
 
 async def create_sandbox_record(

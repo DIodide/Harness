@@ -12,18 +12,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 from daytona_sdk.common.errors import DaytonaError
 
-from app.services.daytona_service import (
-    DaytonaService,
-    SandboxStoppedByUserError,
-)
+from app.services.daytona_service import DaytonaService
 
 
-def _make_sandbox_obj(status: str) -> MagicMock:
-    """Build a fake Daytona Sandbox object with a `.status.value` like the SDK."""
+def _make_sandbox_obj(state: str) -> MagicMock:
+    """Build a fake Daytona Sandbox object with a `.state.value` like the SDK."""
     sb = MagicMock()
-    status_obj = MagicMock()
-    status_obj.value = status
-    sb.status = status_obj
+    state_obj = MagicMock()
+    state_obj.value = state
+    sb.state = state_obj
     return sb
 
 
@@ -39,75 +36,71 @@ def service() -> DaytonaService:
 @pytest.mark.parametrize(
     "err,expected",
     [
+        # 402/429 unconditionally indicate quota/concurrency exhaustion.
         (DaytonaError("started-sandbox limit exceeded", 402), True),
         (DaytonaError("Rate limited", 429), True),
-        (DaytonaError("Concurrent sandbox limit reached", 400), True),
-        (DaytonaError("Too many active sandboxes", 400), True),
-        (DaytonaError("Quota exceeded", 400), True),
+        (DaytonaError("Concurrent sandbox limit reached", 429), True),
+        # 403 + a quota-keyword message (Daytona uses 403 for plan limits).
+        (DaytonaError("Quota exceeded", 403), True),
+        (DaytonaError("Concurrent sandbox limit reached", 403), True),
+        # Unrelated errors must NOT trigger eviction.
         (DaytonaError("Sandbox not found", 404), False),
         (DaytonaError("Internal server error", 500), False),
         (DaytonaError("Bad request: malformed payload", 400), False),
+        # 400s whose message *contains* a quota keyword must still be ignored —
+        # this is the false-positive we tightened the heuristic against.
+        (DaytonaError("Limit exceeded on payload size", 400), False),
+        (DaytonaError("Too many query parameters", 400), False),
+        # 403 without a quota keyword is a regular auth error, not a limit.
+        (DaytonaError("Forbidden", 403), False),
     ],
 )
 def test_is_started_limit_error_heuristic(err: DaytonaError, expected: bool):
-    """The heuristic should catch limit/quota errors via status_code or message,
-    and ignore unrelated errors like 404/500."""
+    """The heuristic catches 402/429 unconditionally, 403 only with a quota
+    keyword, and rejects unrelated errors — including 400s whose message
+    happens to contain a quota-related word."""
     assert DaytonaService._is_started_limit_error(err) is expected
 
 
-# ── _ensure_running honors user intent ────────────────────────────────────
+# ── _ensure_running auto-starts non-running sandboxes ────────────────────
 
 
-def test_ensure_running_blocks_when_user_stopped(service: DaytonaService):
-    """If Daytona says stopped AND Convex says user-stopped, raise the
-    intent error and do not auto-start."""
+def test_ensure_running_auto_starts_when_stopped(service: DaytonaService):
+    """If Daytona says stopped, `_ensure_running` should auto-start. With no
+    intent gate, this fires unconditionally — Daytona's idle auto-stop and
+    LRU evictions are recovered transparently."""
     fake_client = MagicMock()
-    fake_client.get.return_value = _make_sandbox_obj("stopped")
-
-    with patch.object(service, "_get_client", return_value=fake_client), patch(
-        "app.services.convex.read_sandbox_intent_sync", return_value="stopped"
-    ), patch("app.services.convex.touch_sandbox_sync"):
-        with pytest.raises(SandboxStoppedByUserError) as exc:
-            service._ensure_running("sb-1")
-
-    assert exc.value.status == "stopped"
-    assert exc.value.sandbox_id == "sb-1"
-    fake_client.start.assert_not_called()
-
-
-def test_ensure_running_blocks_when_archived(service: DaytonaService):
-    """Archive intent should also block auto-start."""
-    fake_client = MagicMock()
-    fake_client.get.return_value = _make_sandbox_obj("stopped")
-
-    with patch.object(service, "_get_client", return_value=fake_client), patch(
-        "app.services.convex.read_sandbox_intent_sync", return_value="archived"
-    ), patch("app.services.convex.touch_sandbox_sync"):
-        with pytest.raises(SandboxStoppedByUserError) as exc:
-            service._ensure_running("sb-1")
-
-    assert exc.value.status == "archived"
-    fake_client.start.assert_not_called()
-
-
-def test_ensure_running_auto_starts_when_idle_stopped(service: DaytonaService):
-    """If Daytona says stopped but Convex still says running (typical of
-    Daytona's own idle auto-stop), `_ensure_running` should auto-start."""
-    fake_client = MagicMock()
-    # First get() (status check) returns stopped; second get() (post-start) returns started.
+    # First get() returns stopped; second get() (post-start) returns started.
     fake_client.get.side_effect = [
         _make_sandbox_obj("stopped"),
         _make_sandbox_obj("started"),
     ]
 
     with patch.object(service, "_get_client", return_value=fake_client), patch(
-        "app.services.convex.read_sandbox_intent_sync", return_value="running"
-    ), patch("app.services.convex.touch_sandbox_sync") as touch_mock:
+        "app.services.convex.touch_sandbox_sync"
+    ) as touch_mock:
         result = service._ensure_running("sb-1")
 
     fake_client.start.assert_called_once()
     touch_mock.assert_called_once_with("sb-1")
     assert result is not None
+
+
+def test_ensure_running_auto_starts_when_archived(service: DaytonaService):
+    """Archived sandboxes should also auto-restore. Daytona's `start` is
+    idempotent for archived state — it triggers a restore."""
+    fake_client = MagicMock()
+    fake_client.get.side_effect = [
+        _make_sandbox_obj("archived"),
+        _make_sandbox_obj("started"),
+    ]
+
+    with patch.object(service, "_get_client", return_value=fake_client), patch(
+        "app.services.convex.touch_sandbox_sync"
+    ):
+        service._ensure_running("sb-1")
+
+    fake_client.start.assert_called_once()
 
 
 def test_ensure_running_no_op_when_already_started(service: DaytonaService):
@@ -116,16 +109,12 @@ def test_ensure_running_no_op_when_already_started(service: DaytonaService):
     fake_client.get.return_value = _make_sandbox_obj("started")
 
     with patch.object(service, "_get_client", return_value=fake_client), patch(
-        "app.services.convex.read_sandbox_intent_sync"
-    ) as intent_mock, patch(
         "app.services.convex.touch_sandbox_sync"
     ) as touch_mock:
         service._ensure_running("sb-1")
 
     fake_client.start.assert_not_called()
     touch_mock.assert_called_once_with("sb-1")
-    # Intent doesn't even need to be read when already started.
-    intent_mock.assert_not_called()
 
 
 def test_ensure_running_uses_cache(service: DaytonaService):
@@ -134,8 +123,8 @@ def test_ensure_running_uses_cache(service: DaytonaService):
     fake_client.get.return_value = _make_sandbox_obj("started")
 
     with patch.object(service, "_get_client", return_value=fake_client), patch(
-        "app.services.convex.read_sandbox_intent_sync", return_value="running"
-    ), patch("app.services.convex.touch_sandbox_sync"):
+        "app.services.convex.touch_sandbox_sync"
+    ):
         service._ensure_running("sb-1")
         service._ensure_running("sb-1")
 
@@ -172,7 +161,7 @@ def test_evict_lru_picks_oldest_started_sibling(service: DaytonaService):
     fake_client.stop.assert_called_once()
     # Should NOT have stopped "new-started" — that's not the LRU.
     stopped_arg = fake_client.stop.call_args[0][0]
-    assert stopped_arg.status.value == "started"
+    assert stopped_arg.state.value == "started"
 
 
 def test_evict_lru_returns_none_when_no_started_candidates(
@@ -212,7 +201,7 @@ def test_evict_lru_skips_failing_candidate_and_tries_next(
     }[sid]
 
     def stop_side_effect(sb):
-        if sb.status.value == "started" and not stop_side_effect.first_done:
+        if sb.state.value == "started" and not stop_side_effect.first_done:
             stop_side_effect.first_done = True
             raise DaytonaError("boom", 500)
 
@@ -352,8 +341,8 @@ def test_start_with_lru_retry_reraises_when_retry_also_fails(
 
 
 def test_ensure_running_evicts_and_retries(service: DaytonaService):
-    """Full path: agent calls a stopped sandbox, Convex says running, Daytona
-    rejects start with a limit error, LRU evicts a sibling, retry succeeds."""
+    """Full path: agent calls a stopped sandbox, Daytona rejects start with a
+    limit error, LRU evicts a sibling, retry succeeds."""
     fake_client = MagicMock()
     # get() sequence: initial status check (stopped), post-start (started).
     fake_client.get.side_effect = [
@@ -367,8 +356,8 @@ def test_ensure_running_evicts_and_retries(service: DaytonaService):
     ]
 
     with patch.object(service, "_get_client", return_value=fake_client), patch(
-        "app.services.convex.read_sandbox_intent_sync", return_value="running"
-    ), patch("app.services.convex.touch_sandbox_sync"), patch.object(
+        "app.services.convex.touch_sandbox_sync"
+    ), patch.object(
         service, "_evict_lru_for", return_value="victim"
     ) as evict_mock:
         result = service._ensure_running("sb-1")
@@ -376,26 +365,3 @@ def test_ensure_running_evicts_and_retries(service: DaytonaService):
     evict_mock.assert_called_once_with("sb-1")
     assert fake_client.start.call_count == 2
     assert result is not None
-
-
-def test_ensure_running_does_not_evict_for_user_stopped_sandbox(
-    service: DaytonaService,
-):
-    """User-stopped sandboxes should be blocked at the intent check, never
-    reach the LRU path. This is the architectural invariant."""
-    fake_client = MagicMock()
-    fake_client.get.return_value = _make_sandbox_obj("stopped")
-
-    with patch.object(service, "_get_client", return_value=fake_client), patch(
-        "app.services.convex.read_sandbox_intent_sync", return_value="stopped"
-    ), patch("app.services.convex.touch_sandbox_sync"), patch.object(
-        service, "_evict_lru_for"
-    ) as evict_mock, patch.object(
-        service, "_start_with_lru_retry"
-    ) as start_mock:
-        with pytest.raises(SandboxStoppedByUserError):
-            service._ensure_running("sb-1")
-
-    evict_mock.assert_not_called()
-    start_mock.assert_not_called()
-    fake_client.start.assert_not_called()

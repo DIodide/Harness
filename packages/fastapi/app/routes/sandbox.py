@@ -29,7 +29,6 @@ from app.services.convex import create_sandbox_record, verify_sandbox_owner
 from app.services.daytona_service import (
     RESOURCE_TIERS,
     DaytonaService,
-    SandboxStoppedByUserError,
     get_daytona_service,
 )
 

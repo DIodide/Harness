@@ -70,21 +70,6 @@ class GitStatus:
     files: list[dict]
 
 
-class SandboxStoppedByUserError(Exception):
-    """Raised by `_ensure_running` when the user has explicitly stopped or
-    archived a sandbox via the dashboard. The agent loop should surface this
-    to the chat instead of silently restarting the sandbox.
-    """
-
-    def __init__(self, sandbox_id: str, status: str):
-        self.sandbox_id = sandbox_id
-        self.status = status
-        super().__init__(
-            f"Sandbox is {status} (set by user via dashboard). "
-            "Start it from the sandboxes page to continue."
-        )
-
-
 class DaytonaService:
     """Manages Daytona sandbox lifecycle and operations."""
 
@@ -156,17 +141,12 @@ class DaytonaService:
         return client.get(sandbox_id)
 
     def _ensure_running(self, sandbox_id: str) -> Any:
-        """Get a sandbox, auto-starting it if stopped/archived.
+        """Get a sandbox, auto-starting it if not already started.
 
         Uses a short-lived TTL cache to avoid a Daytona API round-trip on
-        every filesystem/git/command operation.
-
-        Honors user intent recorded in Convex: if the user has explicitly
-        stopped or archived this sandbox via the dashboard, raises
-        `SandboxStoppedByUserError` instead of silently re-launching. This
-        is what makes the dashboard "Stop" button mean what users expect,
-        while still auto-recovering from Daytona's idle auto-stop (which
-        does not touch Convex, so the recorded status stays "running").
+        every filesystem/git/command operation. Daytona's `start` is
+        idempotent for archived sandboxes (it restores them), so this also
+        recovers transparently from idle auto-stop.
 
         Reactive LRU: if Daytona refuses to start the sandbox because the
         user is at the per-account started-sandbox limit, evicts the user's
@@ -178,37 +158,28 @@ class DaytonaService:
             if time.time() - ts < self._RUNNING_CACHE_TTL:
                 return sandbox
 
-        from app.services.convex import (
-            read_sandbox_intent_sync,
-            touch_sandbox_sync,
-        )
+        from app.services.convex import touch_sandbox_sync
 
         client = self._get_client()
         sandbox = client.get(sandbox_id)
-        raw = getattr(sandbox, "status", None)
-        status = (raw.value if hasattr(raw, "value") else str(raw)).lower()
+        # The Daytona SDK exposes the sandbox state as `.state` (a
+        # SandboxState enum), not `.status`.
+        raw = getattr(sandbox, "state", None)
+        state = (raw.value if hasattr(raw, "value") else str(raw)).lower()
         logger.info(
-            "Sandbox '%s' status: %s (raw: %r)", sandbox_id, status, raw,
+            "Sandbox '%s' state: %s (raw: %r)", sandbox_id, state, raw,
         )
-        if status not in ("started",):
-            intent = read_sandbox_intent_sync(sandbox_id)
-            if intent in ("stopped", "stopping", "archived"):
-                logger.info(
-                    "Sandbox '%s' is %s and Convex intent is '%s' — refusing auto-start",
-                    sandbox_id, status, intent,
-                )
-                raise SandboxStoppedByUserError(sandbox_id, intent)
+        if state not in ("started",):
             logger.info(
-                "Sandbox '%s' is %s — auto-starting (Convex intent: %s)",
-                sandbox_id, status, intent,
+                "Sandbox '%s' is %s — auto-starting", sandbox_id, state,
             )
             sandbox = self._start_with_lru_retry(client, sandbox, sandbox_id)
-            new_raw = getattr(sandbox, "status", None)
-            new_status = (
+            new_raw = getattr(sandbox, "state", None)
+            new_state = (
                 new_raw.value if hasattr(new_raw, "value") else str(new_raw)
             ).lower()
             logger.info(
-                "Auto-started sandbox '%s', now %s", sandbox_id, new_status,
+                "Auto-started sandbox '%s', now %s", sandbox_id, new_state,
             )
 
         # Bump the LRU clock on every cache miss — both for already-running
@@ -252,17 +223,23 @@ class DaytonaService:
 
     @staticmethod
     def _is_started_limit_error(err: DaytonaError) -> bool:
-        """Heuristic: treat 402/429 or limit/quota-keyword errors as
-        "started-sandbox concurrency limit reached." Daytona does not
-        currently expose a dedicated error subclass for this case.
+        """Heuristic: treat 402/429 as a started-sandbox concurrency limit
+        unconditionally. For 403 ("forbidden", which Daytona uses for
+        plan/quota enforcement), additionally require a quota-related
+        keyword in the message body. Other status codes — especially 400s
+        with messages like "Too many query parameters" or "Limit exceeded
+        on payload size" — are not treated as concurrency limits, so they
+        will not trigger an LRU eviction of an unrelated sandbox.
         """
         if err.status_code in (402, 429):
             return True
-        msg = str(err).lower()
-        return any(
-            kw in msg
-            for kw in ("limit", "quota", "exceeded", "too many", "concurrent")
-        )
+        if err.status_code == 403:
+            msg = str(err).lower()
+            return any(
+                kw in msg
+                for kw in ("limit", "quota", "exceeded", "concurrent")
+            )
+        return False
 
     def _evict_lru_for(self, target_sandbox_id: str) -> str | None:
         """Stop the user's least-recently-used currently-started sandbox to
@@ -284,11 +261,11 @@ class DaytonaService:
                 continue
             try:
                 sibling = client.get(cid)
-                raw = getattr(sibling, "status", None)
-                status = (
+                raw = getattr(sibling, "state", None)
+                state = (
                     raw.value if hasattr(raw, "value") else str(raw)
                 ).lower()
-                if status != "started":
+                if state != "started":
                     # Already not started in Daytona — wouldn't free a slot.
                     continue
                 client.stop(sibling)

@@ -25,10 +25,8 @@ import {
 	HardDrive,
 	Loader2,
 	MemoryStick,
-	Play,
 	RefreshCw,
 	Save,
-	Square,
 	Terminal,
 	Trash2,
 } from "lucide-react";
@@ -104,35 +102,19 @@ function SandboxDetailContent({ sandbox }: { sandbox: Sandbox }) {
 	const panel = useSandboxPanel();
 	const [name, setName] = useState(sandbox.name);
 	const [workingDir, setWorkingDir] = useState("/home/daytona");
-	const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
 	const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
 	const sandboxApi = useMemo(() => createSandboxApi(getToken), [getToken]);
 
+	// Start/stop/archive/sync are intentionally not exposed to users — the LRU
+	// + intent gating in the FastAPI service handles lifecycle automatically.
+	// The corresponding server functions still exist in `sandbox-server.ts` as
+	// an internal escape hatch.
 	const updateSandbox = useMutation({
 		mutationFn: (next: { name: string }) =>
 			sandboxApi.updateSandbox(sandbox.daytonaSandboxId, next),
 		onSuccess: () => toast.success("Sandbox saved"),
 		onError: () => toast.error("Failed to save sandbox"),
-	});
-	const lifecycle = useMutation({
-		mutationFn: (next: "start" | "stop") =>
-			next === "start"
-				? sandboxApi.startSandbox(sandbox.daytonaSandboxId)
-				: sandboxApi.stopSandbox(sandbox.daytonaSandboxId),
-		onSuccess: (_, next) =>
-			toast.success(next === "start" ? "Sandbox started" : "Sandbox stopped"),
-		onError: (_, next) => toast.error(`Failed to ${next} sandbox`),
-	});
-	const archive = useMutation({
-		mutationFn: () => sandboxApi.archiveSandbox(sandbox.daytonaSandboxId),
-		onSuccess: () => toast.success("Sandbox archived"),
-		onError: () => toast.error("Failed to archive sandbox"),
-	});
-	const sync = useMutation({
-		mutationFn: () => sandboxApi.syncSandbox(sandbox.daytonaSandboxId),
-		onSuccess: () => toast.success("Status synced from Daytona"),
-		onError: () => toast.error("Failed to sync sandbox"),
 	});
 	const remove = useMutation({
 		mutationFn: () => sandboxApi.deleteSandbox(sandbox.daytonaSandboxId),
@@ -144,13 +126,6 @@ function SandboxDetailContent({ sandbox }: { sandbox: Sandbox }) {
 	});
 
 	const hasNameChanges = name.trim() !== "" && name !== sandbox.name;
-	const isRunning = sandbox.status === "running";
-	const inTransition =
-		sandbox.status === "starting" ||
-		sandbox.status === "stopping" ||
-		sandbox.status === "creating";
-	const canArchive =
-		sandbox.status === "running" || sandbox.status === "stopped";
 
 	const openSandboxTool = (tab: SandboxTab) => {
 		panel?.setActiveTab(tab);
@@ -165,19 +140,6 @@ function SandboxDetailContent({ sandbox }: { sandbox: Sandbox }) {
 	const saveMetadata = () => {
 		if (!hasNameChanges) return;
 		updateSandbox.mutate({ name: name.trim() });
-	};
-
-	const handleToggleLifecycle = () => {
-		if (isRunning) {
-			setStopConfirmOpen(true);
-			return;
-		}
-		lifecycle.mutate("start");
-	};
-
-	const confirmStop = () => {
-		lifecycle.mutate("stop");
-		setStopConfirmOpen(false);
 	};
 
 	return (
@@ -203,52 +165,6 @@ function SandboxDetailContent({ sandbox }: { sandbox: Sandbox }) {
 						</div>
 					</div>
 					<div className="flex items-center gap-2">
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={() => sync.mutate()}
-							disabled={sync.isPending}
-							title="Re-read status from Daytona"
-						>
-							{sync.isPending ? (
-								<Loader2 size={14} className="animate-spin" />
-							) : (
-								<RefreshCw size={14} />
-							)}
-							Sync
-						</Button>
-						{!sandbox.ephemeral && (
-							<>
-								<Button
-									size="sm"
-									variant="outline"
-									onClick={() => archive.mutate()}
-									disabled={!canArchive || archive.isPending || inTransition}
-								>
-									{archive.isPending ? (
-										<Loader2 size={14} className="animate-spin" />
-									) : (
-										<Archive size={14} />
-									)}
-									Archive
-								</Button>
-								<Button
-									size="sm"
-									variant="outline"
-									onClick={handleToggleLifecycle}
-									disabled={lifecycle.isPending || inTransition}
-								>
-									{lifecycle.isPending ? (
-										<Loader2 size={14} className="animate-spin" />
-									) : isRunning ? (
-										<Square size={14} />
-									) : (
-										<Play size={14} />
-									)}
-									{isRunning ? "Stop" : "Start"}
-								</Button>
-							</>
-						)}
 						<Button
 							size="sm"
 							variant="outline"
@@ -394,30 +310,6 @@ function SandboxDetailContent({ sandbox }: { sandbox: Sandbox }) {
 			</main>
 
 			{panel?.panelOpen && <SandboxPanel />}
-
-			<Dialog open={stopConfirmOpen} onOpenChange={setStopConfirmOpen}>
-				<DialogContent>
-					<DialogHeader>
-						<DialogTitle>Stop sandbox?</DialogTitle>
-						<DialogDescription>
-							Any running commands will be terminated. Files, git state, and the
-							working tree are preserved — you can start the sandbox again
-							later.
-						</DialogDescription>
-					</DialogHeader>
-					<DialogFooter>
-						<DialogClose asChild>
-							<Button variant="outline" size="sm">
-								Cancel
-							</Button>
-						</DialogClose>
-						<Button size="sm" onClick={confirmStop}>
-							<Square size={12} />
-							Stop
-						</Button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
 
 			<Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
 				<DialogContent>

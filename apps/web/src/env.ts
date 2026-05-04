@@ -11,7 +11,10 @@ export const env = createEnv({
 		DAYTONA_API_KEY: z.string().min(1).optional(),
 		DAYTONA_API_URL: z.string().url().default("https://app.daytona.io/api"),
 		DAYTONA_TARGET: z.string().default("us"),
-		CONVEX_DEPLOY_KEY: z.string().min(1).optional(),
+		// CONVEX_DEPLOY_KEY is deliberately NOT declared here. It is an admin
+		// credential that must never be reachable through any module that the
+		// client bundle might import. It is read via `process.env` directly
+		// inside server-only handlers (see `lib/sandbox-server.ts`).
 	},
 
 	/**
@@ -40,7 +43,6 @@ export const env = createEnv({
 		DAYTONA_API_KEY: process.env.DAYTONA_API_KEY,
 		DAYTONA_API_URL: process.env.DAYTONA_API_URL,
 		DAYTONA_TARGET: process.env.DAYTONA_TARGET,
-		CONVEX_DEPLOY_KEY: process.env.CONVEX_DEPLOY_KEY,
 	},
 
 	/**

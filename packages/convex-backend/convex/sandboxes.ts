@@ -228,23 +228,24 @@ export const getOwnerByDaytonaId = internalQuery({
 });
 
 /**
- * Internal query used by FastAPI's `_ensure_running` to read user intent
- * before auto-starting a stopped sandbox. Convex represents what the user
- * has explicitly set; if they stopped/archived via the dashboard, the
- * inference path must honor that instead of silently re-launching.
+ * Internal query used by the dashboard reconcile path. Returns the
+ * (daytonaSandboxId, status) tuples for a user's sandboxes so the
+ * TanStack Start server function can compare each against Daytona's
+ * true state and write back any drift via `updateStatus`. The deploy
+ * key auth means the userId is trusted to come from the caller's Clerk
+ * session — the reconcile server function passes its own `auth()` userId.
  */
-export const getStatusByDaytonaId = internalQuery({
-	args: { daytonaSandboxId: v.string() },
+export const listForReconcile = internalQuery({
+	args: { userId: v.string() },
 	handler: async (ctx, args) => {
 		const sandboxes = await ctx.db
 			.query("sandboxes")
-			.withIndex("by_daytona_id", (q) =>
-				q.eq("daytonaSandboxId", args.daytonaSandboxId),
-			)
+			.withIndex("by_user", (q) => q.eq("userId", args.userId))
 			.collect();
-		const sandbox = sandboxes[0];
-		if (!sandbox) return null;
-		return sandbox.status;
+		return sandboxes.map((s) => ({
+			daytonaSandboxId: s.daytonaSandboxId,
+			status: s.status,
+		}));
 	},
 });
 
