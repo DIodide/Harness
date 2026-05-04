@@ -113,52 +113,10 @@ async def get_sandbox(
         raise HTTPException(status_code=404, detail="Sandbox not found")
 
 
-@router.delete("/{sandbox_id}")
-async def delete_sandbox(
-    sandbox_id: str,
-    user: dict = Depends(get_current_user),
-):
-    """Delete a sandbox."""
-    await _assert_sandbox_owner(sandbox_id, user)
-    service = _get_service()
-    try:
-        service.delete_sandbox(sandbox_id)
-        return {"success": True}
-    except Exception as e:
-        logger.error("Failed to delete sandbox '%s': %s", sandbox_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/{sandbox_id}/start")
-async def start_sandbox(
-    sandbox_id: str,
-    user: dict = Depends(get_current_user),
-):
-    """Start a stopped sandbox."""
-    await _assert_sandbox_owner(sandbox_id, user)
-    service = _get_service()
-    try:
-        service.start_sandbox(sandbox_id)
-        return {"success": True, "status": "running"}
-    except Exception as e:
-        logger.error("Failed to start sandbox '%s': %s", sandbox_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/{sandbox_id}/stop")
-async def stop_sandbox(
-    sandbox_id: str,
-    user: dict = Depends(get_current_user),
-):
-    """Stop a running sandbox."""
-    await _assert_sandbox_owner(sandbox_id, user)
-    service = _get_service()
-    try:
-        service.stop_sandbox(sandbox_id)
-        return {"success": True, "status": "stopped"}
-    except Exception as e:
-        logger.error("Failed to stop sandbox '%s': %s", sandbox_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+# NOTE: Lifecycle endpoints (start, stop, archive, delete, sync, PATCH) live in
+# the TanStack Start backend (apps/web/src/lib/sandbox-server.ts). FastAPI is
+# reserved for inference-time agent tool calls (filesystem, command, git, exec).
+# Daytona is the source of truth; both services are equal clients of it.
 
 
 @router.post("/{sandbox_id}/execute")

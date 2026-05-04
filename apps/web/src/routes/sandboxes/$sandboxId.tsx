@@ -1,12 +1,17 @@
 import { useAuth } from "@clerk/tanstack-react-start";
-import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
+import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type {
 	Doc,
 	Id,
 } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import {
+	createFileRoute,
+	Link,
+	redirect,
+	useNavigate,
+} from "@tanstack/react-router";
 import {
 	Archive,
 	ArrowLeft,
@@ -20,11 +25,10 @@ import {
 	HardDrive,
 	Loader2,
 	MemoryStick,
-	Play,
 	RefreshCw,
 	Save,
-	Square,
 	Terminal,
+	Trash2,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { useMemo, useState } from "react";
@@ -32,6 +36,15 @@ import toast from "react-hot-toast";
 import { SandboxPanel } from "../../components/sandbox/sandbox-panel";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import {
+	Dialog,
+	DialogClose,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Separator } from "../../components/ui/separator";
 import { Skeleton } from "../../components/ui/skeleton";
@@ -85,39 +98,34 @@ function SandboxDetailPage() {
 
 function SandboxDetailContent({ sandbox }: { sandbox: Sandbox }) {
 	const { getToken } = useAuth();
+	const navigate = useNavigate();
 	const panel = useSandboxPanel();
 	const [name, setName] = useState(sandbox.name);
 	const [workingDir, setWorkingDir] = useState("/home/daytona");
+	const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
 	const sandboxApi = useMemo(() => createSandboxApi(getToken), [getToken]);
-	const updateSandboxFn = useConvexMutation(api.sandboxes.update);
+
+	// Start/stop/archive/sync are intentionally not exposed to users — the LRU
+	// + intent gating in the FastAPI service handles lifecycle automatically.
+	// The corresponding server functions still exist in `sandbox-server.ts` as
+	// an internal escape hatch.
 	const updateSandbox = useMutation({
-		mutationFn: updateSandboxFn,
+		mutationFn: (next: { name: string }) =>
+			sandboxApi.updateSandbox(sandbox.daytonaSandboxId, next),
 		onSuccess: () => toast.success("Sandbox saved"),
 		onError: () => toast.error("Failed to save sandbox"),
 	});
-	const updateSandboxStatus = useMutation({
-		mutationFn: updateSandboxFn,
-	});
-	const lifecycle = useMutation({
-		mutationFn: async (next: "start" | "stop") => {
-			if (next === "start") {
-				return sandboxApi.startSandbox(sandbox.daytonaSandboxId);
-			}
-			return sandboxApi.stopSandbox(sandbox.daytonaSandboxId);
+	const remove = useMutation({
+		mutationFn: () => sandboxApi.deleteSandbox(sandbox.daytonaSandboxId),
+		onSuccess: () => {
+			toast.success("Sandbox deleted");
+			navigate({ to: "/sandboxes" });
 		},
-		onSuccess: (_, next) => {
-			updateSandboxStatus.mutate({
-				id: sandbox._id,
-				status: next === "start" ? "running" : "stopped",
-			});
-			toast.success(next === "start" ? "Sandbox started" : "Sandbox stopped");
-		},
-		onError: () => toast.error("Sandbox lifecycle action failed"),
+		onError: () => toast.error("Failed to delete sandbox"),
 	});
 
 	const hasNameChanges = name.trim() !== "" && name !== sandbox.name;
-	const isRunning = sandbox.status === "running";
 
 	const openSandboxTool = (tab: SandboxTab) => {
 		panel?.setActiveTab(tab);
@@ -131,7 +139,7 @@ function SandboxDetailContent({ sandbox }: { sandbox: Sandbox }) {
 
 	const saveMetadata = () => {
 		if (!hasNameChanges) return;
-		updateSandbox.mutate({ id: sandbox._id, name: name.trim() });
+		updateSandbox.mutate({ name: name.trim() });
 	};
 
 	return (
@@ -160,17 +168,16 @@ function SandboxDetailContent({ sandbox }: { sandbox: Sandbox }) {
 						<Button
 							size="sm"
 							variant="outline"
-							onClick={() => lifecycle.mutate(isRunning ? "stop" : "start")}
-							disabled={lifecycle.isPending}
+							className="text-destructive hover:text-destructive"
+							onClick={() => setDeleteConfirmOpen(true)}
+							disabled={remove.isPending}
 						>
-							{lifecycle.isPending ? (
+							{remove.isPending ? (
 								<Loader2 size={14} className="animate-spin" />
-							) : isRunning ? (
-								<Square size={14} />
 							) : (
-								<Play size={14} />
+								<Trash2 size={14} />
 							)}
-							{isRunning ? "Stop" : "Start"}
+							Delete
 						</Button>
 						<Button
 							size="sm"
@@ -303,6 +310,35 @@ function SandboxDetailContent({ sandbox }: { sandbox: Sandbox }) {
 			</main>
 
 			{panel?.panelOpen && <SandboxPanel />}
+
+			<Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>Delete sandbox?</DialogTitle>
+						<DialogDescription>
+							{`"${sandbox.name}" will be permanently deleted in Daytona and removed from this list. This cannot be undone.`}
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<DialogClose asChild>
+							<Button variant="outline" size="sm">
+								Cancel
+							</Button>
+						</DialogClose>
+						<Button
+							variant="destructive"
+							size="sm"
+							onClick={() => {
+								setDeleteConfirmOpen(false);
+								remove.mutate();
+							}}
+						>
+							<Trash2 size={12} />
+							Delete
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }

@@ -227,6 +227,89 @@ export const getOwnerByDaytonaId = internalQuery({
 	},
 });
 
+/**
+ * Internal query used by the dashboard reconcile path. Returns the
+ * (daytonaSandboxId, status) tuples for a user's sandboxes so the
+ * TanStack Start server function can compare each against Daytona's
+ * true state and write back any drift via `updateStatus`. The deploy
+ * key auth means the userId is trusted to come from the caller's Clerk
+ * session — the reconcile server function passes its own `auth()` userId.
+ */
+export const listForReconcile = internalQuery({
+	args: { userId: v.string() },
+	handler: async (ctx, args) => {
+		const sandboxes = await ctx.db
+			.query("sandboxes")
+			.withIndex("by_user", (q) => q.eq("userId", args.userId))
+			.collect();
+		return sandboxes.map((s) => ({
+			daytonaSandboxId: s.daytonaSandboxId,
+			status: s.status,
+		}));
+	},
+});
+
+/**
+ * Internal query used by FastAPI's LRU evictor. Returns the same user's
+ * other sandboxes ordered by `lastAccessedAt` ascending (oldest first), so
+ * the evictor can stop the least-recently-used one when Daytona refuses to
+ * start a new sandbox due to its concurrency limit.
+ *
+ * Excludes the target sandbox itself and any sandbox the user has already
+ * stopped/archived (those wouldn't free a started slot).
+ */
+export const listSiblingsByLastAccessed = internalQuery({
+	args: { daytonaSandboxId: v.string() },
+	handler: async (ctx, args) => {
+		const targets = await ctx.db
+			.query("sandboxes")
+			.withIndex("by_daytona_id", (q) =>
+				q.eq("daytonaSandboxId", args.daytonaSandboxId),
+			)
+			.collect();
+		const target = targets[0];
+		if (!target) return [];
+		const siblings = await ctx.db
+			.query("sandboxes")
+			.withIndex("by_user", (q) => q.eq("userId", target.userId))
+			.collect();
+		return siblings
+			.filter(
+				(s) =>
+					s.daytonaSandboxId !== args.daytonaSandboxId &&
+					s.status !== "stopped" &&
+					s.status !== "stopping" &&
+					s.status !== "archived",
+			)
+			.sort((a, b) => (a.lastAccessedAt ?? 0) - (b.lastAccessedAt ?? 0))
+			.map((s) => ({
+				daytonaSandboxId: s.daytonaSandboxId,
+				lastAccessedAt: s.lastAccessedAt ?? 0,
+			}));
+	},
+});
+
+/**
+ * Internal mutation called by FastAPI's `_ensure_running` to record that
+ * the agent just touched a sandbox. Updates `lastAccessedAt` only — no
+ * state mutation. This is a metric, not user intent, so it does not
+ * conflict with the rule that only the browser CRUD path writes status.
+ */
+export const touchSandboxInternal = internalMutation({
+	args: { daytonaSandboxId: v.string() },
+	handler: async (ctx, args) => {
+		const sandboxes = await ctx.db
+			.query("sandboxes")
+			.withIndex("by_daytona_id", (q) =>
+				q.eq("daytonaSandboxId", args.daytonaSandboxId),
+			)
+			.collect();
+		const sandbox = sandboxes[0];
+		if (!sandbox) return;
+		await ctx.db.patch(sandbox._id, { lastAccessedAt: Date.now() });
+	},
+});
+
 export const updateStatus = internalMutation({
 	args: {
 		daytonaSandboxId: v.string(),
@@ -256,7 +339,73 @@ export const updateStatus = internalMutation({
 		};
 		if (args.errorMessage !== undefined) {
 			patch.errorMessage = args.errorMessage;
+		} else if (args.status !== "error") {
+			// Clear stale error message on a successful transition.
+			patch.errorMessage = undefined;
 		}
 		await ctx.db.patch(sandbox._id, patch);
+	},
+});
+
+/**
+ * Internal mutation called by FastAPI to update sandbox metadata
+ * (currently just the user-facing name). Looked up by Daytona ID.
+ */
+export const updateMetadataInternal = internalMutation({
+	args: {
+		daytonaSandboxId: v.string(),
+		name: v.optional(v.string()),
+	},
+	handler: async (ctx, args) => {
+		const sandboxes = await ctx.db
+			.query("sandboxes")
+			.withIndex("by_daytona_id", (q) =>
+				q.eq("daytonaSandboxId", args.daytonaSandboxId),
+			)
+			.collect();
+		const sandbox = sandboxes[0];
+		if (!sandbox) return;
+		const patch: Record<string, unknown> = {};
+		if (args.name !== undefined) patch.name = args.name;
+		if (Object.keys(patch).length === 0) return;
+		await ctx.db.patch(sandbox._id, patch);
+	},
+});
+
+/**
+ * Internal mutation called by FastAPI after deleting a sandbox in Daytona.
+ * Removes the Convex record and unlinks any harnesses referencing it.
+ */
+export const removeByDaytonaIdInternal = internalMutation({
+	args: { daytonaSandboxId: v.string() },
+	handler: async (ctx, args) => {
+		const sandboxes = await ctx.db
+			.query("sandboxes")
+			.withIndex("by_daytona_id", (q) =>
+				q.eq("daytonaSandboxId", args.daytonaSandboxId),
+			)
+			.collect();
+		const sandbox = sandboxes[0];
+		if (!sandbox) return;
+		const harnesses = await ctx.db
+			.query("harnesses")
+			.withIndex("by_user", (q) => q.eq("userId", sandbox.userId))
+			.collect();
+		await Promise.all(
+			harnesses
+				.filter(
+					(harness) =>
+						harness.sandboxId === sandbox._id ||
+						harness.daytonaSandboxId === args.daytonaSandboxId,
+				)
+				.map((harness) =>
+					ctx.db.patch(harness._id, {
+						sandboxEnabled: false,
+						sandboxId: undefined,
+						daytonaSandboxId: undefined,
+					}),
+				),
+		);
+		await ctx.db.delete(sandbox._id);
 	},
 });

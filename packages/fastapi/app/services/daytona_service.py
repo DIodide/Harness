@@ -16,6 +16,7 @@ from daytona_sdk import (
     DaytonaConfig,
     CreateSandboxFromSnapshotParams,
 )
+from daytona_sdk.common.errors import DaytonaError
 
 from app.config import settings
 
@@ -140,10 +141,16 @@ class DaytonaService:
         return client.get(sandbox_id)
 
     def _ensure_running(self, sandbox_id: str) -> Any:
-        """Get a sandbox, auto-starting it if stopped/archived.
+        """Get a sandbox, auto-starting it if not already started.
 
         Uses a short-lived TTL cache to avoid a Daytona API round-trip on
-        every filesystem/git/command operation.
+        every filesystem/git/command operation. Daytona's `start` is
+        idempotent for archived sandboxes (it restores them), so this also
+        recovers transparently from idle auto-stop.
+
+        Reactive LRU: if Daytona refuses to start the sandbox because the
+        user is at the per-account started-sandbox limit, evicts the user's
+        least-recently-used started sandbox and retries once.
         """
         cached = self._running_cache.get(sandbox_id)
         if cached is not None:
@@ -151,56 +158,129 @@ class DaytonaService:
             if time.time() - ts < self._RUNNING_CACHE_TTL:
                 return sandbox
 
+        from app.services.convex import touch_sandbox_sync
+
         client = self._get_client()
         sandbox = client.get(sandbox_id)
-        raw = getattr(sandbox, "status", None)
-        status = (raw.value if hasattr(raw, "value") else str(raw)).lower()
+        # The Daytona SDK exposes the sandbox state as `.state` (a
+        # SandboxState enum), not `.status`.
+        raw = getattr(sandbox, "state", None)
+        state = (raw.value if hasattr(raw, "value") else str(raw)).lower()
         logger.info(
-            "Sandbox '%s' status: %s (raw: %r)", sandbox_id, status, raw,
+            "Sandbox '%s' state: %s (raw: %r)", sandbox_id, state, raw,
         )
-        if status not in ("started",):
+        if state not in ("started",):
             logger.info(
-                "Sandbox '%s' is %s — auto-starting", sandbox_id, status,
+                "Sandbox '%s' is %s — auto-starting", sandbox_id, state,
             )
-            client.start(sandbox, timeout=60)
-            sandbox = client.get(sandbox_id)
-            new_raw = getattr(sandbox, "status", None)
-            new_status = (
+            sandbox = self._start_with_lru_retry(client, sandbox, sandbox_id)
+            new_raw = getattr(sandbox, "state", None)
+            new_state = (
                 new_raw.value if hasattr(new_raw, "value") else str(new_raw)
             ).lower()
             logger.info(
-                "Auto-started sandbox '%s', now %s", sandbox_id, new_status,
+                "Auto-started sandbox '%s', now %s", sandbox_id, new_state,
             )
+
+        # Bump the LRU clock on every cache miss — both for already-running
+        # and freshly-started sandboxes. Best-effort; failures don't block.
+        touch_sandbox_sync(sandbox_id)
 
         self._running_cache[sandbox_id] = (sandbox, time.time())
         return sandbox
 
+    def _start_with_lru_retry(
+        self, client: Daytona, sandbox: Any, sandbox_id: str,
+    ) -> Any:
+        """Start a sandbox, evicting the user's LRU started sandbox if Daytona
+        rejects the start due to a concurrency limit. Returns the freshly
+        re-fetched sandbox. Re-raises if eviction is impossible or the retry
+        also fails.
+        """
+        try:
+            client.start(sandbox, timeout=60)
+            return client.get(sandbox_id)
+        except DaytonaError as e:
+            if not self._is_started_limit_error(e):
+                raise
+            logger.info(
+                "Sandbox '%s' start hit started-limit (status=%s, msg=%s) — evicting LRU",
+                sandbox_id, e.status_code, str(e)[:200],
+            )
+            evicted = self._evict_lru_for(sandbox_id)
+            if not evicted:
+                logger.warning(
+                    "No LRU candidate to evict for sandbox '%s' — re-raising",
+                    sandbox_id,
+                )
+                raise
+            logger.info(
+                "Evicted '%s' to free a started slot — retrying start of '%s'",
+                evicted, sandbox_id,
+            )
+            client.start(sandbox, timeout=60)
+            return client.get(sandbox_id)
+
+    @staticmethod
+    def _is_started_limit_error(err: DaytonaError) -> bool:
+        """Heuristic: treat 402/429 as a started-sandbox concurrency limit
+        unconditionally. For 403 ("forbidden", which Daytona uses for
+        plan/quota enforcement), additionally require a quota-related
+        keyword in the message body. Other status codes — especially 400s
+        with messages like "Too many query parameters" or "Limit exceeded
+        on payload size" — are not treated as concurrency limits, so they
+        will not trigger an LRU eviction of an unrelated sandbox.
+        """
+        if err.status_code in (402, 429):
+            return True
+        if err.status_code == 403:
+            msg = str(err).lower()
+            return any(
+                kw in msg
+                for kw in ("limit", "quota", "exceeded", "concurrent")
+            )
+        return False
+
+    def _evict_lru_for(self, target_sandbox_id: str) -> str | None:
+        """Stop the user's least-recently-used currently-started sandbox to
+        free a slot for `target_sandbox_id`. Does NOT write Convex — system
+        evictions are invisible to the user-intent layer, so the user's
+        recorded status (typically "running") is preserved and the agent
+        can transparently resurrect the evicted sandbox later.
+
+        Returns the daytona ID of the sandbox that was evicted, or None if
+        there's no eligible candidate.
+        """
+        from app.services.convex import list_sibling_sandboxes_sync
+
+        candidates = list_sibling_sandboxes_sync(target_sandbox_id)
+        client = self._get_client()
+        for candidate in candidates:
+            cid = candidate.get("daytonaSandboxId")
+            if not cid:
+                continue
+            try:
+                sibling = client.get(cid)
+                raw = getattr(sibling, "state", None)
+                state = (
+                    raw.value if hasattr(raw, "value") else str(raw)
+                ).lower()
+                if state != "started":
+                    # Already not started in Daytona — wouldn't free a slot.
+                    continue
+                client.stop(sibling)
+                self._invalidate_running_cache(cid)
+                return cid
+            except Exception:
+                logger.exception(
+                    "Failed to evict sandbox '%s' — trying next candidate",
+                    cid,
+                )
+                continue
+        return None
+
     def _invalidate_running_cache(self, sandbox_id: str) -> None:
         self._running_cache.pop(sandbox_id, None)
-
-    def start_sandbox(self, sandbox_id: str) -> None:
-        """Start a stopped sandbox."""
-        client = self._get_client()
-        sandbox = client.get(sandbox_id)
-        client.start(sandbox)
-        self._invalidate_running_cache(sandbox_id)
-        logger.info("Started sandbox '%s'", sandbox_id)
-
-    def stop_sandbox(self, sandbox_id: str) -> None:
-        """Stop a running sandbox."""
-        client = self._get_client()
-        sandbox = client.get(sandbox_id)
-        client.stop(sandbox)
-        self._invalidate_running_cache(sandbox_id)
-        logger.info("Stopped sandbox '%s'", sandbox_id)
-
-    def delete_sandbox(self, sandbox_id: str) -> None:
-        """Delete a sandbox permanently."""
-        client = self._get_client()
-        sandbox = client.get(sandbox_id)
-        client.delete(sandbox)
-        self._invalidate_running_cache(sandbox_id)
-        logger.info("Deleted sandbox '%s'", sandbox_id)
 
     # ── Code Execution ─────────────────────────────────────
 

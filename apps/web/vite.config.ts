@@ -16,6 +16,14 @@ const config = defineConfig(({ mode }) => {
 		// process.env is empty on Workers, so these must be baked into the bundle.
 		define: {
 			"process.env.ARCJET_KEY": JSON.stringify(env.ARCJET_KEY ?? ""),
+			"process.env.DAYTONA_API_KEY": JSON.stringify(env.DAYTONA_API_KEY ?? ""),
+			"process.env.DAYTONA_API_URL": JSON.stringify(
+				env.DAYTONA_API_URL ?? "https://app.daytona.io/api",
+			),
+			"process.env.DAYTONA_TARGET": JSON.stringify(env.DAYTONA_TARGET ?? "us"),
+			"process.env.CONVEX_DEPLOY_KEY": JSON.stringify(
+				env.CONVEX_DEPLOY_KEY ?? "",
+			),
 		},
 		resolve: {
 			alias: {
@@ -24,6 +32,11 @@ const config = defineConfig(({ mode }) => {
 		},
 		optimizeDeps: {
 			include: ["use-sync-external-store/shim/index.js"],
+			// Daytona SDK pulls in @opentelemetry which dynamic-imports Node's
+			// `https`. Vite's pre-bundler can't resolve Node built-ins, but the
+			// runtime is fine because `nodejs_compat` is enabled in wrangler.
+			// Excluding here lets it pass through to the runtime untouched.
+			exclude: ["@daytonaio/sdk"],
 		},
 		// Order matters: TanStack Start must run immediately after Cloudflare so the
 		// router generator initializes before other plugins transform the graph (avoids

@@ -1,4 +1,5 @@
-import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
+import { useAuth } from "@clerk/tanstack-react-start";
+import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type {
 	Doc,
@@ -33,7 +34,8 @@ import {
 } from "lucide-react";
 import { motion } from "motion/react";
 import type { ComponentType } from "react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import { HarnessMark } from "../../components/harness-mark";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -55,6 +57,7 @@ import {
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { Skeleton } from "../../components/ui/skeleton";
+import { createSandboxApi } from "../../lib/sandbox-api";
 
 type Sandbox = Doc<"sandboxes">;
 type SandboxStatus = Sandbox["status"];
@@ -70,46 +73,45 @@ export const Route = createFileRoute("/sandboxes/")({
 
 function SandboxesPage() {
 	const navigate = useNavigate();
+	const { getToken } = useAuth();
+	const sandboxApi = useMemo(() => createSandboxApi(getToken), [getToken]);
 	const { data: sandboxes, isLoading } = useQuery(
 		convexQuery(api.sandboxes.list, {}),
 	);
 
-	const updateSandbox = useMutation({
-		mutationFn: useConvexMutation(api.sandboxes.update),
+	// Sandbox start/stop is handled automatically by the LRU + intent gating in
+	// the FastAPI service — users only create and delete here. Archive and sync
+	// are intentionally omitted from the user-facing surface; their server
+	// functions in `sandbox-server.ts` remain available as an internal escape
+	// hatch.
+	const remove = useMutation({
+		mutationFn: (daytonaId: string) => sandboxApi.deleteSandbox(daytonaId),
+		onSuccess: () => toast.success("Sandbox deleted"),
+		onError: () => toast.error("Failed to delete sandbox"),
 	});
-	const removeSandbox = useMutation({
-		mutationFn: useConvexMutation(api.sandboxes.remove),
-	});
-	// const duplicateHarness = useMutation({
-	// 	mutationFn: useConvexMutation(api.harnesses.duplicate),
-	// })
 
-	const [deleteTarget, setDeleteTarget] = useState<Id<"sandboxes"> | null>(
-		null,
-	);
+	const [deleteTarget, setDeleteTarget] = useState<Sandbox | null>(null);
+
+	// Reconcile Convex statuses against Daytona truth on mount. Catches drift
+	// from Daytona's idle auto-stop, LRU evictions (which deliberately don't
+	// write Convex), and admin-side changes. Fire-and-forget — the live Convex
+	// subscription will push any updates as they land.
+	useEffect(() => {
+		sandboxApi.reconcileSandboxStatuses().catch((e) => {
+			console.warn("Sandbox status reconcile failed:", e);
+		});
+	}, [sandboxApi]);
 
 	if (isLoading) {
 		return <LoadingSkeleton />;
 	}
 
-	// const handleDuplicate = (id: Id<"harnesses">) => {
-	// 	duplicateHarness.mutate(
-	// 		{ id },
-	// 		{ onSuccess: () => toast.success("Harness duplicated") },
-	// 	)
-	// }
-
 	const ephemeralSandboxes = sandboxes?.filter((s) => s.ephemeral) ?? [];
 	const persistentSandboxes = sandboxes?.filter((s) => !s.ephemeral) ?? [];
 
-	const handleToggleStatus = (id: Id<"sandboxes">, current: SandboxStatus) => {
-		const newStatus = current === "stopped" ? "running" : "stopped";
-		updateSandbox.mutate({ id, status: newStatus });
-	};
-
 	const handleDelete = () => {
 		if (deleteTarget) {
-			removeSandbox.mutate({ id: deleteTarget });
+			remove.mutate(deleteTarget.daytonaSandboxId);
 			setDeleteTarget(null);
 		}
 	};
@@ -149,9 +151,7 @@ function SandboxesPage() {
 							<SandboxGroup
 								title="Persistent"
 								sandboxes={persistentSandboxes}
-								onToggle={handleToggleStatus}
 								onDelete={setDeleteTarget}
-								// onDuplicate={handleDuplicate}
 								onEdit={(id) =>
 									navigate({
 										to: "/sandboxes/$sandboxId",
@@ -164,9 +164,7 @@ function SandboxesPage() {
 							<SandboxGroup
 								title="Ephemeral"
 								sandboxes={ephemeralSandboxes}
-								onToggle={handleToggleStatus}
 								onDelete={setDeleteTarget}
-								// onDuplicate={handleDuplicate}
 								onEdit={(id) =>
 									navigate({
 										to: "/sandboxes/$sandboxId",
@@ -184,8 +182,9 @@ function SandboxesPage() {
 					<DialogHeader>
 						<DialogTitle>Delete Sandbox</DialogTitle>
 						<DialogDescription>
-							This action cannot be undone. This will permanently delete the
-							sandbox record.
+							{deleteTarget?.name
+								? `"${deleteTarget.name}" will be permanently deleted in Daytona and removed from this list. This cannot be undone.`
+								: "This action cannot be undone."}
 						</DialogDescription>
 					</DialogHeader>
 					<DialogFooter>
@@ -201,6 +200,7 @@ function SandboxesPage() {
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
+
 		</div>
 	);
 }
@@ -208,16 +208,12 @@ function SandboxesPage() {
 function SandboxGroup({
 	title,
 	sandboxes,
-	onToggle,
 	onDelete,
-	// onDuplicate,
 	onEdit,
 }: {
 	title: string;
 	sandboxes: Array<Sandbox>;
-	onToggle: (id: Id<"sandboxes">, status: SandboxStatus) => void;
-	onDelete: (id: Id<"sandboxes">) => void;
-	// onDuplicate: (id: Id<"sandboxes">) => void;
+	onDelete: (sandbox: Sandbox) => void;
 	onEdit: (id: Id<"sandboxes">) => void;
 }) {
 	return (
@@ -233,13 +229,7 @@ function SandboxGroup({
 						animate={{ opacity: 1, y: 0 }}
 						transition={{ delay: i * 0.05 }}
 					>
-						<SandboxCard
-							sandbox={s}
-							onToggle={onToggle}
-							onDelete={onDelete}
-							// onDuplicate={onDuplicate}
-							onEdit={onEdit}
-						/>
+						<SandboxCard sandbox={s} onDelete={onDelete} onEdit={onEdit} />
 					</motion.div>
 				))}
 			</div>
@@ -249,28 +239,13 @@ function SandboxGroup({
 
 function SandboxCard({
 	sandbox,
-	onToggle,
 	onDelete,
-	// onDuplicate,
 	onEdit,
 }: {
 	sandbox: Sandbox;
-	onToggle: (
-		id: Id<"sandboxes">,
-		status:
-			| "creating"
-			| "starting"
-			| "running"
-			| "stopping"
-			| "stopped"
-			| "archived"
-			| "error",
-	) => void;
-	onDelete: (id: Id<"sandboxes">) => void;
-	// onDuplicate: (id: Id<"sandboxes">) => void;
+	onDelete: (sandbox: Sandbox) => void;
 	onEdit: (id: Id<"sandboxes">) => void;
 }) {
-	const isDraft = false;
 	const statusMeta = getStatusMeta(sandbox.status);
 	const sandboxType = sandbox.ephemeral ? "Ephemeral" : "Persistent";
 	const language = formatLanguage(sandbox.language);
@@ -281,9 +256,7 @@ function SandboxCard({
 	const shortDaytonaId = shortenId(sandbox.daytonaSandboxId);
 
 	return (
-		<Card
-			className={`gap-0 py-0 ${isDraft ? "border-dashed border-border" : "ring-foreground/10"}`}
-		>
+		<Card className="gap-0 py-0 ring-foreground/10">
 			<CardContent className="p-4">
 				<div className="mb-3 flex items-start justify-between">
 					<div className="min-w-0 space-y-1">
@@ -315,31 +288,10 @@ function SandboxCard({
 								<Edit size={12} />
 								Edit
 							</DropdownMenuItem>
-							{/* <DropdownMenuItem onClick={() => onDuplicate(sandbox._id)}>
-								<Copy size={12} />
-								Duplicate
-							</DropdownMenuItem> */}
-							{!isDraft && (
-								<DropdownMenuItem
-									onClick={() => onToggle(sandbox._id, sandbox.status)}
-								>
-									{sandbox.status === "running" ? (
-										<>
-											<Square size={12} />
-											Stop
-										</>
-									) : (
-										<>
-											<Play size={12} />
-											Start
-										</>
-									)}
-								</DropdownMenuItem>
-							)}
 							<DropdownMenuSeparator />
 							<DropdownMenuItem
 								className="text-destructive"
-								onClick={() => onDelete(sandbox._id)}
+								onClick={() => onDelete(sandbox)}
 							>
 								<Trash2 size={12} />
 								Delete

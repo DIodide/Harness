@@ -58,6 +58,10 @@ class SandboxCreateRequest(BaseModel):
     git_repo: str | None = None
 
 
+class SandboxUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+
+
 class SandboxExecuteRequest(BaseModel):
     code: str
     language: Literal["python", "javascript", "typescript", "bash"] = "python"

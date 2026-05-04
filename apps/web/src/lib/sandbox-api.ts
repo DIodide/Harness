@@ -1,4 +1,13 @@
 import { env } from "../env";
+import {
+	archiveSandbox as archiveSandboxFn,
+	deleteSandbox as deleteSandboxFn,
+	reconcileSandboxStatuses as reconcileSandboxStatusesFn,
+	startSandbox as startSandboxFn,
+	stopSandbox as stopSandboxFn,
+	syncSandbox as syncSandboxFn,
+	updateSandboxMetadata as updateSandboxMetadataFn,
+} from "./sandbox-server";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
@@ -118,20 +127,40 @@ export function createSandboxApi(getToken: () => Promise<string | null>) {
 			});
 		},
 
+		// Lifecycle ops route through TanStack Start server functions so they
+		// hit Daytona via @daytonaio/sdk (Node) instead of FastAPI (Python).
+		// FastAPI is reserved for inference-time agent tool calls.
 		startSandbox(sandboxId: string) {
-			return sandboxFetch<SandboxLifecycleResponse>(
-				`/api/sandbox/${sandboxId}/start`,
-				getToken,
-				{ method: "POST" },
-			);
+			return startSandboxFn({ data: { sandboxId } });
 		},
 
 		stopSandbox(sandboxId: string) {
-			return sandboxFetch<SandboxLifecycleResponse>(
-				`/api/sandbox/${sandboxId}/stop`,
-				getToken,
-				{ method: "POST" },
-			);
+			return stopSandboxFn({ data: { sandboxId } });
+		},
+
+		archiveSandbox(sandboxId: string) {
+			return archiveSandboxFn({ data: { sandboxId } });
+		},
+
+		deleteSandbox(sandboxId: string) {
+			return deleteSandboxFn({ data: { sandboxId } });
+		},
+
+		updateSandbox(sandboxId: string, updates: { name?: string }) {
+			return updateSandboxMetadataFn({
+				data: { sandboxId, ...updates },
+			});
+		},
+
+		syncSandbox(sandboxId: string) {
+			return syncSandboxFn({ data: { sandboxId } });
+		},
+
+		// Reconciles every sandbox the caller owns against Daytona truth in
+		// one round-trip. Called on dashboard mount to catch drift caused by
+		// Daytona's idle auto-stop, LRU evictions, and admin actions.
+		reconcileSandboxStatuses() {
+			return reconcileSandboxStatusesFn();
 		},
 
 		listFiles(sandboxId: string, path = "/home/daytona") {

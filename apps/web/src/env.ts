@@ -5,6 +5,16 @@ export const env = createEnv({
 	server: {
 		SERVER_URL: z.string().url().optional(),
 		ARCJET_KEY: z.string().min(1),
+		// Optional at boot so dev still starts without these set. The
+		// sandbox lifecycle server functions validate at call time and
+		// return a clear "missing X" error if they're not configured.
+		DAYTONA_API_KEY: z.string().min(1).optional(),
+		DAYTONA_API_URL: z.string().url().default("https://app.daytona.io/api"),
+		DAYTONA_TARGET: z.string().default("us"),
+		// CONVEX_DEPLOY_KEY is deliberately NOT declared here. It is an admin
+		// credential that must never be reachable through any module that the
+		// client bundle might import. It is read via `process.env` directly
+		// inside server-only handlers (see `lib/sandbox-server.ts`).
 	},
 
 	/**
@@ -27,8 +37,12 @@ export const env = createEnv({
 	runtimeEnv: {
 		...import.meta.env,
 		SERVER_URL: process.env.SERVER_URL,
-		// Inlined by Vite's `define` in vite.config.ts at build time.
+		// Inlined by Vite's `define` in vite.config.ts at build time
+		// (process.env is empty in Cloudflare Workers).
 		ARCJET_KEY: process.env.ARCJET_KEY,
+		DAYTONA_API_KEY: process.env.DAYTONA_API_KEY,
+		DAYTONA_API_URL: process.env.DAYTONA_API_URL,
+		DAYTONA_TARGET: process.env.DAYTONA_TARGET,
 	},
 
 	/**

@@ -201,6 +201,78 @@ async def verify_sandbox_owner(
         return False
 
 
+def list_sibling_sandboxes_sync(
+    daytona_sandbox_id: str,
+) -> list[dict[str, Any]]:
+    """Synchronously read the same user's other (non-stopped) sandboxes
+    ordered by `lastAccessedAt` ascending. Used by `_ensure_running`'s LRU
+    evictor when Daytona refuses to start a sandbox due to a concurrency
+    limit.
+
+    Returns a list of `{daytonaSandboxId, lastAccessedAt}` dicts (oldest
+    first), or an empty list on any failure.
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        return []
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.post(
+                f"{settings.convex_url}/api/query",
+                headers={
+                    "Authorization": f"Convex {settings.convex_deploy_key}",
+                },
+                json={
+                    "path": "sandboxes:listSiblingsByLastAccessed",
+                    "args": {"daytonaSandboxId": daytona_sandbox_id},
+                    "format": "json",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            value = data.get("value")
+            return value if isinstance(value, list) else []
+    except Exception:
+        logger.exception(
+            "Failed to read sandbox siblings from Convex for '%s'",
+            daytona_sandbox_id,
+        )
+        return []
+
+
+def touch_sandbox_sync(daytona_sandbox_id: str) -> None:
+    """Synchronously bump `lastAccessedAt` on a sandbox. Best-effort; logs
+    but does not raise on failure. Called from `_ensure_running` so the LRU
+    evictor sees agent-side activity, not just dashboard activity.
+
+    Note: this writes a *metric* (last-touched timestamp), not state. The
+    rule "FastAPI never writes Convex sandbox state" still holds — this is
+    bookkeeping for LRU, not user-intent state.
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        return
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.post(
+                f"{settings.convex_url}/api/mutation",
+                headers={
+                    "Authorization": f"Convex {settings.convex_deploy_key}",
+                },
+                json={
+                    "path": "sandboxes:touchSandboxInternal",
+                    "args": {"daytonaSandboxId": daytona_sandbox_id},
+                    "format": "json",
+                },
+            )
+            resp.raise_for_status()
+    except Exception:
+        logger.exception(
+            "Failed to touch sandbox lastAccessedAt for '%s'",
+            daytona_sandbox_id,
+        )
+
+
+
+
 async def create_sandbox_record(
     http_client: httpx.AsyncClient,
     user_id: str,
