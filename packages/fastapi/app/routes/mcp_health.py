@@ -45,11 +45,6 @@ async def _check_one(
     user_ctx: UserContext | None,
     force: bool,
 ) -> ServerHealth:
-    # Princeton MCPs need a verified netid — reachable without one is misleading,
-    # since actual tool calls fail server-side. Surface it as auth_required.
-    if server.auth_type == "tiger_junction" and (user_ctx is None or not user_ctx.princeton_netid):
-        return ServerHealth(name=server.name, url=server.url, reachable=False, status="auth_required")
-
     if force:
         evict_session_cache(server.url)
     try:
@@ -58,6 +53,8 @@ async def _check_one(
             return ServerHealth(name=server.name, url=server.url, reachable=True, status="ok")
         return ServerHealth(name=server.name, url=server.url, reachable=False, status="error")
     except McpAuthRequiredError:
+        # Either an OAuth 401 or a Princeton MCP requested without a verified
+        # netid — both surface to the user as "needs verification / reconnect".
         return ServerHealth(name=server.name, url=server.url, reachable=False, status="auth_required")
     except Exception as e:
         logger.warning("Health check failed for '%s' at %s: %s", server.name, server.url, e)
