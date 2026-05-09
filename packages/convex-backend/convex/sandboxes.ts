@@ -1,10 +1,21 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import {
 	internalMutation,
 	internalQuery,
 	mutation,
 	query,
 } from "./_generated/server";
+
+// Per-user sandbox cap. Mirrored on the frontend in
+// apps/web/src/lib/sandbox.ts (MAX_SANDBOXES_PER_USER) — keep them in sync.
+const MAX_SANDBOXES_PER_USER = 5;
+const SANDBOX_LIMIT_ERROR = "sandbox_limit_reached";
+
+const sandboxLimitError = () =>
+	new ConvexError({
+		code: SANDBOX_LIMIT_ERROR,
+		message: `You've reached the limit of ${MAX_SANDBOXES_PER_USER} sandboxes. Delete an existing sandbox before creating a new one.`,
+	});
 
 export const list = query({
 	handler: async (ctx) => {
@@ -70,6 +81,13 @@ export const create = mutation({
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
+		const existing = await ctx.db
+			.query("sandboxes")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.collect();
+		if (existing.length >= MAX_SANDBOXES_PER_USER) {
+			throw sandboxLimitError();
+		}
 		const id = await ctx.db.insert("sandboxes", {
 			...args,
 			userId: identity.subject,
@@ -184,6 +202,13 @@ export const createInternal = internalMutation({
 	},
 	handler: async (ctx, args) => {
 		const { harnessId, ...rest } = args;
+		const existing = await ctx.db
+			.query("sandboxes")
+			.withIndex("by_user", (q) => q.eq("userId", args.userId))
+			.collect();
+		if (existing.length >= MAX_SANDBOXES_PER_USER) {
+			throw sandboxLimitError();
+		}
 		const id = await ctx.db.insert("sandboxes", {
 			...rest,
 			harnessId,
@@ -226,6 +251,7 @@ export const getOwnerByDaytonaId = internalQuery({
 		return sandbox.userId;
 	},
 });
+
 
 export const updateStatus = internalMutation({
 	args: {

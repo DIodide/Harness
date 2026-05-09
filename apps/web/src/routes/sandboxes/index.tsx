@@ -12,6 +12,7 @@ import {
 	useNavigate,
 } from "@tanstack/react-router";
 import {
+	AlertCircle,
 	AlertTriangle,
 	Archive,
 	ArrowLeft,
@@ -55,6 +56,7 @@ import {
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { Skeleton } from "../../components/ui/skeleton";
+import { MAX_SANDBOXES_PER_USER } from "../../lib/sandbox";
 
 type Sandbox = Doc<"sandboxes">;
 type SandboxStatus = Sandbox["status"];
@@ -101,6 +103,15 @@ function SandboxesPage() {
 
 	const ephemeralSandboxes = sandboxes?.filter((s) => s.ephemeral) ?? [];
 	const persistentSandboxes = sandboxes?.filter((s) => !s.ephemeral) ?? [];
+	const sandboxCount = sandboxes?.length ?? 0;
+	const atSandboxLimit = sandboxCount >= MAX_SANDBOXES_PER_USER;
+	const duplicateSandboxNames = (() => {
+		const counts = new Map<string, number>();
+		for (const s of sandboxes ?? []) {
+			counts.set(s.name, (counts.get(s.name) ?? 0) + 1);
+		}
+		return [...counts.entries()].filter(([, n]) => n > 1).map(([name]) => name);
+	})();
 
 	const handleToggleStatus = (id: Id<"sandboxes">, current: SandboxStatus) => {
 		const newStatus = current === "stopped" ? "running" : "stopped";
@@ -132,12 +143,19 @@ function SandboxesPage() {
 						</p>
 					</div>
 				</div>
-				<Button size="sm" asChild>
-					<Link to="/sandboxes/create_sandbox">
+				{atSandboxLimit ? (
+					<Button size="sm" disabled title="Sandbox limit reached">
 						<Plus size={14} />
 						Create New Sandbox
-					</Link>
-				</Button>
+					</Button>
+				) : (
+					<Button size="sm" asChild>
+						<Link to="/sandboxes/create_sandbox">
+							<Plus size={14} />
+							Create New Sandbox
+						</Link>
+					</Button>
+				)}
 			</header>
 
 			<div className="flex-1 p-6">
@@ -145,6 +163,45 @@ function SandboxesPage() {
 					<EmptyState />
 				) : (
 					<div className="mx-auto max-w-4xl space-y-8">
+						{atSandboxLimit && (
+							<div className="flex items-start gap-2 border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-xs text-foreground">
+								<AlertCircle
+									size={16}
+									className="mt-0.5 shrink-0 text-amber-500"
+								/>
+								<div>
+									<p className="font-medium">
+										Sandbox limit reached ({sandboxCount} /{" "}
+										{MAX_SANDBOXES_PER_USER})
+									</p>
+									<p className="mt-0.5 text-muted-foreground">
+										You've hit the maximum number of sandboxes per account.
+										Delete one of the sandboxes below before creating a new one.
+									</p>
+								</div>
+							</div>
+						)}
+						{duplicateSandboxNames.length > 0 && (
+							<div className="flex items-start gap-2 border border-border bg-muted/40 px-4 py-3 text-xs text-foreground">
+								<AlertCircle
+									size={16}
+									className="mt-0.5 shrink-0 text-muted-foreground"
+								/>
+								<div>
+									<p className="font-medium">
+										Duplicate sandbox name
+										{duplicateSandboxNames.length > 1 ? "s" : ""}
+									</p>
+									<p className="mt-0.5 text-muted-foreground">
+										You have multiple sandboxes named{" "}
+										{duplicateSandboxNames.map((n) => `"${n}"`).join(", ")}.
+										This is allowed, but it can make picking the right one
+										harder elsewhere — consider renaming them so each name is
+										unique.
+									</p>
+								</div>
+							</div>
+						)}
 						{persistentSandboxes.length > 0 && (
 							<SandboxGroup
 								title="Persistent"

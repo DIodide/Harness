@@ -9,6 +9,7 @@ import {
 	useNavigate,
 } from "@tanstack/react-router";
 import {
+	AlertCircle,
 	ArrowLeft,
 	Copy,
 	Cpu,
@@ -92,6 +93,13 @@ function HarnessesPage() {
 	const active = harnesses?.filter((h) => h.status === "started") ?? [];
 	const stopped = harnesses?.filter((h) => h.status === "stopped") ?? [];
 	const drafts = harnesses?.filter((h) => h.status === "draft") ?? [];
+	const duplicateHarnessNames = (() => {
+		const counts = new Map<string, number>();
+		for (const h of harnesses ?? []) {
+			counts.set(h.name, (counts.get(h.name) ?? 0) + 1);
+		}
+		return [...counts.entries()].filter(([, n]) => n > 1).map(([name]) => name);
+	})();
 
 	const handleToggleStatus = (
 		id: Id<"harnesses">,
@@ -154,6 +162,27 @@ function HarnessesPage() {
 					<EmptyState />
 				) : (
 					<div className="mx-auto max-w-4xl space-y-8">
+						{duplicateHarnessNames.length > 0 && (
+							<div className="flex items-start gap-2 border border-border bg-muted/40 px-4 py-3 text-xs text-foreground">
+								<AlertCircle
+									size={16}
+									className="mt-0.5 shrink-0 text-muted-foreground"
+								/>
+								<div>
+									<p className="font-medium">
+										Duplicate harness name
+										{duplicateHarnessNames.length > 1 ? "s" : ""}
+									</p>
+									<p className="mt-0.5 text-muted-foreground">
+										You have multiple harnesses named{" "}
+										{duplicateHarnessNames.map((n) => `"${n}"`).join(", ")}.
+										This is allowed, but it can make picking the right one
+										harder elsewhere — consider renaming them so each name is
+										unique.
+									</p>
+								</div>
+							</div>
+						)}
 						{active.length > 0 && (
 							<HarnessGroup
 								title="Active"
