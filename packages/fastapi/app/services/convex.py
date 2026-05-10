@@ -201,6 +201,18 @@ async def verify_sandbox_owner(
         return False
 
 
+class SandboxRecordError(Exception):
+    """Raised when Convex rejects a sandbox record creation.
+
+    `code` mirrors the `errorData.code` from a Convex `ConvexError` payload
+    (e.g. "sandbox_limit_reached") so callers can branch on the cause.
+    """
+
+    def __init__(self, message: str, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 async def create_sandbox_record(
     http_client: httpx.AsyncClient,
     user_id: str,
@@ -246,15 +258,32 @@ async def create_sandbox_record(
         )
         resp.raise_for_status()
         result = resp.json()
-        sandbox_doc_id = result.get("value")
-        logger.info(
-            "Created sandbox record '%s' (daytona_id=%s) for harness '%s'",
-            sandbox_doc_id, daytona_sandbox_id, harness_id,
-        )
-        return sandbox_doc_id
-    except Exception:
+    except Exception as e:
         logger.exception(
             "Failed to create sandbox record for daytona_id '%s'",
             daytona_sandbox_id,
         )
-        return None
+        raise SandboxRecordError(str(e)) from e
+
+    # Convex returns 200 with `{"status": "error", "errorMessage": ...,
+    # "errorData": ...}` for ConvexError throws inside the mutation.
+    if result.get("status") == "error":
+        error_data = result.get("errorData") or {}
+        code = error_data.get("code") if isinstance(error_data, dict) else None
+        message = (
+            (error_data.get("message") if isinstance(error_data, dict) else None)
+            or result.get("errorMessage")
+            or "Convex sandbox creation failed"
+        )
+        logger.warning(
+            "Convex rejected sandbox creation for daytona_id '%s' (code=%s): %s",
+            daytona_sandbox_id, code, message,
+        )
+        raise SandboxRecordError(message, code=code)
+
+    sandbox_doc_id = result.get("value")
+    logger.info(
+        "Created sandbox record '%s' (daytona_id=%s) for harness '%s'",
+        sandbox_doc_id, daytona_sandbox_id, harness_id,
+    )
+    return sandbox_doc_id

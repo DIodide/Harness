@@ -23,6 +23,11 @@ from app.services.daytona_service import get_daytona_service
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# Hard cap on a single user message's text length. Mirrors the frontend
+# textarea's maxLength (apps/web/src/lib/chat-input.ts) so users cannot
+# bypass it by calling the API directly.
+USER_MESSAGE_MAX_LENGTH = 16000
+
 MAX_TOOL_ITERATIONS = 120
 
 # Cap on consecutive truncations (response hits max_tokens with no usable
@@ -347,6 +352,36 @@ async def chat_stream(
     )
 
     async def event_generator():
+        # Reject overlong user messages before doing any work. Counts text
+        # parts only — image/audio attachment bytes don't contribute.
+        latest_user_msg = next(
+            (m for m in reversed(body.messages) if m.role == "user"), None
+        )
+        if latest_user_msg is not None:
+            content = latest_user_msg.content
+            if isinstance(content, str):
+                text_len = len(content)
+            elif isinstance(content, list):
+                text_len = sum(
+                    len(part.get("text", ""))
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
+            else:
+                text_len = 0
+            if text_len > USER_MESSAGE_MAX_LENGTH:
+                yield {
+                    "event": "error",
+                    "data": json.dumps({
+                        "message": (
+                            f"Message too long ({text_len:,} characters). "
+                            f"Maximum is {USER_MESSAGE_MAX_LENGTH:,}."
+                        ),
+                        "code": "MESSAGE_TOO_LONG",
+                    }),
+                }
+                return
+
         # Check cost budget before processing
         budget = await check_user_budget(http_client, user_id)
         if not budget.allowed:

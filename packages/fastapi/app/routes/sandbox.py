@@ -25,7 +25,11 @@ from app.models import (
     GitAddRequest,
     GitCommitRequest,
 )
-from app.services.convex import create_sandbox_record, verify_sandbox_owner
+from app.services.convex import (
+    SandboxRecordError,
+    create_sandbox_record,
+    verify_sandbox_owner,
+)
 from app.services.daytona_service import (
     RESOURCE_TIERS,
     DaytonaService,
@@ -54,7 +58,12 @@ async def create_sandbox(
     body: SandboxCreateRequest,
     user: dict = Depends(get_current_user),
 ):
-    """Create a new Daytona sandbox."""
+    """Create a new Daytona sandbox.
+
+    The per-user sandbox cap is enforced inside Convex's `sandboxes.createInternal`
+    mutation. If Convex rejects the record after Daytona has provisioned the
+    sandbox, we roll back the Daytona sandbox so we don't leak resources.
+    """
     user_id = user.get("sub")
     service = _get_service()
     try:
@@ -66,7 +75,12 @@ async def create_sandbox(
             ephemeral=body.ephemeral,
             git_repo=body.git_repo,
         )
-        tier = RESOURCE_TIERS.get(body.resource_tier, RESOURCE_TIERS["basic"])
+    except Exception as e:
+        logger.error("Failed to create sandbox: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    tier = RESOURCE_TIERS.get(body.resource_tier, RESOURCE_TIERS["basic"])
+    try:
         async with httpx.AsyncClient() as http_client:
             await create_sandbox_record(
                 http_client,
@@ -82,16 +96,26 @@ async def create_sandbox(
                     "diskGB": tier["disk"],
                 },
             )
-        return {
-            "id": sandbox.id,
-            "status": "running",
-            "language": body.language,
-            "resource_tier": body.resource_tier,
-            "ephemeral": body.ephemeral,
-        }
-    except Exception as e:
-        logger.error("Failed to create sandbox: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+    except SandboxRecordError as e:
+        # Convex rejected the record (e.g. sandbox cap hit). Clean up the
+        # Daytona sandbox we just provisioned so we don't orphan it.
+        try:
+            service.delete_sandbox(sandbox.id)
+        except Exception:
+            logger.exception(
+                "Failed to roll back Daytona sandbox '%s' after Convex rejection",
+                sandbox.id,
+            )
+        status = 400 if e.code == "sandbox_limit_reached" else 502
+        raise HTTPException(status_code=status, detail=str(e))
+
+    return {
+        "id": sandbox.id,
+        "status": "running",
+        "language": body.language,
+        "resource_tier": body.resource_tier,
+        "ephemeral": body.ephemeral,
+    }
 
 
 @router.get("/{sandbox_id}")

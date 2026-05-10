@@ -116,6 +116,10 @@ import { formatResetTime, UsageBadge } from "../../components/usage-display";
 import { env } from "../../env";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
 import {
+	CHAT_INPUT_COUNTER_THRESHOLD,
+	CHAT_INPUT_MAX_LENGTH,
+} from "../../lib/chat-input";
+import {
 	EMPTY_STREAM_STATE,
 	useChatStreamContext,
 	useChatStreamSideEffects,
@@ -3817,6 +3821,7 @@ function ChatInput({
 						onPaste={handlePaste}
 						placeholder="Send a message..."
 						rows={1}
+						maxLength={CHAT_INPUT_MAX_LENGTH}
 						className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
 					/>
 					{activeHarness && (
@@ -3913,7 +3918,20 @@ function ChatInput({
 					</Tooltip>
 				</div>
 				<p className="mt-1.5 text-center text-[10px] text-muted-foreground">
-					Harness may produce inaccurate information.
+					{text.length >= CHAT_INPUT_COUNTER_THRESHOLD ? (
+						<span
+							className={
+								text.length >= CHAT_INPUT_MAX_LENGTH
+									? "text-destructive"
+									: "text-amber-500"
+							}
+						>
+							{text.length.toLocaleString()} /{" "}
+							{CHAT_INPUT_MAX_LENGTH.toLocaleString()} characters
+						</span>
+					) : (
+						"Harness may produce inaccurate information."
+					)}
 				</p>
 			</div>
 		</div>

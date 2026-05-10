@@ -120,6 +120,10 @@ import {
 	useWorkspaceShortcuts,
 } from "../../hooks/use-workspace-shortcuts";
 import {
+	CHAT_INPUT_COUNTER_THRESHOLD,
+	CHAT_INPUT_MAX_LENGTH,
+} from "../../lib/chat-input";
+import {
 	EMPTY_STREAM_STATE,
 	useChatStreamContext,
 	useChatStreamSideEffects,
@@ -222,6 +226,7 @@ function ChatPage() {
 	const [sidebarOpen, setSidebarOpen] = useState(true);
 	const [pendingEditWorkspaceId, setPendingEditWorkspaceId] =
 		useState<Id<"workspaces"> | null>(null);
+	const [pendingCreateWorkspace, setPendingCreateWorkspace] = useState(0);
 	const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
 	const [editingMessageId, setEditingMessageId] =
 		useState<Id<"messages"> | null>(null);
@@ -1044,6 +1049,7 @@ function ChatPage() {
 								doneConvoIds={doneConvoIds}
 								pendingEditWorkspaceId={pendingEditWorkspaceId}
 								onPendingEditConsumed={() => setPendingEditWorkspaceId(null)}
+								pendingCreateWorkspace={pendingCreateWorkspace}
 							/>
 						</motion.aside>
 					)}
@@ -1099,7 +1105,13 @@ function ChatPage() {
 					)}
 
 					{!activeWorkspace ? (
-						<EmptyWorkspaceState />
+						<EmptyWorkspaceState
+							hasWorkspaces={(workspaces ?? []).length > 0}
+							onCreateWorkspace={() => {
+								setSidebarOpen(true);
+								setPendingCreateWorkspace((n) => n + 1);
+							}}
+						/>
 					) : !activeHarness ? (
 						<NoHarnessAttachedState
 							workspaceName={activeWorkspace.name}
@@ -1263,6 +1275,7 @@ function WorkspaceSidebar({
 	doneConvoIds,
 	pendingEditWorkspaceId,
 	onPendingEditConsumed,
+	pendingCreateWorkspace,
 }: {
 	workspaces: Array<{
 		_id: Id<"workspaces">;
@@ -1303,6 +1316,7 @@ function WorkspaceSidebar({
 	doneConvoIds: Set<string>;
 	pendingEditWorkspaceId?: Id<"workspaces"> | null;
 	onPendingEditConsumed?: () => void;
+	pendingCreateWorkspace?: number;
 }) {
 	const removeConvo = useMutation({
 		mutationFn: useConvexMutation(api.conversations.remove),
@@ -1480,6 +1494,11 @@ function WorkspaceSidebar({
 		if (workspace) startRenameWorkspace(workspace);
 		onPendingEditConsumed?.();
 	}, [pendingEditWorkspaceId]);
+
+	useEffect(() => {
+		if (!pendingCreateWorkspace) return;
+		setCreateOpen(true);
+	}, [pendingCreateWorkspace]);
 
 	const saveWorkspaceName = () => {
 		if (!renameWorkspace) return;
@@ -3708,24 +3727,49 @@ function EmptyChat({
 	);
 }
 
-function EmptyWorkspaceState() {
+function EmptyWorkspaceState({
+	hasWorkspaces,
+	onCreateWorkspace,
+}: {
+	hasWorkspaces: boolean;
+	onCreateWorkspace: () => void;
+}) {
 	return (
 		<div className="flex flex-1 flex-col items-center justify-center px-4">
 			<motion.div
 				initial={{ opacity: 0, y: 12 }}
 				animate={{ opacity: 1, y: 0 }}
 				transition={{ duration: 0.4 }}
-				className="max-w-sm text-center"
+				className="max-w-md text-center"
 			>
 				<div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center bg-foreground">
 					<Sparkles size={24} className="text-background" />
 				</div>
 				<h2 className="mb-2 text-lg font-medium text-foreground">
-					Create a workspace
+					{hasWorkspaces ? "Pick a workspace" : "Create your first workspace"}
 				</h2>
-				<p className="text-sm text-muted-foreground">
-					Choose a harness and sandbox from the sidebar to keep conversations
-					scoped to that workspace.
+				<p className="mb-6 text-sm text-muted-foreground">
+					{hasWorkspaces ? (
+						"Select one from the sidebar, or create a new workspace to start a fresh conversation."
+					) : (
+						<>
+							A workspace pairs a{" "}
+							<span className="font-medium text-foreground">harness</span>{" "}
+							(model + MCP servers + skills) with a{" "}
+							<span className="font-medium text-foreground">sandbox</span> (the
+							environment your agent runs in), and keeps each conversation
+							scoped to that pairing.
+						</>
+					)}
+				</p>
+				<Button onClick={onCreateWorkspace} className="gap-2">
+					<Plus size={14} />
+					{hasWorkspaces ? "New workspace" : "Create workspace"}
+				</Button>
+				<p className="mt-4 text-xs text-muted-foreground">
+					You can also use the{" "}
+					<Plus size={10} className="inline -translate-y-px" /> button at the
+					top of the Workspaces panel in the sidebar.
 				</p>
 			</motion.div>
 		</div>
@@ -4339,6 +4383,7 @@ function ChatInput({
 						placeholder={placeholder}
 						rows={1}
 						disabled={disabled}
+						maxLength={CHAT_INPUT_MAX_LENGTH}
 						className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
 					/>
 					{activeHarness && (
@@ -4436,7 +4481,20 @@ function ChatInput({
 					</Tooltip>
 				</div>
 				<p className="mt-1.5 text-center text-[10px] text-muted-foreground">
-					Harness may produce inaccurate information.
+					{text.length >= CHAT_INPUT_COUNTER_THRESHOLD ? (
+						<span
+							className={
+								text.length >= CHAT_INPUT_MAX_LENGTH
+									? "text-destructive"
+									: "text-amber-500"
+							}
+						>
+							{text.length.toLocaleString()} /{" "}
+							{CHAT_INPUT_MAX_LENGTH.toLocaleString()} characters
+						</span>
+					) : (
+						"Harness may produce inaccurate information."
+					)}
 				</p>
 			</div>
 		</div>

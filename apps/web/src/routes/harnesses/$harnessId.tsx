@@ -17,6 +17,7 @@ import {
 	useNavigate,
 } from "@tanstack/react-router";
 import {
+	AlertCircle,
 	ArrowLeft,
 	Box,
 	Check,
@@ -448,6 +449,78 @@ function HarnessEditPage() {
 
 			<div className="flex-1 p-6">
 				<div className="mx-auto max-w-3xl space-y-8">
+					{/* Status */}
+					<motion.section
+						initial={{ opacity: 0, y: 8 }}
+						animate={{ opacity: 1, y: 0 }}
+					>
+						<h2 className="mb-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+							Status
+						</h2>
+						{harness.status === "draft" && (
+							<div className="mb-3 flex items-start gap-2 border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-foreground">
+								<AlertCircle
+									size={14}
+									className="mt-0.5 shrink-0 text-amber-500"
+								/>
+								<p>
+									This harness is a <strong>draft</strong> and won't appear in
+									the chat selector. Change the status to{" "}
+									<strong>Started</strong> and save to activate it and make it
+									selectable.
+								</p>
+							</div>
+						)}
+						{harness.status === "stopped" && (
+							<div className="mb-3 flex items-start gap-2 border border-border bg-muted/40 px-3 py-2 text-xs text-foreground">
+								<AlertCircle
+									size={14}
+									className="mt-0.5 shrink-0 text-muted-foreground"
+								/>
+								<p>
+									This harness is <strong>stopped</strong>. It's still
+									selectable in chats, but it isn't active. Change the status to{" "}
+									<strong>Started</strong> and save to activate it.
+								</p>
+							</div>
+						)}
+						<Select
+							value={currentStatus}
+							onValueChange={(v) => setStatus(v as HarnessStatus)}
+						>
+							<SelectTrigger className="max-w-sm">
+								<SelectValue placeholder="Select status" />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="draft">
+									<div className="flex items-center gap-2">
+										<div className="h-2 w-2 bg-amber-400" />
+										<span>Draft</span>
+									</div>
+								</SelectItem>
+								<SelectItem value="started">
+									<div className="flex items-center gap-2">
+										<div className="h-2 w-2 bg-emerald-500" />
+										<span>Started</span>
+									</div>
+								</SelectItem>
+								<SelectItem value="stopped">
+									<div className="flex items-center gap-2">
+										<div className="h-2 w-2 bg-muted-foreground/40" />
+										<span>Stopped</span>
+									</div>
+								</SelectItem>
+							</SelectContent>
+						</Select>
+						{harness.status === "draft" && currentStatus !== "draft" && (
+							<p className="mt-2 text-[11px] text-muted-foreground">
+								Saving will promote this harness out of draft.
+							</p>
+						)}
+					</motion.section>
+
+					<Separator />
+
 					{/* Name & Model */}
 					<motion.section
 						initial={{ opacity: 0, y: 8 }}
@@ -810,52 +883,6 @@ function HarnessEditPage() {
 								</div>
 							</DialogContent>
 						</Dialog>
-					</motion.section>
-
-					<Separator />
-
-					{/* Status */}
-					<motion.section
-						initial={{ opacity: 0, y: 8 }}
-						animate={{ opacity: 1, y: 0 }}
-						transition={{ delay: 0.1 }}
-					>
-						<h2 className="mb-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-							Status
-						</h2>
-						<Select
-							value={currentStatus}
-							onValueChange={(v) => setStatus(v as HarnessStatus)}
-						>
-							<SelectTrigger className="max-w-sm">
-								<SelectValue placeholder="Select status" />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="draft">
-									<div className="flex items-center gap-2">
-										<div className="h-2 w-2 bg-amber-400" />
-										<span>Draft</span>
-									</div>
-								</SelectItem>
-								<SelectItem value="started">
-									<div className="flex items-center gap-2">
-										<div className="h-2 w-2 bg-emerald-500" />
-										<span>Started</span>
-									</div>
-								</SelectItem>
-								<SelectItem value="stopped">
-									<div className="flex items-center gap-2">
-										<div className="h-2 w-2 bg-muted-foreground/40" />
-										<span>Stopped</span>
-									</div>
-								</SelectItem>
-							</SelectContent>
-						</Select>
-						{harness.status === "draft" && currentStatus !== "draft" && (
-							<p className="mt-2 text-[11px] text-muted-foreground">
-								Saving will promote this harness out of draft.
-							</p>
-						)}
 					</motion.section>
 				</div>
 			</div>

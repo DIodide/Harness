@@ -14,6 +14,7 @@ import {
 	useNavigate,
 } from "@tanstack/react-router";
 import {
+	AlertCircle,
 	ArrowLeft,
 	ArrowRight,
 	Box,
@@ -70,6 +71,7 @@ import {
 	DEFAULT_SANDBOX_CONFIG,
 	formatSandboxMeta,
 	getDefaultSandboxSelection,
+	MAX_SANDBOXES_PER_USER,
 	type Sandbox,
 	type SandboxConfig,
 	waitForSandboxRecord,
@@ -200,6 +202,10 @@ function OnboardingPage() {
 	const { data: sandboxes, isLoading: sandboxesLoading } = useQuery(
 		convexQuery(api.sandboxes.list, {}),
 	);
+	const { data: existingHarnesses } = useQuery(
+		convexQuery(api.harnesses.list, {}),
+	);
+	const hasExistingHarness = (existingHarnesses?.length ?? 0) > 0;
 	const selectedSandbox = useMemo(
 		() => sandboxes?.find((sandbox) => sandbox._id === selectedSandboxId),
 		[sandboxes, selectedSandboxId],
@@ -357,8 +363,10 @@ function OnboardingPage() {
 			});
 
 			if (!res.ok) {
-				const text = await res.text().catch(() => "");
-				throw new Error(text || `Sandbox API error ${res.status}`);
+				const body = await res.json().catch(() => null);
+				const detail =
+					body && typeof body.detail === "string" ? body.detail : "";
+				throw new Error(detail || `Sandbox API error ${res.status}`);
 			}
 
 			const data = (await res.json()) as { id: string };
@@ -498,7 +506,9 @@ function OnboardingPage() {
 			<div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 py-10">
 				<div className="mb-2 text-center">
 					<h1 className="text-2xl font-medium tracking-tight text-foreground">
-						Let's build your first harness
+						{hasExistingHarness
+							? "Build a new harness"
+							: "Let's build your first harness"}
 					</h1>
 					<p className="mt-2 text-sm text-muted-foreground">
 						Configure the tools and capabilities your AI agent needs.
@@ -1198,6 +1208,16 @@ function StepSandbox({
 	newSandboxConfig: SandboxConfig;
 	setNewSandboxConfig: (config: SandboxConfig) => void;
 }) {
+	const atSandboxLimit = sandboxes.length >= MAX_SANDBOXES_PER_USER;
+
+	// If the user is at the cap, "new" mode would always fail server-side.
+	// Force the picker into "existing" mode so they can't even try.
+	useEffect(() => {
+		if (enabled && atSandboxLimit && mode === "new") {
+			setMode("existing");
+		}
+	}, [enabled, atSandboxLimit, mode, setMode]);
+
 	return (
 		<div className="space-y-4">
 			<p className="text-xs text-muted-foreground">
@@ -1234,6 +1254,20 @@ function StepSandbox({
 					exit={{ opacity: 0, height: 0 }}
 					className="space-y-4"
 				>
+					{atSandboxLimit && (
+						<div className="flex items-start gap-2 border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-foreground">
+							<AlertCircle
+								size={14}
+								className="mt-0.5 shrink-0 text-amber-500"
+							/>
+							<p>
+								You're at the sandbox limit ({sandboxes.length} /{" "}
+								{MAX_SANDBOXES_PER_USER}), so you can only attach an existing
+								sandbox here. To create a new one, delete a sandbox from the
+								Manage Sandboxes page first.
+							</p>
+						</div>
+					)}
 					<div className="grid gap-2 sm:grid-cols-2">
 						<button
 							type="button"
@@ -1253,18 +1287,30 @@ function StepSandbox({
 						</button>
 						<button
 							type="button"
-							onClick={() => setMode("new")}
+							onClick={() => {
+								if (!atSandboxLimit) setMode("new");
+							}}
+							disabled={atSandboxLimit}
+							title={
+								atSandboxLimit
+									? `Sandbox limit reached (${MAX_SANDBOXES_PER_USER} max)`
+									: undefined
+							}
 							className={`border px-3 py-2.5 text-left transition-colors ${
-								mode === "new"
-									? "border-foreground bg-foreground/5"
-									: "border-border hover:bg-muted/30"
+								atSandboxLimit
+									? "cursor-not-allowed border-border bg-muted/30 opacity-50"
+									: mode === "new"
+										? "border-foreground bg-foreground/5"
+										: "border-border hover:bg-muted/30"
 							}`}
 						>
 							<p className="text-xs font-medium text-foreground">
 								Create new sandbox
 							</p>
 							<p className="mt-1 text-[11px] text-muted-foreground">
-								Create and link it as the default in one step.
+								{atSandboxLimit
+									? "Unavailable — sandbox limit reached."
+									: "Create and link it as the default in one step."}
 							</p>
 						</button>
 					</div>
