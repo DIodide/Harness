@@ -82,9 +82,6 @@ function SandboxesPage() {
 	const removeSandbox = useMutation({
 		mutationFn: useConvexMutation(api.sandboxes.remove),
 	});
-	// const duplicateHarness = useMutation({
-	// 	mutationFn: useConvexMutation(api.harnesses.duplicate),
-	// })
 
 	const [deleteTarget, setDeleteTarget] = useState<Id<"sandboxes"> | null>(
 		null,
@@ -93,13 +90,6 @@ function SandboxesPage() {
 	if (isLoading) {
 		return <LoadingSkeleton />;
 	}
-
-	// const handleDuplicate = (id: Id<"harnesses">) => {
-	// 	duplicateHarness.mutate(
-	// 		{ id },
-	// 		{ onSuccess: () => toast.success("Harness duplicated") },
-	// 	)
-	// }
 
 	const ephemeralSandboxes = sandboxes?.filter((s) => s.ephemeral) ?? [];
 	const persistentSandboxes = sandboxes?.filter((s) => !s.ephemeral) ?? [];
@@ -208,7 +198,6 @@ function SandboxesPage() {
 								sandboxes={persistentSandboxes}
 								onToggle={handleToggleStatus}
 								onDelete={setDeleteTarget}
-								// onDuplicate={handleDuplicate}
 								onEdit={(id) =>
 									navigate({
 										to: "/sandboxes/$sandboxId",
@@ -223,7 +212,6 @@ function SandboxesPage() {
 								sandboxes={ephemeralSandboxes}
 								onToggle={handleToggleStatus}
 								onDelete={setDeleteTarget}
-								// onDuplicate={handleDuplicate}
 								onEdit={(id) =>
 									navigate({
 										to: "/sandboxes/$sandboxId",
@@ -267,14 +255,12 @@ function SandboxGroup({
 	sandboxes,
 	onToggle,
 	onDelete,
-	// onDuplicate,
 	onEdit,
 }: {
 	title: string;
 	sandboxes: Array<Sandbox>;
 	onToggle: (id: Id<"sandboxes">, status: SandboxStatus) => void;
 	onDelete: (id: Id<"sandboxes">) => void;
-	// onDuplicate: (id: Id<"sandboxes">) => void;
 	onEdit: (id: Id<"sandboxes">) => void;
 }) {
 	return (
@@ -294,7 +280,6 @@ function SandboxGroup({
 							sandbox={s}
 							onToggle={onToggle}
 							onDelete={onDelete}
-							// onDuplicate={onDuplicate}
 							onEdit={onEdit}
 						/>
 					</motion.div>
@@ -308,7 +293,6 @@ function SandboxCard({
 	sandbox,
 	onToggle,
 	onDelete,
-	// onDuplicate,
 	onEdit,
 }: {
 	sandbox: Sandbox;
@@ -324,10 +308,8 @@ function SandboxCard({
 			| "error",
 	) => void;
 	onDelete: (id: Id<"sandboxes">) => void;
-	// onDuplicate: (id: Id<"sandboxes">) => void;
 	onEdit: (id: Id<"sandboxes">) => void;
 }) {
-	const isDraft = false;
 	const statusMeta = getStatusMeta(sandbox.status);
 	const sandboxType = sandbox.ephemeral ? "Ephemeral" : "Persistent";
 	const language = formatLanguage(sandbox.language);
@@ -338,9 +320,7 @@ function SandboxCard({
 	const shortDaytonaId = shortenId(sandbox.daytonaSandboxId);
 
 	return (
-		<Card
-			className={`gap-0 py-0 ${isDraft ? "border-dashed border-border" : "ring-foreground/10"}`}
-		>
+		<Card className="gap-0 py-0 ring-foreground/10">
 			<CardContent className="p-4">
 				<div className="mb-3 flex items-start justify-between">
 					<div className="min-w-0 space-y-1">
@@ -372,27 +352,21 @@ function SandboxCard({
 								<Edit size={12} />
 								Edit
 							</DropdownMenuItem>
-							{/* <DropdownMenuItem onClick={() => onDuplicate(sandbox._id)}>
-								<Copy size={12} />
-								Duplicate
-							</DropdownMenuItem> */}
-							{!isDraft && (
-								<DropdownMenuItem
-									onClick={() => onToggle(sandbox._id, sandbox.status)}
-								>
-									{sandbox.status === "running" ? (
-										<>
-											<Square size={12} />
-											Stop
-										</>
-									) : (
-										<>
-											<Play size={12} />
-											Start
-										</>
-									)}
-								</DropdownMenuItem>
-							)}
+							<DropdownMenuItem
+								onClick={() => onToggle(sandbox._id, sandbox.status)}
+							>
+								{sandbox.status === "running" ? (
+									<>
+										<Square size={12} />
+										Stop
+									</>
+								) : (
+									<>
+										<Play size={12} />
+										Start
+									</>
+								)}
+							</DropdownMenuItem>
 							<DropdownMenuSeparator />
 							<DropdownMenuItem
 								className="text-destructive"

@@ -63,8 +63,10 @@ function RouteComponent() {
 			});
 
 			if (!res.ok) {
-				const text = await res.text().catch(() => "");
-				throw new Error(text || `Sandbox API error ${res.status}`);
+				const body = await res.json().catch(() => null);
+				const detail =
+					body && typeof body.detail === "string" ? body.detail : "";
+				throw new Error(detail || `Sandbox API error ${res.status}`);
 			}
 
 			toast.success("Sandbox created");
