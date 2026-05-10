@@ -46,6 +46,10 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
+      # The @cloudflare/vite-plugin flattens only top-level vars into the
+      # generated dist/server/wrangler.json and drops env.* blocks, so
+      # `--env` alone picks the right Worker name but leaves runtime vars
+      # pointing at the top-level defaults. Override at deploy time.
       - name: Deploy to Cloudflare Workers
         run: cd apps/web && npx wrangler deploy --name harness-web-staging
         env:

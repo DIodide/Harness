@@ -13,12 +13,16 @@
 		"staging": {
 			"name": "harness-web-staging",
 			"vars": {
-				"VITE_CONVEX_URL": "https://effervescent-cow-736.convex.cloud",
+				"VITE_CONVEX_URL": "https://handsome-chicken-344.convex.cloud",
 				"VITE_CLERK_PUBLISHABLE_KEY": "pk_test_cG9saXRlLW1vcmF5LTY0LmNsZXJrLmFjY291bnRzLmRldiQ"
 			}
 		},
 		"production": {
-			"name": "harness-web"
+			"name": "harness-web",
+			"vars": {
+				"VITE_CONVEX_URL": "https://incredible-otter-96.convex.cloud",
+				"VITE_CLERK_PUBLISHABLE_KEY": "pk_live_Y2xlcmsuaGFybmVzcy5ueiQ"
+			}
 		}
 	}
 }
