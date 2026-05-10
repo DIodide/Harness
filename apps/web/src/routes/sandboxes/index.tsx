@@ -352,21 +352,14 @@ function SandboxCard({
 								<Edit size={12} />
 								Edit
 							</DropdownMenuItem>
-							<DropdownMenuItem
-								onClick={() => onToggle(sandbox._id, sandbox.status)}
-							>
-								{sandbox.status === "running" ? (
-									<>
-										<Square size={12} />
-										Stop
-									</>
-								) : (
-									<>
-										<Play size={12} />
-										Start
-									</>
-								)}
-							</DropdownMenuItem>
+							{sandbox.status !== "running" && (
+								<DropdownMenuItem
+									onClick={() => onToggle(sandbox._id, sandbox.status)}
+								>
+									<Play size={12} />
+									Start
+								</DropdownMenuItem>
+							)}
 							<DropdownMenuSeparator />
 							<DropdownMenuItem
 								className="text-destructive"
