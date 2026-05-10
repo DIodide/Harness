@@ -23,7 +23,6 @@ import {
 	Play,
 	RefreshCw,
 	Save,
-	Square,
 	Terminal,
 } from "lucide-react";
 import { motion } from "motion/react";
@@ -100,18 +99,13 @@ function SandboxDetailContent({ sandbox }: { sandbox: Sandbox }) {
 		mutationFn: updateSandboxFn,
 	});
 	const lifecycle = useMutation({
-		mutationFn: async (next: "start" | "stop") => {
-			if (next === "start") {
-				return sandboxApi.startSandbox(sandbox.daytonaSandboxId);
-			}
-			return sandboxApi.stopSandbox(sandbox.daytonaSandboxId);
-		},
-		onSuccess: (_, next) => {
+		mutationFn: () => sandboxApi.startSandbox(sandbox.daytonaSandboxId),
+		onSuccess: () => {
 			updateSandboxStatus.mutate({
 				id: sandbox._id,
-				status: next === "start" ? "running" : "stopped",
+				status: "running",
 			});
-			toast.success(next === "start" ? "Sandbox started" : "Sandbox stopped");
+			toast.success("Sandbox started");
 		},
 		onError: () => toast.error("Sandbox lifecycle action failed"),
 	});
@@ -157,21 +151,21 @@ function SandboxDetailContent({ sandbox }: { sandbox: Sandbox }) {
 						</div>
 					</div>
 					<div className="flex items-center gap-2">
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={() => lifecycle.mutate(isRunning ? "stop" : "start")}
-							disabled={lifecycle.isPending}
-						>
-							{lifecycle.isPending ? (
-								<Loader2 size={14} className="animate-spin" />
-							) : isRunning ? (
-								<Square size={14} />
-							) : (
-								<Play size={14} />
-							)}
-							{isRunning ? "Stop" : "Start"}
-						</Button>
+						{!isRunning && (
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={() => lifecycle.mutate()}
+								disabled={lifecycle.isPending}
+							>
+								{lifecycle.isPending ? (
+									<Loader2 size={14} className="animate-spin" />
+								) : (
+									<Play size={14} />
+								)}
+								Start
+							</Button>
+						)}
 						<Button
 							size="sm"
 							onClick={saveMetadata}

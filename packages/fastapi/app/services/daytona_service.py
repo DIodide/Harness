@@ -118,7 +118,7 @@ class DaytonaService:
             language=language,
             auto_stop_interval=15,
             labels=sandbox_labels,
-            ephemeral=ephemeral,
+            ephemeral=False,
         )
 
         logger.info(
