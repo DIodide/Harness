@@ -10,20 +10,38 @@ logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# Per-request output cap. Thinking models include reasoning tokens in this
+# budget, so they need a generous allowance — Opus 4.7 routinely spends
+# 8k+ tokens on thinking before producing visible content.
+MAX_TOKENS_THINKING = 16384
+MAX_TOKENS_DEFAULT = 32768
+
+
+def get_max_tokens(model: str) -> int:
+    """Return the max_tokens we send to OpenRouter for a short model name.
+
+    Exposed so callers (e.g. the chat agentic loop) can detect when a
+    response was truncated by comparing reported completion_tokens to the
+    cap that was actually requested.
+    """
+    return MAX_TOKENS_THINKING if model in THINKING_MODELS else MAX_TOKENS_DEFAULT
+
 
 async def stream_chat(
     client: httpx.AsyncClient,
     messages: list[dict],
     model: str,
     tools: list[dict] | None = None,
+    tool_choice: dict | str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Stream chat completion from OpenRouter. Yields parsed SSE chunks.
 
     Args:
         client: Shared httpx.AsyncClient (from app.state).
         messages: OpenAI-format message list.
-        model: Short model name (e.g. "claude-sonnet-4") or full OpenRouter ID.
+        model: Short model name (e.g. "claude-sonnet-4.6") or full OpenRouter ID.
         tools: Optional OpenAI-format tool definitions.
+        tool_choice: Optional tool_choice override (e.g. to force a specific tool).
     """
     resolved_model = MODEL_MAP.get(model, model)
     logger.debug(
@@ -36,16 +54,13 @@ async def stream_chat(
         "messages": messages,
         "stream": True,
         "stream_options": {"include_usage": True},
+        "max_tokens": get_max_tokens(model),
     }
-    if is_thinking:
-        payload["max_tokens"] = 4096
-    else:
-        payload["max_tokens"] = 16384
     if is_thinking:
         payload["reasoning"] = {"effort": "high"}
     if tools:
         payload["tools"] = tools
-        payload["tool_choice"] = "auto"
+        payload["tool_choice"] = tool_choice or "auto"
 
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
@@ -105,7 +120,7 @@ async def stream_chat(
 async def complete_chat(
     client: httpx.AsyncClient,
     messages: list[dict],
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-5.4",
     max_tokens: int = 512,
 ) -> str:
     """Non-streaming chat completion for lightweight tasks like prompt generation.

@@ -1,8 +1,9 @@
 import { useAuth } from "@clerk/clerk-react";
-import { FileText, Loader2, Search, X } from "lucide-react";
+import { FileText, Search, X } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { createSandboxApi, type SearchMatch } from "../../lib/sandbox-api";
 import { useSandboxPanel } from "../../lib/sandbox-panel-context";
+import { RoseCurveSpinner } from "../rose-curve-spinner";
 import { ScrollArea } from "../ui/scroll-area";
 
 export function FileSearch({ onClose }: { onClose: () => void }) {
@@ -61,9 +62,9 @@ export function FileSearch({ onClose }: { onClose: () => void }) {
 					className="flex-1 bg-transparent font-mono text-[11px] text-foreground/80 outline-none placeholder:text-muted-foreground/30"
 				/>
 				{searching && (
-					<Loader2
+					<RoseCurveSpinner
 						size={11}
-						className="shrink-0 animate-spin text-muted-foreground/40"
+						className="shrink-0 text-muted-foreground/40"
 					/>
 				)}
 				<button

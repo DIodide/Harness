@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import re
 
 import httpx
 from fastapi import APIRouter, Depends, Request
@@ -9,24 +8,33 @@ from sse_starlette.sse import EventSourceResponse
 from app.config import settings
 from app.dependencies import get_current_user, get_http_client
 from app.models import ChatRequest
-from app.services.convex import query_convex, save_assistant_message, patch_message_usage, create_sandbox_record
+from app.services.convex import query_convex, save_assistant_message, patch_message_usage
 from app.services.mcp_client import UserContext, call_tool, resolve_princeton_netid, list_tools
 from app.services.mcp_oauth import get_valid_token, GITHUB_STANDALONE_URL
-from app.services.openrouter import stream_chat
+from app.services.openrouter import stream_chat, get_max_tokens
+from app.services.usage import check_user_budget, record_usage
 from app.services.sandbox_tools import (
     SANDBOX_TOOL_DEFINITIONS,
     SANDBOX_TOOL_NAMES,
     execute_sandbox_tool,
 )
-from app.services.daytona_service import (
-    get_daytona_service,
-    RESOURCE_TIERS,
-)
+from app.services.daytona_service import get_daytona_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_ITERATIONS = 50
+# Hard cap on a single user message's text length. Mirrors the frontend
+# textarea's maxLength (apps/web/src/lib/chat-input.ts) so users cannot
+# bypass it by calling the API directly.
+USER_MESSAGE_MAX_LENGTH = 16000
+
+MAX_TOOL_ITERATIONS = 120
+
+# Cap on consecutive truncations (response hits max_tokens with no usable
+# tool calls). Each retry costs a full output budget worth of tokens, so
+# we bail out after a few rather than burning $30+ per chat in a pathological
+# loop. Reset whenever the model produces tool calls or finishes normally.
+MAX_CONSECUTIVE_TRUNCATIONS = 20
 
 SKILL_TOOL_NAME = "get_skill_content"
 
@@ -66,9 +74,9 @@ def _extract_summary(detail: str, max_chars: int = 300) -> str:
     text = re.sub(r"^---\s*\n[\s\S]*?\n---\s*\n?", "", text).strip()
     # Collect non-heading, non-empty lines
     lines = [
-        l.strip()
-        for l in text.split("\n")
-        if l.strip() and not l.strip().startswith("#")
+        line.strip()
+        for line in text.split("\n")
+        if line.strip() and not line.strip().startswith("#")
     ]
     summary = " ".join(lines)
     if len(summary) > max_chars:
@@ -344,6 +352,54 @@ async def chat_stream(
     )
 
     async def event_generator():
+        # Reject overlong user messages before doing any work. Counts text
+        # parts only — image/audio attachment bytes don't contribute.
+        latest_user_msg = next(
+            (m for m in reversed(body.messages) if m.role == "user"), None
+        )
+        if latest_user_msg is not None:
+            content = latest_user_msg.content
+            if isinstance(content, str):
+                text_len = len(content)
+            elif isinstance(content, list):
+                text_len = sum(
+                    len(part.get("text", ""))
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
+            else:
+                text_len = 0
+            if text_len > USER_MESSAGE_MAX_LENGTH:
+                yield {
+                    "event": "error",
+                    "data": json.dumps({
+                        "message": (
+                            f"Message too long ({text_len:,} characters). "
+                            f"Maximum is {USER_MESSAGE_MAX_LENGTH:,}."
+                        ),
+                        "code": "MESSAGE_TOO_LONG",
+                    }),
+                }
+                return
+
+        # Check cost budget before processing
+        budget = await check_user_budget(http_client, user_id)
+        if not budget.allowed:
+            yield {
+                "event": "error",
+                "data": json.dumps({
+                    "message": "Usage limit reached",
+                    "code": "BUDGET_EXCEEDED",
+                    "usage": {
+                        "dailyPct": budget.daily_pct,
+                        "weeklyPct": budget.weekly_pct,
+                        "dailyReset": budget.daily_reset,
+                        "weeklyReset": budget.weekly_reset,
+                    },
+                }),
+            }
+            return
+
         # Fetch available MCP tools for this harness
         tools: list[dict] | None = None
         if body.harness.mcp_servers:
@@ -410,62 +466,11 @@ async def chat_stream(
                 # Existing sandbox — use it directly
                 sandbox_id = body.harness.sandbox_id
             else:
-                # Auto-provision a new sandbox on first chat message
-                yield {
-                    "event": "sandbox_status",
-                    "data": json.dumps({"sandbox_id": "", "status": "creating"}),
-                }
-                try:
-                    sandbox_config = body.harness.sandbox_config
-                    resource_tier = sandbox_config.resource_tier if sandbox_config else "basic"
-                    language = sandbox_config.default_language if sandbox_config else "python"
-                    ephemeral = not (sandbox_config and sandbox_config.persistent)
-
-                    sandbox = await asyncio.get_running_loop().run_in_executor(
-                        None,
-                        lambda: daytona_service.create_sandbox(
-                            user_id=user_id,
-                            harness_id=None,
-                            language=language,
-                            resource_tier=resource_tier,
-                            ephemeral=ephemeral,
-                        ),
-                    )
-                    sandbox_id = sandbox.id
-                    logger.info(
-                        "Auto-provisioned sandbox '%s' for harness '%s'",
-                        sandbox_id, body.harness.name,
-                    )
-
-                    # Persist sandbox record to Convex and link to harness
-                    tier = RESOURCE_TIERS.get(
-                        resource_tier, RESOURCE_TIERS["basic"],
-                    )
-                    await create_sandbox_record(
-                        http_client,
-                        user_id=user_id,
-                        harness_id=body.harness.harness_id,
-                        daytona_sandbox_id=sandbox_id,
-                        name=f"{body.harness.name} sandbox",
-                        language=language,
-                        ephemeral=ephemeral,
-                        resources={
-                            "cpu": tier["cpu"],
-                            "memoryGB": tier["memory"],
-                            "diskGB": tier["disk"],
-                        },
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to auto-provision sandbox for harness '%s'",
-                        body.harness.name,
-                    )
-                    yield {
-                        "event": "sandbox_status",
-                        "data": json.dumps({"sandbox_id": "", "status": "error"}),
-                    }
-                    # Continue without sandbox — MCP tools still work
-                    daytona_service = None
+                logger.info(
+                    "Sandbox enabled for harness '%s' without a default sandbox; continuing without sandbox tools",
+                    body.harness.name,
+                )
+                daytona_service = None
 
             if sandbox_id and daytona_service:
                 if tools is None:
@@ -527,6 +532,10 @@ async def chat_stream(
             skills_block = _build_skills_system_block(skill_manifest)
             messages.insert(0, {"role": "system", "content": skills_block})
 
+        # Prepend the user's custom system prompt (before skills so it appears first)
+        if body.harness.system_prompt:
+            messages.insert(0, {"role": "system", "content": body.harness.system_prompt})
+
         # Accumulate across all iterations so reasoning/tool history isn't lost
         all_reasoning = ""
         all_tool_calls_history: list[dict] = []  # [{tool, arguments, call_id, result}]
@@ -536,14 +545,34 @@ async def chat_stream(
         collected_usage: dict | None = None
         collected_model: str | None = None
 
+        # The output cap we send to OpenRouter for this harness model.
+        # Used below to detect truncation by usage rather than relying on
+        # finish_reason — Anthropic via OpenRouter sometimes reports "stop"
+        # even when extended-thinking exhausted the budget.
+        requested_max_tokens = get_max_tokens(body.harness.model)
+        consecutive_truncations = 0
+
         # Agentic loop: stream response, handle tool calls, repeat
         for iteration in range(MAX_TOOL_ITERATIONS):
             collected_content = ""
             collected_reasoning = ""
             collected_tool_calls: list[dict] = []
             finish_reason: str | None = None
+            # Per-iteration usage so we can compare this turn's
+            # completion_tokens against the cap (collected_usage may carry
+            # stale values from a prior iteration if the current stream
+            # disconnects before sending its usage chunk).
+            iter_usage: dict | None = None
 
             client_disconnected = False
+
+            # Force a specific tool on the first iteration when forced_tool is set
+            tool_choice: dict | str | None = None
+            if body.forced_tool and iteration == 0 and tools:
+                tool_choice = {
+                    "type": "function",
+                    "function": {"name": body.forced_tool},
+                }
 
             try:
                 async for chunk in stream_chat(
@@ -551,6 +580,7 @@ async def chat_stream(
                     messages,
                     body.harness.model,
                     tools,
+                    tool_choice=tool_choice,
                 ):
                     if not client_disconnected and await request.is_disconnected():
                         logger.info(
@@ -567,6 +597,7 @@ async def chat_stream(
                         collected_model = chunk["model"]
                     if chunk.get("usage"):
                         collected_usage = chunk["usage"]
+                        iter_usage = chunk["usage"]
 
                     # After disconnect, just drain chunks without yielding
                     if client_disconnected:
@@ -650,6 +681,16 @@ async def chat_stream(
                             usage_for_update,
                             collected_model,
                         )
+                        # Record usage for budget tracking even on disconnect
+                        await record_usage(
+                            http_client,
+                            user_id=user_id,
+                            conversation_id=body.conversation_id,
+                            harness_id=body.harness.harness_id,
+                            harness_name=body.harness.name,
+                            model=collected_model or body.harness.model,
+                            usage_data=collected_usage,
+                        )
                     return
 
             except httpx.HTTPStatusError as e:
@@ -657,6 +698,18 @@ async def chat_stream(
                 logger.error(
                     "OpenRouter HTTP error: %s",
                     e.response.status_code,
+                )
+                await _save_interrupted(
+                    http_client,
+                    body,
+                    user_id,
+                    collected_content,
+                    all_reasoning,
+                    all_tool_calls_history,
+                    all_parts,
+                    collected_usage,
+                    collected_model,
+                    f"Upstream service error ({e.response.status_code})",
                 )
                 yield {
                     "event": "error",
@@ -669,6 +722,18 @@ async def chat_stream(
                 return
             except httpx.HTTPError as e:
                 logger.error("HTTP error during chat stream: %s", e)
+                await _save_interrupted(
+                    http_client,
+                    body,
+                    user_id,
+                    collected_content,
+                    all_reasoning,
+                    all_tool_calls_history,
+                    all_parts,
+                    collected_usage,
+                    collected_model,
+                    "Service unavailable",
+                )
                 yield {
                     "event": "error",
                     "data": json.dumps({"message": "Service unavailable"}),
@@ -678,6 +743,18 @@ async def chat_stream(
                 logger.exception(
                     "Unexpected error in chat stream for conversation '%s'",
                     body.conversation_id,
+                )
+                await _save_interrupted(
+                    http_client,
+                    body,
+                    user_id,
+                    collected_content,
+                    all_reasoning,
+                    all_tool_calls_history,
+                    all_parts,
+                    collected_usage,
+                    collected_model,
+                    "Internal server error",
                 )
                 yield {
                     "event": "error",
@@ -700,6 +777,71 @@ async def chat_stream(
             # Append text part for this iteration's content (before tool calls)
             if collected_content:
                 all_parts.append({"type": "text", "content": collected_content})
+
+            # Truncation detection. Anthropic via OpenRouter has been observed
+            # returning finish_reason="stop" even when extended-thinking
+            # exhausted the entire output budget, so finish_reason alone isn't
+            # reliable — we also flag truncation when reported completion
+            # tokens reach the cap we requested.
+            iter_completion_tokens = (
+                iter_usage.get("completion_tokens", 0) if iter_usage else 0
+            )
+            hit_cap = iter_completion_tokens >= requested_max_tokens
+            truncated = finish_reason == "length" or hit_cap
+
+            if truncated and not collected_tool_calls:
+                consecutive_truncations += 1
+                logger.warning(
+                    "Response truncated for conversation '%s' "
+                    "(finish_reason=%s, completion_tokens=%d, cap=%d, "
+                    "content_len=%d, consecutive=%d)",
+                    body.conversation_id,
+                    finish_reason,
+                    iter_completion_tokens,
+                    requested_max_tokens,
+                    len(collected_content),
+                    consecutive_truncations,
+                )
+
+                if consecutive_truncations >= MAX_CONSECUTIVE_TRUNCATIONS:
+                    logger.error(
+                        "Aborting conversation '%s' after %d consecutive "
+                        "truncations with no tool calls",
+                        body.conversation_id,
+                        consecutive_truncations,
+                    )
+                    await _save_interrupted(
+                        http_client,
+                        body,
+                        user_id,
+                        collected_content,
+                        all_reasoning,
+                        all_tool_calls_history,
+                        all_parts,
+                        collected_usage,
+                        collected_model,
+                        f"Response repeatedly hit max_tokens "
+                        f"({MAX_CONSECUTIVE_TRUNCATIONS}× in a row) without "
+                        f"making progress",
+                    )
+                    yield {
+                        "event": "error",
+                        "data": json.dumps(
+                            {"message": "Response repeatedly truncated"}
+                        ),
+                    }
+                    return
+
+                # Prefill the partial output so the model resumes coherently
+                # rather than restarting from scratch on the next iteration.
+                if collected_content:
+                    messages.append(
+                        {"role": "assistant", "content": collected_content}
+                    )
+                continue
+
+            # Forward progress was made — reset the truncation counter.
+            consecutive_truncations = 0
 
             # If no tool calls, we're done
             if finish_reason != "tool_calls" or not collected_tool_calls:
@@ -726,6 +868,18 @@ async def chat_stream(
                     usage=usage_for_convex,
                     model=collected_model,
                 )
+
+                # Record usage for budget tracking
+                if collected_usage:
+                    await record_usage(
+                        http_client,
+                        user_id=user_id,
+                        conversation_id=body.conversation_id,
+                        harness_id=body.harness.harness_id,
+                        harness_name=body.harness.name,
+                        model=collected_model or body.harness.model,
+                        usage_data=collected_usage,
+                    )
 
                 done_data: dict = {"content": collected_content}
                 if usage_for_convex:
@@ -905,11 +1059,24 @@ async def chat_stream(
                 body.conversation_id,
             )
 
-        # Max iterations reached
+        # Max iterations reached — persist everything we have so the user can
+        # see the partial trace instead of it silently vanishing.
         logger.warning(
             "Max tool iterations (%d) reached for conversation '%s'",
             MAX_TOOL_ITERATIONS,
             body.conversation_id,
+        )
+        await _save_interrupted(
+            http_client,
+            body,
+            user_id,
+            "",
+            all_reasoning,
+            all_tool_calls_history,
+            all_parts,
+            collected_usage,
+            collected_model,
+            f"Max tool call iterations ({MAX_TOOL_ITERATIONS}) reached",
         )
         yield {
             "event": "error",
@@ -917,3 +1084,64 @@ async def chat_stream(
         }
 
     return EventSourceResponse(event_generator())
+
+
+async def _save_interrupted(
+    http_client: httpx.AsyncClient,
+    body: "ChatRequest",
+    user_id: str,
+    content: str,
+    reasoning: str,
+    tool_calls_history: list[dict],
+    parts: list[dict],
+    collected_usage: dict | None,
+    collected_model: str | None,
+    reason: str,
+) -> None:
+    """Persist partial assistant state when the stream ends before a normal finish."""
+    usage_for_convex: dict | None = None
+    if collected_usage:
+        usage_for_convex = {
+            "promptTokens": collected_usage.get("prompt_tokens", 0),
+            "completionTokens": collected_usage.get("completion_tokens", 0),
+            "totalTokens": collected_usage.get("total_tokens", 0),
+        }
+        cost = collected_usage.get("cost")
+        if cost is not None:
+            usage_for_convex["cost"] = cost
+
+    try:
+        await save_assistant_message(
+            http_client,
+            body.conversation_id,
+            content,
+            reasoning=reasoning or None,
+            tool_calls=tool_calls_history or None,
+            parts=parts or None,
+            usage=usage_for_convex,
+            model=collected_model,
+            interrupted=True,
+            interruption_reason=reason,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to persist interrupted message for conversation '%s'",
+            body.conversation_id,
+        )
+
+    if collected_usage:
+        try:
+            await record_usage(
+                http_client,
+                user_id=user_id,
+                conversation_id=body.conversation_id,
+                harness_id=body.harness.harness_id,
+                harness_name=body.harness.name,
+                model=collected_model or body.harness.model,
+                usage_data=collected_usage,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record usage for interrupted conversation '%s'",
+                body.conversation_id,
+            )

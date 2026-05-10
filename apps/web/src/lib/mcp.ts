@@ -2,11 +2,20 @@ import type { UserResource } from "@clerk/types";
 
 export type McpAuthType = "none" | "bearer" | "oauth" | "tiger_junction";
 
+export interface McpServerCommand {
+	name: string;
+	server: string;
+	tool: string;
+	description: string;
+	parameters: Record<string, unknown>;
+}
+
 export interface McpServerEntry {
 	name: string;
 	url: string;
 	authType: McpAuthType;
 	authToken?: string;
+	commandIds?: string[];
 }
 
 export interface PresetMcpDefinition {
@@ -17,6 +26,7 @@ export interface PresetMcpDefinition {
 	server: McpServerEntry;
 }
 
+// When adding/removing MCPs, also update _PRESET_MCP_CATALOG in packages/fastapi/app/routes/harness_suggest.py.
 export const PRESET_MCPS: PresetMcpDefinition[] = [
 	{
 		id: "princetoncourses",
@@ -55,6 +65,18 @@ export const PRESET_MCPS: PresetMcpDefinition[] = [
 		},
 	},
 	{
+		id: "tigerpath",
+		description:
+			"Plan your 4-year course schedule, explore major requirements, and see when students typically take courses.",
+		iconName: "https://www.google.com/s2/favicons?domain=princeton.edu&sz=64",
+		category: "student",
+		server: {
+			name: "TigerPath",
+			url: "https://junction-engine.tigerapps.org/path/mcp",
+			authType: "tiger_junction",
+		},
+	},
+	{
 		id: "github",
 		description:
 			"Browse repos, manage issues and pull requests, and search code.",
@@ -87,18 +109,6 @@ export const PRESET_MCPS: PresetMcpDefinition[] = [
 		server: {
 			name: "Linear",
 			url: "https://mcp.linear.app/mcp",
-			authType: "oauth",
-		},
-	},
-	{
-		id: "slack",
-		description:
-			"(wait until deployed)Send messages, read channel history, and search conversations.",
-		iconName: "slack",
-		category: "comms",
-		server: {
-			name: "Slack",
-			url: "https://mcp.slack.com/mcp",
 			authType: "oauth",
 		},
 	},
@@ -139,17 +149,6 @@ export const PRESET_MCPS: PresetMcpDefinition[] = [
 	// 	},
 	// },
 	{
-		id: "jira",
-		description: "Create tickets, track sprints, and manage Agile releases.",
-		iconName: "jira",
-		category: "productivity",
-		server: {
-			name: "Jira",
-			url: "https://mcp.atlassian.com/v1/mcp",
-			authType: "oauth",
-		},
-	},
-	{
 		id: "awsknowledge",
 		description:
 			"Search AWS documentation and knowledge bases for services and best practices.",
@@ -185,6 +184,66 @@ export const PRESET_MCPS: PresetMcpDefinition[] = [
 		},
 	},
 ];
+
+/** Build the API payload shape for MCP servers. */
+export function toMcpServerPayload(servers: McpServerEntry[]) {
+	return servers.map((s) => ({
+		name: s.name,
+		url: s.url,
+		auth_type: s.authType,
+		...(s.authToken ? { auth_token: s.authToken } : {}),
+	}));
+}
+
+/**
+ * Fetch slash commands from the FastAPI backend.
+ * Returns the raw command list with $-prefixed keys stripped from parameters,
+ * or null if the fetch fails.
+ */
+export async function fetchCommandsFromApi(
+	apiUrl: string,
+	servers: McpServerEntry[],
+	token: string | null,
+): Promise<McpServerCommand[] | null> {
+	try {
+		const res = await fetch(`${apiUrl}/api/commands/list`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...(token ? { Authorization: `Bearer ${token}` } : {}),
+			},
+			body: JSON.stringify({ mcp_servers: toMcpServerPayload(servers) }),
+		});
+		if (!res.ok) return null;
+		const data = await res.json();
+		return (data.commands ?? []).map((c: McpServerCommand) => ({
+			name: c.name,
+			server: c.server,
+			tool: c.tool,
+			description: c.description,
+			parameters: c.parameters,
+		}));
+	} catch {
+		return null;
+	}
+}
+
+/** Sanitize a name the same way the backend does (non-alphanumeric → underscore). */
+export const sanitizeServerName = (n: string) =>
+	n.replace(/[^a-zA-Z0-9_-]/g, "_");
+
+/** Validate an MCP server URL. Returns an error string or null if valid. */
+export function validateMcpUrl(url: string): string | null {
+	if (/\s/.test(url)) return "URL must not contain spaces";
+	try {
+		const parsed = new URL(url);
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+			return "URL must start with http:// or https://";
+	} catch {
+		return "Please enter a valid URL";
+	}
+	return null;
+}
 
 /** Converts an array of selected preset IDs into their McpServerEntry objects. */
 export function presetIdsToServerEntries(ids: string[]): McpServerEntry[] {

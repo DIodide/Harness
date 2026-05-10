@@ -13,6 +13,7 @@ import {
 	useSandboxPanel,
 } from "../../lib/sandbox-panel-context";
 import { cn } from "../../lib/utils";
+import { RoseCurveSpinner } from "../rose-curve-spinner";
 import { CommandRunner } from "./command-input";
 import { FileExplorer } from "./file-explorer";
 import { FileViewer } from "./file-viewer";
@@ -89,6 +90,7 @@ export function SandboxPanel() {
 	const {
 		activeTab,
 		setActiveTab,
+		reloadKey,
 		activeFile,
 		openFiles,
 		togglePanel,
@@ -108,8 +110,10 @@ export function SandboxPanel() {
 			className="relative flex h-full flex-col overflow-hidden border-l border-border bg-background"
 		>
 			{/* Resize handle */}
-			<div
-				className="absolute left-0 top-0 z-10 h-full w-1 cursor-col-resize hover:bg-foreground/10 active:bg-foreground/15"
+			<button
+				type="button"
+				aria-label="Resize sandbox panel"
+				className="absolute left-0 top-0 z-10 h-full w-1 cursor-col-resize border-0 bg-transparent p-0 hover:bg-foreground/10 active:bg-foreground/15"
 				onMouseDown={handleDragStart}
 			/>
 
@@ -179,7 +183,10 @@ export function SandboxPanel() {
 			</div>
 
 			{/* Content */}
-			<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+			<div
+				key={`${panel.sandboxId ?? "none"}-${reloadKey}`}
+				className="flex min-h-0 flex-1 flex-col overflow-hidden"
+			>
 				{/* Files tab */}
 				{activeTab === "files" && (
 					<AnimatePresence mode="wait" initial={false}>
@@ -266,7 +273,11 @@ export function SandboxPanel() {
 					{terminalMode === "pty" ? (
 						<Suspense
 							fallback={
-								<div className="flex flex-1 items-center justify-center">
+								<div className="flex flex-1 items-center justify-center gap-2">
+									<RoseCurveSpinner
+										size={12}
+										className="text-muted-foreground/40"
+									/>
 									<span className="font-mono text-[10.5px] text-muted-foreground/40">
 										Loading terminal...
 									</span>

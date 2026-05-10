@@ -55,6 +55,28 @@ export interface GitCommit {
 	date: string;
 }
 
+export interface SandboxLifecycleResponse {
+	success: boolean;
+	status: string;
+}
+
+export interface CreateSandboxRequest {
+	harnessId?: string;
+	name: string;
+	language: string;
+	resourceTier: "basic" | "standard" | "performance";
+	ephemeral: boolean;
+	gitRepo?: string;
+}
+
+export interface CreateSandboxResponse {
+	id: string;
+	status: string;
+	language: string;
+	resource_tier: string;
+	ephemeral: boolean;
+}
+
 async function sandboxFetch<T>(
 	path: string,
 	getToken: () => Promise<string | null>,
@@ -82,6 +104,36 @@ async function sandboxFetch<T>(
 
 export function createSandboxApi(getToken: () => Promise<string | null>) {
 	return {
+		createSandbox(request: CreateSandboxRequest) {
+			return sandboxFetch<CreateSandboxResponse>("/api/sandbox", getToken, {
+				method: "POST",
+				body: JSON.stringify({
+					harness_id: request.harnessId,
+					name: request.name,
+					language: request.language,
+					resource_tier: request.resourceTier,
+					ephemeral: request.ephemeral,
+					git_repo: request.gitRepo,
+				}),
+			});
+		},
+
+		startSandbox(sandboxId: string) {
+			return sandboxFetch<SandboxLifecycleResponse>(
+				`/api/sandbox/${sandboxId}/start`,
+				getToken,
+				{ method: "POST" },
+			);
+		},
+
+		stopSandbox(sandboxId: string) {
+			return sandboxFetch<SandboxLifecycleResponse>(
+				`/api/sandbox/${sandboxId}/stop`,
+				getToken,
+				{ method: "POST" },
+			);
+		},
+
 		listFiles(sandboxId: string, path = "/home/daytona") {
 			return sandboxFetch<ListFilesResponse>(
 				`/api/sandbox/${sandboxId}/files?path=${encodeURIComponent(path)}`,

@@ -16,9 +16,11 @@ export default defineSchema({
 				url: v.string(),
 				authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth"), v.literal("tiger_junction")),
 				authToken: v.optional(v.string()),
+				commandIds: v.optional(v.array(v.id("commands"))),
 			}),
 		),
 		skills: v.array(v.object({ name: v.string(), description: v.string() })),
+		systemPrompt: v.optional(v.string()),
 		suggestedPrompts: v.optional(v.array(v.string())),
 		userId: v.string(),
 		lastUsedAt: v.optional(v.number()),
@@ -42,6 +44,14 @@ export default defineSchema({
 			}),
 		),
 	}).index("by_user", ["userId"]),
+
+	commands: defineTable({
+		name: v.string(),
+		server: v.string(),
+		tool: v.string(),
+		description: v.string(),
+		parametersJson: v.string(),
+	}).index("by_name", ["name"]),
 
 	sandboxes: defineTable({
 		userId: v.string(),
@@ -75,25 +85,41 @@ export default defineSchema({
 		.index("by_harness", ["harnessId"])
 		.index("by_daytona_id", ["daytonaSandboxId"]),
 
+	workspaces: defineTable({
+		userId: v.string(),
+		name: v.string(),
+		harnessId: v.optional(v.id("harnesses")),
+		sandboxId: v.optional(v.id("sandboxes")),
+		color: v.optional(v.string()),
+		createdAt: v.number(),
+		lastUsedAt: v.number(),
+	})
+		.index("by_user", ["userId"])
+		.index("by_user_last_used", ["userId", "lastUsedAt"]),
+
 	conversations: defineTable({
 		title: v.string(),
 		lastHarnessId: v.optional(v.id("harnesses")),
+		workspaceId: v.optional(v.id("workspaces")),
 		userId: v.string(),
 		lastMessageAt: v.number(),
 		forkedFromConversationId: v.optional(v.id("conversations")),
 		forkedAtMessageCount: v.optional(v.number()),
 		editParentConversationId: v.optional(v.id("conversations")),
 		editParentMessageCount: v.optional(v.number()),
+		isCreationSession: v.optional(v.boolean()),
 	})
 		.index("by_user", ["userId"])
 		.index("by_user_last_message", ["userId", "lastMessageAt"])
+		.index("by_workspace_last_message", ["workspaceId", "lastMessageAt"])
 		.searchIndex("search_title", {
 			searchField: "title",
-			filterFields: ["userId"],
+			filterFields: ["userId", "workspaceId"],
 		}),
 
 	messages: defineTable({
 		conversationId: v.id("conversations"),
+		workspaceId: v.optional(v.id("workspaces")),
 		userId: v.optional(v.string()),
 		role: v.union(v.literal("user"), v.literal("assistant")),
 		content: v.string(),
@@ -134,6 +160,7 @@ export default defineSchema({
 		),
 		model: v.optional(v.string()),
 		interrupted: v.optional(v.boolean()),
+		interruptionReason: v.optional(v.string()),
 		attachments: v.optional(
 			v.array(
 				v.object({
@@ -148,7 +175,7 @@ export default defineSchema({
 		.index("by_conversation", ["conversationId"])
 		.searchIndex("search_content", {
 			searchField: "content",
-			filterFields: ["conversationId", "userId"]
+			filterFields: ["conversationId", "userId", "workspaceId"]
 		}),
 
 
@@ -184,6 +211,10 @@ export default defineSchema({
 		.searchIndex("search_skills", {
 			searchField: "skillId",
 			filterFields: [],
+		})
+		.searchIndex("search_skills_description", {
+			searchField: "description",
+			filterFields: [],
 		}),
 
 	userSettings: defineTable({
@@ -201,5 +232,74 @@ export default defineSchema({
 		modelSelectorMode: v.optional(
 			v.union(v.literal("session"), v.literal("harness")),
 		),
+		// Control whether or not we are in basic models or workspaces modes
+		workspacesMode: v.optional(
+			v.union(
+				v.literal("basic"),
+				v.literal("workspaces")
+			)
+		),
 	}).index("by_user", ["userId"]),
+
+	usageBudgets: defineTable({
+		userId: v.string(),
+		periodType: v.union(v.literal("daily"), v.literal("weekly")),
+		period: v.string(), // "2026-04-08" (daily) or "2026-W15" (weekly)
+		totalCostUsed: v.number(),
+		costLimit: v.number(),
+		totalTokensUsed: v.number(),
+		perModelUsage: v.array(
+			v.object({
+				model: v.string(),
+				tokensUsed: v.number(),
+				costUsed: v.number(),
+			}),
+		),
+		perHarnessUsage: v.array(
+			v.object({
+				harnessId: v.string(),
+				harnessName: v.string(),
+				tokensUsed: v.number(),
+				costUsed: v.number(),
+			}),
+		),
+		updatedAt: v.number(),
+	}).index("by_user_period", ["userId", "periodType", "period"]),
+
+	harnessConfigRatings: defineTable({
+		userId: v.string(),
+		rating: v.union(v.literal("up"), v.literal("down")),
+		configSnapshot: v.object({
+			name: v.string(),
+			model: v.string(),
+			mcpIds: v.array(v.string()),
+		}),
+		conversationSnapshot: v.array(
+			v.object({
+				role: v.string(),
+				content: v.string(),
+			}),
+		),
+		createdAt: v.number(),
+	})
+		.index("by_user", ["userId"])
+		.index("by_rating", ["rating"]),
+
+	usageLedger: defineTable({
+		userId: v.string(),
+		conversationId: v.id("conversations"),
+		harnessId: v.optional(v.string()),
+		harnessName: v.optional(v.string()),
+		model: v.string(),
+		promptTokens: v.number(),
+		completionTokens: v.number(),
+		totalTokens: v.number(),
+		cost: v.number(),
+		day: v.string(),  // "2026-04-08"
+		week: v.string(), // "2026-W15"
+		recordedAt: v.number(),
+	})
+		.index("by_user_day", ["userId", "day"])
+		.index("by_user_week", ["userId", "week"])
+		.index("by_conversation", ["conversationId"]),
 });

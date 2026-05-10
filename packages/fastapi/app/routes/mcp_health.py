@@ -15,6 +15,7 @@ from app.services.mcp_client import (
     check_server_health,
     evict_session_cache,
     list_tools,
+    resolve_princeton_netid,
 )
 from app.services.openrouter import complete_chat
 
@@ -52,6 +53,8 @@ async def _check_one(
             return ServerHealth(name=server.name, url=server.url, reachable=True, status="ok")
         return ServerHealth(name=server.name, url=server.url, reachable=False, status="error")
     except McpAuthRequiredError:
+        # Either an OAuth 401 or a Princeton MCP requested without a verified
+        # netid — both surface to the user as "needs verification / reconnect".
         return ServerHealth(name=server.name, url=server.url, reachable=False, status="auth_required")
     except Exception as e:
         logger.warning("Health check failed for '%s' at %s: %s", server.name, server.url, e)
@@ -64,7 +67,8 @@ async def check_health(
     http_client: httpx.AsyncClient = Depends(get_http_client),
     user: dict = Depends(get_current_user),
 ):
-    user_ctx = UserContext(user_id=user.get("sub"))
+    netid = await resolve_princeton_netid(http_client, user)
+    user_ctx = UserContext(user_id=user.get("sub"), princeton_netid=netid)
 
     results = await asyncio.gather(
         *[_check_one(http_client, s, user_ctx, body.force) for s in body.mcp_servers],
@@ -96,7 +100,8 @@ async def generate_prompts(
     http_client: httpx.AsyncClient = Depends(get_http_client),
     user: dict = Depends(get_current_user),
 ):
-    user_ctx = UserContext(user_id=user.get("sub"))
+    netid = await resolve_princeton_netid(http_client, user)
+    user_ctx = UserContext(user_id=user.get("sub"), princeton_netid=netid)
 
     if not body.mcp_servers:
         return GeneratePromptsResponse(prompts=[])

@@ -22,13 +22,11 @@ class Settings(BaseSettings):
     daytona_api_url: str = "https://app.daytona.io/api"
     daytona_target: str = "us"
 
-    # Pre-registered Slack OAuth App credentials (for Slack MCP server).
-    # Create one at https://api.slack.com/apps
-    slack_oauth_client_id: str = ""
-    slack_oauth_client_secret: str = ""
-
     # Tiger Junction engine shared bearer token (MCP_ACCESS_TOKEN on the engine side)
     tiger_junction_mcp_token: str = ""
+
+    # Clerk secret key for Backend API calls (e.g. resolving Princeton netid from verified emails).
+    clerk_secret_key: str = ""
 
     # Clerk JWT verification — pinned issuer prevents attacker-controlled JWKS.
     clerk_issuer: str = ""
@@ -45,6 +43,10 @@ class Settings(BaseSettings):
             logger.warning(
                 "CONVEX_DEPLOY_KEY is not set — backend cannot save messages to Convex"
             )
+        if not self.clerk_secret_key:
+            raise RuntimeError(
+                "CLERK_SECRET_KEY is required — Princeton netid resolution needs the Clerk Backend API key"
+            )
         if not self.clerk_issuer:
             raise RuntimeError(
                 "CLERK_ISSUER is required — JWT verification cannot pin the issuer without it"
@@ -55,44 +57,36 @@ settings = Settings()
 
 
 AVAILABLE_MODELS = [
-    {"id": "openai/gpt-4o", "name": "GPT-4o"},
-    {"id": "openai/gpt-4.1", "name": "GPT-4.1"},
-    {"id": "openai/gpt-4.1-mini", "name": "GPT-4.1 Mini"},
-    {"id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4"},
-    {"id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4 (Thinking)"},
-    {"id": "anthropic/claude-opus-4", "name": "Claude Opus 4"},
-    {"id": "anthropic/claude-opus-4", "name": "Claude Opus 4 (Thinking)"},
-    {"id": "google/gemini-2.5-pro-preview-06-05", "name": "Gemini 2.5 Pro"},
-    {"id": "google/gemini-2.5-flash", "name": "Gemini 2.5 Flash"},
-    {"id": "deepseek/deepseek-r1", "name": "DeepSeek R1"},
-    {"id": "deepseek/deepseek-chat", "name": "DeepSeek V3"},
-    {"id": "x-ai/grok-3", "name": "Grok 3"},
-    {"id": "x-ai/grok-3-mini", "name": "Grok 3 Mini"},
+    {"id": "openai/gpt-5.5", "name": "GPT-5.5"},
+    {"id": "openai/gpt-5.4", "name": "GPT-5.4"},
+    {"id": "anthropic/claude-sonnet-4.6", "name": "Claude Sonnet 4.6"},
+    {"id": "anthropic/claude-sonnet-4.6", "name": "Claude Sonnet 4.6 (Thinking)"},
+    {"id": "anthropic/claude-opus-4.6-fast", "name": "Claude Opus 4.6 (Fast)"},
+    {"id": "anthropic/claude-opus-4.7", "name": "Claude Opus 4.7"},
+    {"id": "anthropic/claude-opus-4.7", "name": "Claude Opus 4.7 (Thinking)"},
+    {"id": "google/gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro Preview"},
+    {"id": "google/gemini-3-flash-preview", "name": "Gemini 3 Flash Preview"},
+    {"id": "google/gemini-3.1-flash-lite-preview", "name": "Gemini 3.1 Flash Lite Preview"},
 ]
 
 # Maps short model names (stored in harness.model) to full OpenRouter model IDs.
 # Thinking variants use the same provider model but trigger the reasoning parameter.
 MODEL_MAP = {
-    "gpt-4o": "openai/gpt-4o",
-    "gpt-4.1": "openai/gpt-4.1",
-    "gpt-4.1-mini": "openai/gpt-4.1-mini",
-    "claude-sonnet-4": "anthropic/claude-sonnet-4",
-    "claude-sonnet-4-thinking": "anthropic/claude-sonnet-4",
-    "claude-opus-4": "anthropic/claude-opus-4",
-    "claude-opus-4-thinking": "anthropic/claude-opus-4",
-    "gemini-2.5-pro": "google/gemini-2.5-pro-preview-06-05",
-    "gemini-2.5-flash": "google/gemini-2.5-flash",
-    "deepseek-r1": "deepseek/deepseek-r1",
-    "deepseek-v3": "deepseek/deepseek-chat",
-    "grok-3": "x-ai/grok-3",
-    "grok-3-mini": "x-ai/grok-3-mini",
-    "kimi-k2": "moonshotai/kimi-k2",
+    "gpt-5.5": "openai/gpt-5.5",
+    "gpt-5.4": "openai/gpt-5.4",
+    "claude-sonnet-4.6": "anthropic/claude-sonnet-4.6",
+    "claude-sonnet-4.6-thinking": "anthropic/claude-sonnet-4.6",
+    "claude-opus-4.6-fast": "anthropic/claude-opus-4.6-fast",
+    "claude-opus-4.7": "anthropic/claude-opus-4.7",
+    "claude-opus-4.7-thinking": "anthropic/claude-opus-4.7",
+    "gemini-3.1-pro": "google/gemini-3.1-pro-preview",
+    "gemini-3-flash": "google/gemini-3-flash-preview",
+    "gemini-3.1-flash-lite": "google/gemini-3.1-flash-lite-preview",
 }
 
 # Short model names that should send the `reasoning` parameter to OpenRouter.
 # The base Claude/Opus variants do NOT send reasoning — use the -thinking suffix.
 THINKING_MODELS: set[str] = {
-    "claude-sonnet-4-thinking",
-    "claude-opus-4-thinking",
-    "deepseek-r1",
+    "claude-sonnet-4.6-thinking",
+    "claude-opus-4.7-thinking",
 }

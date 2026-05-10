@@ -9,13 +9,24 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SignUpRouteImport } from './routes/sign-up'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as AppRouteImport } from './routes/app'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as WorkspacesIndexRouteImport } from './routes/workspaces/index'
+import { Route as SandboxesIndexRouteImport } from './routes/sandboxes/index'
 import { Route as HarnessesIndexRouteImport } from './routes/harnesses/index'
 import { Route as ChatIndexRouteImport } from './routes/chat/index'
+import { Route as SandboxesCreate_sandboxRouteImport } from './routes/sandboxes/create_sandbox'
+import { Route as SandboxesSandboxIdRouteImport } from './routes/sandboxes/$sandboxId'
 import { Route as HarnessesHarnessIdRouteImport } from './routes/harnesses/$harnessId'
 
+const SignUpRoute = SignUpRouteImport.update({
+  id: '/sign-up',
+  path: '/sign-up',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SignInRoute = SignInRouteImport.update({
   id: '/sign-in',
   path: '/sign-in',
@@ -26,9 +37,24 @@ const OnboardingRoute = OnboardingRouteImport.update({
   path: '/onboarding',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppRoute = AppRouteImport.update({
+  id: '/app',
+  path: '/app',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WorkspacesIndexRoute = WorkspacesIndexRouteImport.update({
+  id: '/workspaces/',
+  path: '/workspaces/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SandboxesIndexRoute = SandboxesIndexRouteImport.update({
+  id: '/sandboxes/',
+  path: '/sandboxes/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const HarnessesIndexRoute = HarnessesIndexRouteImport.update({
@@ -41,6 +67,16 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
   path: '/chat/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SandboxesCreate_sandboxRoute = SandboxesCreate_sandboxRouteImport.update({
+  id: '/sandboxes/create_sandbox',
+  path: '/sandboxes/create_sandbox',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SandboxesSandboxIdRoute = SandboxesSandboxIdRouteImport.update({
+  id: '/sandboxes/$sandboxId',
+  path: '/sandboxes/$sandboxId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const HarnessesHarnessIdRoute = HarnessesHarnessIdRouteImport.update({
   id: '/harnesses/$harnessId',
   path: '/harnesses/$harnessId',
@@ -49,67 +85,116 @@ const HarnessesHarnessIdRoute = HarnessesHarnessIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/app': typeof AppRoute
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
+  '/sign-up': typeof SignUpRoute
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
+  '/sandboxes/$sandboxId': typeof SandboxesSandboxIdRoute
+  '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
   '/chat/': typeof ChatIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
+  '/sandboxes/': typeof SandboxesIndexRoute
+  '/workspaces/': typeof WorkspacesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/app': typeof AppRoute
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
+  '/sign-up': typeof SignUpRoute
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
+  '/sandboxes/$sandboxId': typeof SandboxesSandboxIdRoute
+  '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
   '/chat': typeof ChatIndexRoute
   '/harnesses': typeof HarnessesIndexRoute
+  '/sandboxes': typeof SandboxesIndexRoute
+  '/workspaces': typeof WorkspacesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/app': typeof AppRoute
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
+  '/sign-up': typeof SignUpRoute
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
+  '/sandboxes/$sandboxId': typeof SandboxesSandboxIdRoute
+  '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
   '/chat/': typeof ChatIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
+  '/sandboxes/': typeof SandboxesIndexRoute
+  '/workspaces/': typeof WorkspacesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/app'
     | '/onboarding'
     | '/sign-in'
+    | '/sign-up'
     | '/harnesses/$harnessId'
+    | '/sandboxes/$sandboxId'
+    | '/sandboxes/create_sandbox'
     | '/chat/'
     | '/harnesses/'
+    | '/sandboxes/'
+    | '/workspaces/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/app'
     | '/onboarding'
     | '/sign-in'
+    | '/sign-up'
     | '/harnesses/$harnessId'
+    | '/sandboxes/$sandboxId'
+    | '/sandboxes/create_sandbox'
     | '/chat'
     | '/harnesses'
+    | '/sandboxes'
+    | '/workspaces'
   id:
     | '__root__'
     | '/'
+    | '/app'
     | '/onboarding'
     | '/sign-in'
+    | '/sign-up'
     | '/harnesses/$harnessId'
+    | '/sandboxes/$sandboxId'
+    | '/sandboxes/create_sandbox'
     | '/chat/'
     | '/harnesses/'
+    | '/sandboxes/'
+    | '/workspaces/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AppRoute: typeof AppRoute
   OnboardingRoute: typeof OnboardingRoute
   SignInRoute: typeof SignInRoute
+  SignUpRoute: typeof SignUpRoute
   HarnessesHarnessIdRoute: typeof HarnessesHarnessIdRoute
+  SandboxesSandboxIdRoute: typeof SandboxesSandboxIdRoute
+  SandboxesCreate_sandboxRoute: typeof SandboxesCreate_sandboxRoute
   ChatIndexRoute: typeof ChatIndexRoute
   HarnessesIndexRoute: typeof HarnessesIndexRoute
+  SandboxesIndexRoute: typeof SandboxesIndexRoute
+  WorkspacesIndexRoute: typeof WorkspacesIndexRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/sign-up': {
+      id: '/sign-up'
+      path: '/sign-up'
+      fullPath: '/sign-up'
+      preLoaderRoute: typeof SignUpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sign-in': {
       id: '/sign-in'
       path: '/sign-in'
@@ -124,11 +209,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OnboardingRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/app': {
+      id: '/app'
+      path: '/app'
+      fullPath: '/app'
+      preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/workspaces/': {
+      id: '/workspaces/'
+      path: '/workspaces'
+      fullPath: '/workspaces/'
+      preLoaderRoute: typeof WorkspacesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sandboxes/': {
+      id: '/sandboxes/'
+      path: '/sandboxes'
+      fullPath: '/sandboxes/'
+      preLoaderRoute: typeof SandboxesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/harnesses/': {
@@ -145,6 +251,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/sandboxes/create_sandbox': {
+      id: '/sandboxes/create_sandbox'
+      path: '/sandboxes/create_sandbox'
+      fullPath: '/sandboxes/create_sandbox'
+      preLoaderRoute: typeof SandboxesCreate_sandboxRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sandboxes/$sandboxId': {
+      id: '/sandboxes/$sandboxId'
+      path: '/sandboxes/$sandboxId'
+      fullPath: '/sandboxes/$sandboxId'
+      preLoaderRoute: typeof SandboxesSandboxIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/harnesses/$harnessId': {
       id: '/harnesses/$harnessId'
       path: '/harnesses/$harnessId'
@@ -157,11 +277,17 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AppRoute: AppRoute,
   OnboardingRoute: OnboardingRoute,
   SignInRoute: SignInRoute,
+  SignUpRoute: SignUpRoute,
   HarnessesHarnessIdRoute: HarnessesHarnessIdRoute,
+  SandboxesSandboxIdRoute: SandboxesSandboxIdRoute,
+  SandboxesCreate_sandboxRoute: SandboxesCreate_sandboxRoute,
   ChatIndexRoute: ChatIndexRoute,
   HarnessesIndexRoute: HarnessesIndexRoute,
+  SandboxesIndexRoute: SandboxesIndexRoute,
+  WorkspacesIndexRoute: WorkspacesIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

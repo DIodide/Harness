@@ -9,16 +9,16 @@ import {
 	redirect,
 	useNavigate,
 } from "@tanstack/react-router";
-import { usePaginatedQuery } from "convex/react";
+import { useConvexAuth, usePaginatedQuery } from "convex/react";
 import {
 	AlertTriangle,
 	ArrowUp,
+	Box,
 	Brain,
 	Check,
 	ChevronDown,
 	ChevronRight,
 	Cpu,
-	Loader2,
 	LogOut,
 	MessageSquare,
 	Mic,
@@ -26,6 +26,7 @@ import {
 	PanelLeftOpen,
 	Paperclip,
 	Plus,
+	RotateCcw,
 	Search, // Icon for search
 	Settings,
 	SlidersHorizontal,
@@ -35,7 +36,6 @@ import {
 	User,
 	Wrench,
 	X,
-	Zap,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import React, {
@@ -49,7 +49,9 @@ import React, {
 } from "react";
 import toast from "react-hot-toast";
 import { AttachmentChip } from "../../components/attachment-chip";
+import { useChatPaletteCommands } from "../../components/command-palette/commands/chat-commands";
 import { HarnessMark } from "../../components/harness-mark";
+import { HeaderSkillsMenu } from "../../components/header-skills-menu";
 import { MarkdownMessage } from "../../components/markdown-message";
 import {
 	type HealthStatus,
@@ -62,8 +64,15 @@ import {
 	MessageActions,
 } from "../../components/message-actions";
 import { MessageAttachments } from "../../components/message-attachments";
+import { PendingResponseIndicator } from "../../components/pending-response-indicator";
+import { RoseCurveSpinner } from "../../components/rose-curve-spinner";
 import { SandboxPanel } from "../../components/sandbox/sandbox-panel";
 import { SandboxResult } from "../../components/sandbox-result";
+import {
+	SlashCommandMenu,
+	useSlashCommandInput,
+} from "../../components/slash-commands";
+import { ThinkingFiveSpinner } from "../../components/thinking-five-spinner";
 import {
 	Avatar,
 	AvatarFallback,
@@ -102,9 +111,21 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "../../components/ui/tooltip";
+import { UsageDialog } from "../../components/usage-dialog";
+import { formatResetTime, UsageBadge } from "../../components/usage-display";
 import { env } from "../../env";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
-import type { McpAuthType } from "../../lib/mcp";
+import {
+	CHAT_INPUT_COUNTER_THRESHOLD,
+	CHAT_INPUT_MAX_LENGTH,
+} from "../../lib/chat-input";
+import {
+	EMPTY_STREAM_STATE,
+	useChatStreamContext,
+	useChatStreamSideEffects,
+} from "../../lib/chat-stream-context";
+import type { McpAuthType, McpServerCommand } from "../../lib/mcp";
+import { fetchCommandsFromApi, sanitizeServerName } from "../../lib/mcp";
 import {
 	acceptString,
 	allowedMimeTypes,
@@ -118,22 +139,31 @@ import {
 	useSandboxPanel,
 } from "../../lib/sandbox-panel-context";
 import type { SkillEntry } from "../../lib/skills";
-import {
-	type ConvoStreamState,
-	type StreamPart,
-	type ToolCallEvent,
-	type UsageData,
-	useChatStream,
+import type {
+	BudgetExceededInfo,
+	StreamPart,
+	ToolCallEvent,
+	UsageData,
 } from "../../lib/use-chat-stream";
 import { cn } from "../../lib/utils";
 
 export const Route = createFileRoute("/chat/")({
-	validateSearch: (search: Record<string, unknown>) => ({
+	validateSearch: (
+		search: Record<string, unknown>,
+	): { harnessId?: string } => ({
 		harnessId: (search.harnessId as string) ?? undefined,
 	}),
-	beforeLoad: ({ context }) => {
+	beforeLoad: async ({ context }) => {
 		if (!context.userId) {
 			throw redirect({ to: "/sign-in" });
+		}
+		const settings = await context.queryClient.ensureQueryData(
+			convexQuery(api.userSettings.get, {}),
+		);
+		if (settings.workspacesMode === "workspaces") {
+			throw redirect({
+				to: "/workspaces",
+			});
 		}
 	},
 	component: ChatPage,
@@ -148,15 +178,7 @@ const SUGGESTED_PROMPTS = [
 	"Create a deployment checklist for production",
 ];
 
-const EMPTY_STREAM_STATE: ConvoStreamState = {
-	content: null,
-	reasoning: null,
-	toolCalls: [],
-	parts: [],
-	pendingDoneContent: null,
-	usage: null,
-	model: null,
-};
+type SandboxSelection = "harness" | "none" | Id<"sandboxes">;
 
 function ChatPage() {
 	const navigate = useNavigate();
@@ -169,12 +191,15 @@ function ChatPage() {
 	const { data: conversations } = useQuery(
 		convexQuery(api.conversations.list, {}),
 	);
+	const { data: sandboxes } = useQuery(convexQuery(api.sandboxes.list, {}));
 	const { data: userSettings } = useQuery(
 		convexQuery(api.userSettings.get, {}),
 	);
 
 	const [activeHarnessId, setActiveHarnessId] =
 		useState<Id<"harnesses"> | null>(null);
+	const [activeSandboxSelection, setActiveSandboxSelection] =
+		useState<SandboxSelection>("harness");
 	const [activeConvoId, setActiveConvoId] =
 		useState<Id<"conversations"> | null>(null);
 	// Session-only model override — does not persist to the harness
@@ -185,14 +210,15 @@ function ChatPage() {
 		useState<Id<"messages"> | null>(null);
 	const [editingContent, setEditingContent] = useState("");
 
-	// Per-conversation streaming state
-	const [streamStates, setStreamStates] = useState<
-		Record<string, ConvoStreamState>
-	>({});
-	const streamStatesRef = useRef(streamStates);
-	useEffect(() => {
-		streamStatesRef.current = streamStates;
-	}, [streamStates]);
+	// Budget exceeded state
+	const [budgetExceeded, setBudgetExceeded] =
+		useState<BudgetExceededInfo | null>(null);
+
+	// Streaming state lives in the global provider so an in-flight stream
+	// survives navigation away from /chat (e.g. to /harnesses) and back.
+	const chatStream = useChatStreamContext();
+	const { streamStates, streamStatesRef, clearStreamState, setStreamState } =
+		chatStream;
 
 	// MCP server failures reported during stream start
 	type McpFailure = {
@@ -208,6 +234,13 @@ function ChatPage() {
 	const [mcpHealthStatuses, setMcpHealthStatuses] = useState<
 		Record<string, HealthStatus>
 	>({});
+
+	// Bump to force a slash-command refetch (after OAuth, harness edit, etc.)
+	const [commandRefreshKey, setCommandRefreshKey] = useState(0);
+	const refreshCommands = useCallback(
+		() => setCommandRefreshKey((k) => k + 1),
+		[],
+	);
 
 	// Track conversations that just finished streaming (show green checkmark briefly)
 	const [doneConvoIds, setDoneConvoIds] = useState<Set<string>>(new Set());
@@ -267,6 +300,9 @@ function ChatPage() {
 	const updateHarness = useMutation({
 		mutationFn: useConvexMutation(api.harnesses.update),
 	});
+	const upsertCommandsMut = useMutation({
+		mutationFn: useConvexMutation(api.commands.upsert),
+	});
 
 	// Save interrupted assistant message from frontend
 	const saveInterruptedMsg = useMutation({
@@ -278,95 +314,7 @@ function ChatPage() {
 		mutationFn: useConvexMutation(api.messages.send),
 	});
 
-	const chatStream = useChatStream({
-		onToken: (convoId, content) => {
-			setStreamStates((prev) => {
-				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
-				const parts = [...state.parts];
-				const last = parts[parts.length - 1];
-				if (last?.type === "text") {
-					parts[parts.length - 1] = {
-						...last,
-						content: (last.content ?? "") + content,
-					};
-				} else {
-					parts.push({ type: "text", content });
-				}
-				return {
-					...prev,
-					[convoId]: {
-						...state,
-						content: (state.content ?? "") + content,
-						parts,
-					},
-				};
-			});
-		},
-		onThinking: (convoId, content) => {
-			setStreamStates((prev) => {
-				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
-				const parts = [...state.parts];
-				const last = parts[parts.length - 1];
-				if (last?.type === "reasoning") {
-					parts[parts.length - 1] = {
-						...last,
-						content: (last.content ?? "") + content,
-					};
-				} else {
-					parts.push({ type: "reasoning", content });
-				}
-				return {
-					...prev,
-					[convoId]: {
-						...state,
-						reasoning: (state.reasoning ?? "") + content,
-						parts,
-					},
-				};
-			});
-		},
-		onToolCall: (convoId, event) => {
-			setStreamStates((prev) => {
-				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
-				return {
-					...prev,
-					[convoId]: {
-						...state,
-						toolCalls: [...state.toolCalls, event],
-						parts: [
-							...state.parts,
-							{
-								type: "tool_call" as const,
-								tool: event.tool,
-								arguments: event.arguments,
-								call_id: event.call_id,
-							},
-						],
-					},
-				};
-			});
-		},
-		onToolResult: (convoId, event) => {
-			setStreamStates((prev) => {
-				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
-				return {
-					...prev,
-					[convoId]: {
-						...state,
-						toolCalls: state.toolCalls.map((tc) =>
-							tc.call_id === event.call_id
-								? { ...tc, result: event.result }
-								: tc,
-						),
-						parts: state.parts.map((p) =>
-							p.type === "tool_call" && p.call_id === event.call_id
-								? { ...p, result: event.result }
-								: p,
-						),
-					},
-				};
-			});
-		},
+	useChatStreamSideEffects({
 		onMcpError: (_convoId, event) => {
 			setMcpFailures((prev) => [
 				...prev,
@@ -378,27 +326,15 @@ function ChatPage() {
 				},
 			]);
 		},
-		onDone: (convoId, fullContent, usage, model) => {
-			setStreamStates((prev) => ({
-				...prev,
-				[convoId]: {
-					content: prev[convoId]?.content ?? fullContent,
-					reasoning: prev[convoId]?.reasoning ?? null,
-					toolCalls: prev[convoId]?.toolCalls ?? [],
-					parts: prev[convoId]?.parts ?? [],
-					pendingDoneContent: fullContent,
-					usage: usage ?? prev[convoId]?.usage ?? null,
-					model: model ?? prev[convoId]?.model ?? null,
-				},
-			}));
+		onBudgetExceeded: (_convoId, info) => {
+			setBudgetExceeded(info);
+			const which = info.dailyPct >= 100 ? "daily" : "weekly";
+			toast.error(
+				`${which.charAt(0).toUpperCase() + which.slice(1)} usage limit reached`,
+			);
 		},
-		onError: (convoId, error) => {
+		onError: (_convoId, error) => {
 			toast.error(error);
-			setStreamStates((prev) => {
-				const next = { ...prev };
-				delete next[convoId];
-				return next;
-			});
 		},
 		onAbort: (convoId) => {
 			const state = streamStatesRef.current[convoId];
@@ -427,11 +363,7 @@ function ChatPage() {
 				(!state.content && !state.reasoning && state.toolCalls.length === 0)
 			) {
 				// Nothing accumulated — just clear state
-				setStreamStates((prev) => {
-					const next = { ...prev };
-					delete next[convoId];
-					return next;
-				});
+				clearStreamState(convoId);
 			} else {
 				// Filter: only keep completed tool calls (those with results)
 				const completedToolCalls = state.toolCalls.filter(
@@ -449,7 +381,8 @@ function ChatPage() {
 				const partialContent = state.content ?? "";
 				// model is only sent in the "done" event which doesn't fire on abort,
 				// so fall back to the session model, then the harness model
-				const model = state.model ?? sessionModel ?? activeHarness?.model ?? null;
+				const model =
+					state.model ?? sessionModel ?? activeHarness?.model ?? null;
 
 				saveInterruptedMsg.mutate({
 					conversationId: convoId as Id<"conversations">,
@@ -465,15 +398,12 @@ function ChatPage() {
 
 				// Keep streaming bubble visible until Convex syncs the interrupted message
 				// (same pattern as onDone — set pendingDoneContent so convexHasMessage can match)
-				setStreamStates((prev) => ({
-					...prev,
-					[convoId]: {
-						...state,
-						toolCalls: completedToolCalls,
-						parts: cleanedParts,
-						pendingDoneContent: partialContent,
-						model,
-					},
+				setStreamState(convoId, () => ({
+					...state,
+					toolCalls: completedToolCalls,
+					parts: cleanedParts,
+					pendingDoneContent: partialContent,
+					model,
 				}));
 			}
 
@@ -513,10 +443,25 @@ function ChatPage() {
 	}, [activeHarnessId, activeConvoId]);
 
 	useEffect(() => {
-		if (harnesses && harnesses.length === 0) {
+		if (
+			activeSandboxSelection === "harness" ||
+			activeSandboxSelection === "none" ||
+			!sandboxes
+		) {
+			return;
+		}
+
+		if (!sandboxes.some((sandbox) => sandbox._id === activeSandboxSelection)) {
+			setActiveSandboxSelection("harness");
+		}
+	}, [activeSandboxSelection, sandboxes]);
+
+	const { isAuthenticated: convexAuthReady } = useConvexAuth();
+	useEffect(() => {
+		if (convexAuthReady && harnesses && harnesses.length === 0) {
 			navigate({ to: "/onboarding" });
 		}
-	}, [harnesses, navigate]);
+	}, [convexAuthReady, harnesses, navigate]);
 
 	useEffect(() => {
 		const prev = prevStreamingRef.current;
@@ -540,11 +485,7 @@ function ChatPage() {
 
 	const handleStreamSynced = useCallback(
 		(convoId: string) => {
-			setStreamStates((prev) => {
-				const next = { ...prev };
-				delete next[convoId];
-				return next;
-			});
+			clearStreamState(convoId);
 
 			// Process next queued message now that Convex has synced
 			if (messageQueueRef.current.length > 0) {
@@ -554,88 +495,263 @@ function ChatPage() {
 				}
 			}
 		},
-		[shiftQueue],
+		[clearStreamState, shiftQueue],
 	);
 
 	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
+	const selectedSandbox =
+		activeSandboxSelection !== "harness" && activeSandboxSelection !== "none"
+			? sandboxes?.find((sandbox) => sandbox._id === activeSandboxSelection)
+			: undefined;
+	const effectiveSandboxDaytonaId =
+		activeSandboxSelection === "none"
+			? null
+			: (selectedSandbox?.daytonaSandboxId ??
+				activeHarness?.daytonaSandboxId ??
+				null);
+	const effectiveSandboxEnabled =
+		activeSandboxSelection === "none"
+			? false
+			: Boolean(
+					selectedSandbox?.daytonaSandboxId ?? activeHarness?.daytonaSandboxId,
+				);
 
-	// Health-check MCP servers when harness changes
-	// biome-ignore lint/correctness/useExhaustiveDependencies: only re-run when harness ID changes
+	const handleAddSkill = useCallback(
+		(skill: SkillEntry) => {
+			if (!activeHarness) return;
+			const existing = activeHarness.skills ?? [];
+			if (existing.some((s) => s.name === skill.name)) return;
+			updateHarness.mutate({
+				id: activeHarness._id,
+				skills: [...existing, skill],
+			});
+		},
+		[activeHarness, updateHarness],
+	);
+
+	const handleRemoveSkill = useCallback(
+		(skill: SkillEntry) => {
+			if (!activeHarness) return;
+			const filtered = (activeHarness.skills ?? []).filter(
+				(s) => s.name !== skill.name,
+			);
+			updateHarness.mutate({ id: activeHarness._id, skills: filtered });
+		},
+		[activeHarness, updateHarness],
+	);
+
+	const buildHarnessConfig = useCallback(() => {
+		if (!activeHarness) return null;
+
+		return {
+			model: sessionModel ?? activeHarness.model,
+			mcp_servers: activeHarness.mcpServers.map((s) => ({
+				name: s.name,
+				url: s.url,
+				auth_type: s.authType as "none" | "bearer" | "oauth" | "tiger_junction",
+				auth_token: s.authToken,
+			})),
+			skills: activeHarness.skills ?? [],
+			name: activeHarness.name,
+			harness_id: activeHarness._id,
+			system_prompt: activeHarness.systemPrompt ?? undefined,
+			sandbox_enabled: effectiveSandboxEnabled,
+			sandbox_id: effectiveSandboxDaytonaId ?? undefined,
+			sandbox_config: activeHarness.sandboxConfig
+				? {
+						persistent: activeHarness.sandboxConfig.persistent,
+						auto_start: activeHarness.sandboxConfig.autoStart,
+						default_language: activeHarness.sandboxConfig.defaultLanguage,
+						resource_tier: activeHarness.sandboxConfig.resourceTier,
+					}
+				: undefined,
+		};
+	}, [
+		activeHarness,
+		effectiveSandboxDaytonaId,
+		effectiveSandboxEnabled,
+		sessionModel,
+	]);
+
+	// Collect all command IDs across the active harness's MCP servers
+	const allCommandIds = useMemo(
+		() => (activeHarness?.mcpServers ?? []).flatMap((s) => s.commandIds ?? []),
+		[activeHarness?.mcpServers],
+	);
+	const { data: storedCommands } = useQuery(
+		convexQuery(
+			api.commands.getByIds,
+			allCommandIds.length > 0 ? { ids: allCommandIds } : "skip",
+		),
+	);
+
+	// Health-check MCP servers when harness changes, or on-demand via refreshHealth.
+	const healthCheckRunRef = useRef<{ cancel: () => void } | null>(null);
+	const runHealthCheck = useCallback(
+		(
+			servers: Array<{
+				name: string;
+				url: string;
+				authType: McpAuthType;
+				authToken?: string;
+			}>,
+		) => {
+			healthCheckRunRef.current?.cancel();
+
+			if (servers.length === 0) {
+				setMcpHealthStatuses({});
+				return;
+			}
+
+			// Mark unknown URLs as checking; preserve already-known statuses so
+			// previously-healthy servers don't flash to "Checking…" during a
+			// refresh triggered by adding/removing a server.
+			setMcpHealthStatuses((prev) => {
+				const next: Record<string, HealthStatus> = {};
+				for (const s of servers) {
+					next[s.url] = prev[s.url] ?? "checking";
+				}
+				return next;
+			});
+
+			let cancelled = false;
+			const run = async () => {
+				try {
+					const token = await getToken();
+					const res = await fetch(`${FASTAPI_URL}/api/mcp/health/check`, {
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							...(token ? { Authorization: `Bearer ${token}` } : {}),
+						},
+						body: JSON.stringify({
+							mcp_servers: servers.map((s) => ({
+								name: s.name,
+								url: s.url,
+								auth_type: s.authType,
+								...(s.authToken ? { auth_token: s.authToken } : {}),
+							})),
+							force: true,
+						}),
+					});
+					if (cancelled) return;
+					if (!res.ok) {
+						const fallback: Record<string, HealthStatus> = {};
+						for (const s of servers) fallback[s.url] = "unreachable";
+						setMcpHealthStatuses(fallback);
+						return;
+					}
+					const data = await res.json();
+					if (cancelled) return;
+					const statuses: Record<string, HealthStatus> = {};
+					for (const server of data.servers) {
+						if (server.status === "ok") statuses[server.url] = "reachable";
+						else if (server.status === "auth_required")
+							statuses[server.url] = "auth_required";
+						else statuses[server.url] = "unreachable";
+					}
+					setMcpHealthStatuses(statuses);
+				} catch {
+					if (cancelled) return;
+					const fallback: Record<string, HealthStatus> = {};
+					for (const s of servers) fallback[s.url] = "unreachable";
+					setMcpHealthStatuses(fallback);
+				}
+			};
+
+			run();
+			healthCheckRunRef.current = {
+				cancel: () => {
+					cancelled = true;
+				},
+			};
+		},
+		[getToken],
+	);
+
+	const refreshHealth = useCallback(() => {
+		if (activeHarness) runHealthCheck(activeHarness.mcpServers);
+	}, [activeHarness, runHealthCheck]);
+
+	// Re-run when the harness or its set of MCP server URLs changes. The URL
+	// key catches inline adds/removes from the header tooltip without making
+	// every harness-doc edit (name, model, etc.) trigger a health re-check.
+	const mcpUrlKey = activeHarness?.mcpServers.map((s) => s.url).join("|") ?? "";
+	// biome-ignore lint/correctness/useExhaustiveDependencies: deps are id + url-set; runHealthCheck is stable
 	useEffect(() => {
-		if (!activeHarness || activeHarness.mcpServers.length === 0) {
+		if (!activeHarness) {
 			setMcpHealthStatuses({});
 			return;
 		}
+		runHealthCheck(activeHarness.mcpServers);
+		return () => {
+			healthCheckRunRef.current?.cancel();
+		};
+	}, [activeHarness?._id, mcpUrlKey]);
 
-		// Set all servers to "checking"
-		const checking: Record<string, HealthStatus> = {};
-		for (const s of activeHarness.mcpServers) {
-			checking[s.url] = "checking";
-		}
-		setMcpHealthStatuses(checking);
+	// Sync slash commands: fetch from MCP servers, upsert into commands table,
+	// and store the resulting IDs on the harness's mcpServers.
+	// Only runs on explicit triggers (OAuth reconnect, etc.) — NOT on harness
+	// switch or page load, since connecting to each MCP server is expensive.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: only fires on commandRefreshKey
+	useEffect(() => {
+		if (commandRefreshKey === 0) return; // skip initial mount
+		if (!activeHarness || activeHarness.mcpServers.length === 0) return;
 
 		let cancelled = false;
-
-		const runCheck = async () => {
+		(async () => {
 			try {
 				const token = await getToken();
-				const res = await fetch(`${FASTAPI_URL}/api/mcp/health/check`, {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						...(token ? { Authorization: `Bearer ${token}` } : {}),
-					},
-					body: JSON.stringify({
-						mcp_servers: activeHarness.mcpServers.map((s) => ({
-							name: s.name,
-							url: s.url,
-							auth_type: s.authType,
-							...(s.authToken ? { auth_token: s.authToken } : {}),
-						})),
-						force: true,
-					}),
+				const cmds = await fetchCommandsFromApi(
+					FASTAPI_URL,
+					activeHarness.mcpServers,
+					token,
+				);
+				if (cancelled || !cmds || cmds.length === 0) return;
+
+				// Upsert all commands into the commands table (stringify parameters)
+				const ids: string[] = await upsertCommandsMut.mutateAsync({
+					commands: cmds.map((c) => ({
+						name: c.name,
+						server: c.server,
+						tool: c.tool,
+						description: c.description,
+						parametersJson: JSON.stringify(c.parameters),
+					})),
 				});
 
 				if (cancelled) return;
 
-				if (!res.ok) {
-					const fallback: Record<string, HealthStatus> = {};
-					for (const s of activeHarness.mcpServers) {
-						fallback[s.url] = "unreachable";
-					}
-					setMcpHealthStatuses(fallback);
-					return;
-				}
+				// Build a name→id map, then assign IDs to each mcpServer
+				const idByName = new Map(
+					cmds.map((c, i) => [c.name, ids[i] as Id<"commands">]),
+				);
+				const enriched = activeHarness.mcpServers.map((s) => ({
+					name: s.name,
+					url: s.url,
+					authType: s.authType,
+					...(s.authToken ? { authToken: s.authToken } : {}),
+					commandIds: [...idByName.entries()]
+						.filter(([name]) =>
+							name.startsWith(`${sanitizeServerName(s.name)}__`),
+						)
+						.map(([, id]) => id),
+				}));
 
-				const data = await res.json();
-				if (cancelled) return;
-
-				const statuses: Record<string, HealthStatus> = {};
-				for (const server of data.servers) {
-					if (server.status === "ok") {
-						statuses[server.url] = "reachable";
-					} else if (server.status === "auth_required") {
-						statuses[server.url] = "auth_required";
-					} else {
-						statuses[server.url] = "unreachable";
-					}
+				if (!cancelled) {
+					updateHarness.mutate({
+						id: activeHarness._id,
+						mcpServers: enriched,
+					});
 				}
-				setMcpHealthStatuses(statuses);
 			} catch {
-				if (cancelled) return;
-				const fallback: Record<string, HealthStatus> = {};
-				for (const s of activeHarness.mcpServers) {
-					fallback[s.url] = "unreachable";
-				}
-				setMcpHealthStatuses(fallback);
+				// Non-blocking — commands are optional
 			}
-		};
-
-		runCheck();
+		})();
 		return () => {
 			cancelled = true;
 		};
-	}, [activeHarness?._id, getToken]);
+	}, [commandRefreshKey]);
 
 	const handleInterrupt = useCallback(
 		(convoId: string) => {
@@ -690,37 +806,12 @@ function ChatPage() {
 				{ role: "user", content: pending.content },
 			];
 
+			const harnessConfig = buildHarnessConfig();
+			if (!harnessConfig) return;
+
 			chatStream.stream({
 				messages: history,
-				harness: {
-					model: sessionModel ?? activeHarness.model,
-					mcp_servers: activeHarness.mcpServers.map((s) => ({
-						name: s.name,
-						url: s.url,
-						auth_type: s.authType as
-							| "none"
-							| "bearer"
-							| "oauth"
-							| "tiger_junction",
-						auth_token: s.authToken,
-					})),
-					skills: activeHarness.skills ?? [],
-					name: activeHarness.name,
-					harness_id: activeHarness._id,
-
-					sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
-					sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
-					sandbox_config: (activeHarness as any).sandboxConfig
-						? {
-								persistent: (activeHarness as any).sandboxConfig.persistent,
-								auto_start: (activeHarness as any).sandboxConfig.autoStart,
-								default_language: (activeHarness as any).sandboxConfig
-									.defaultLanguage,
-								resource_tier: (activeHarness as any).sandboxConfig
-									.resourceTier,
-							}
-						: undefined,
-				},
+				harness: harnessConfig,
 				conversation_id: convoId,
 			});
 		};
@@ -731,7 +822,7 @@ function ChatPage() {
 		activeHarness,
 		chatStream,
 		sendMessageFromQueue,
-		sessionModel,
+		buildHarnessConfig,
 	]);
 
 	const handleSelectConversation = useCallback(
@@ -780,33 +871,8 @@ function ChatPage() {
 
 			await removeMessage.mutateAsync({ id: messageId });
 
-			const harnessConfig = {
-				model: sessionModel ?? activeHarness.model,
-				mcp_servers: activeHarness.mcpServers.map((s) => ({
-					name: s.name,
-					url: s.url,
-					auth_type: s.authType as
-						| "none"
-						| "bearer"
-						| "oauth"
-						| "tiger_junction",
-					auth_token: s.authToken,
-				})),
-				skills: activeHarness.skills ?? [],
-				name: activeHarness.name,
-				harness_id: activeHarness._id,
-				sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
-				sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
-				sandbox_config: (activeHarness as any).sandboxConfig
-					? {
-							persistent: (activeHarness as any).sandboxConfig.persistent,
-							auto_start: (activeHarness as any).sandboxConfig.autoStart,
-							default_language: (activeHarness as any).sandboxConfig
-								.defaultLanguage,
-							resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
-						}
-					: undefined,
-			};
+			const harnessConfig = buildHarnessConfig();
+			if (!harnessConfig) return;
 
 			chatStream.stream({
 				messages: history,
@@ -814,7 +880,13 @@ function ChatPage() {
 				conversation_id: activeConvoId,
 			});
 		},
-		[activeHarness, activeConvoId, chatStream, removeMessage, sessionModel],
+		[
+			activeHarness,
+			activeConvoId,
+			chatStream,
+			removeMessage,
+			buildHarnessConfig,
+		],
 	);
 
 	const forkConversation = useMutation({
@@ -877,23 +949,12 @@ function ChatPage() {
 				}));
 				history.push({ role: "user", content: newContent });
 
+				const harnessConfig = buildHarnessConfig();
+				if (!harnessConfig) return;
+
 				chatStream.stream({
 					messages: history,
-					harness: {
-						model: sessionModel ?? activeHarness.model,
-						mcp_servers: activeHarness.mcpServers.map((s) => ({
-							name: s.name,
-							url: s.url,
-							auth_type: s.authType as
-								| "none"
-								| "bearer"
-								| "oauth"
-								| "tiger_junction",
-							auth_token: s.authToken,
-						})),
-						skills: activeHarness.skills ?? [],
-						name: activeHarness.name,
-					},
+					harness: harnessConfig,
 					conversation_id: newConvoId,
 				});
 
@@ -910,9 +971,22 @@ function ChatPage() {
 			editForkAndSend,
 			handleSelectConversation,
 			chatStream,
-			sessionModel,
+			buildHarnessConfig,
 		],
 	);
+
+	useChatPaletteCommands({
+		isStreaming: activeConvoId
+			? chatStream.streamingConvoIds.has(activeConvoId)
+			: false,
+		canStartNewConversation: Boolean(activeHarnessId),
+		sidebarOpen,
+		onNewConversation: () => setActiveConvoId(null),
+		onCancelStream: () => {
+			if (activeConvoId) handleInterrupt(activeConvoId);
+		},
+		onToggleSidebar: () => setSidebarOpen((v) => !v),
+	});
 
 	if (harnessesLoading || !harnesses || harnesses.length === 0) {
 		return <ChatSkeleton />;
@@ -927,11 +1001,10 @@ function ChatPage() {
 		? chatStream.streamingConvoIds.has(activeConvoId)
 		: false;
 
-	const sandboxEnabled = (activeHarness as any)?.sandboxEnabled ?? false;
-	const daytonaSandboxId = (activeHarness as any)?.daytonaSandboxId ?? null;
-
 	return (
-		<SandboxPanelProvider sandboxId={sandboxEnabled ? daytonaSandboxId : null}>
+		<SandboxPanelProvider
+			sandboxId={effectiveSandboxEnabled ? effectiveSandboxDaytonaId : null}
+		>
 			<div className="flex h-full overflow-hidden bg-background">
 				<AnimatePresence>
 					{sidebarOpen && (
@@ -964,10 +1037,18 @@ function ChatPage() {
 						harness={activeHarness}
 						harnesses={harnesses ?? []}
 						onSwitchHarness={setActiveHarnessId}
+						sandboxes={sandboxes ?? []}
+						activeSandboxSelection={activeSandboxSelection}
+						onSwitchSandbox={setActiveSandboxSelection}
+						effectiveSandboxEnabled={effectiveSandboxEnabled}
 						sidebarOpen={sidebarOpen}
 						onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
 						isStreaming={isActiveConvoStreaming}
 						mcpHealthStatuses={mcpHealthStatuses}
+						onRefreshCommands={refreshCommands}
+						onRefreshHealth={refreshHealth}
+						onAddSkill={handleAddSkill}
+						onRemoveSkill={handleRemoveSkill}
 					/>
 
 					<McpFailureBanner
@@ -977,6 +1058,31 @@ function ChatPage() {
 						}
 						onDismissAll={() => setMcpFailures([])}
 					/>
+
+					{budgetExceeded && (
+						<div className="mx-4 mt-2 flex items-center justify-between rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+							<div>
+								<p className="font-medium">
+									{budgetExceeded.dailyPct >= 100 ? "Daily" : "Weekly"} usage
+									limit reached
+								</p>
+								<p className="text-xs text-red-300/70 mt-0.5">
+									Resets in{" "}
+									{budgetExceeded.dailyPct >= 100
+										? formatResetTime(budgetExceeded.dailyReset)
+										: formatResetTime(budgetExceeded.weeklyReset)}
+								</p>
+							</div>
+							<Button
+								variant="ghost"
+								size="sm"
+								className="text-red-300 hover:text-red-200"
+								onClick={() => setBudgetExceeded(null)}
+							>
+								<X size={14} />
+							</Button>
+						</div>
+					)}
 
 					{activeConvoId ? (
 						<ChatMessages
@@ -1030,8 +1136,17 @@ function ChatPage() {
 					<ChatInput
 						conversationId={activeConvoId}
 						activeHarness={activeHarness}
+						slashCommands={(storedCommands ?? []).filter(Boolean).map((c) => ({
+							name: c?.name,
+							server: c?.server,
+							tool: c?.tool,
+							description: c?.description,
+							parameters: JSON.parse(c?.parametersJson),
+						}))}
 						sessionModel={
-						userSettings?.modelSelectorMode === "harness" ? null : sessionModel
+							userSettings?.modelSelectorMode === "harness"
+								? null
+								: sessionModel
 						}
 						modelSelectorMode={
 							(userSettings?.modelSelectorMode as "session" | "harness") ??
@@ -1050,6 +1165,8 @@ function ChatPage() {
 							}
 						}}
 						onConvoCreated={handleSelectConversation}
+						sandboxEnabled={effectiveSandboxEnabled}
+						sandboxId={effectiveSandboxDaytonaId ?? undefined}
 						isStreaming={isActiveConvoStreaming}
 						onStream={chatStream.stream}
 						onInterrupt={handleInterrupt}
@@ -1060,11 +1177,12 @@ function ChatPage() {
 						onSendNow={handleSendNow}
 						pendingPrompt={pendingPrompt}
 						onPendingPromptConsumed={() => setPendingPrompt(null)}
+						budgetExceeded={!!budgetExceeded}
 					/>
 				</div>
 
 				<AnimatePresence>
-					{sandboxEnabled && <SandboxPanelToggle />}
+					{effectiveSandboxEnabled && <SandboxPanelToggle />}
 				</AnimatePresence>
 			</div>
 		</SandboxPanelProvider>
@@ -1183,16 +1301,17 @@ function ChatSidebar({
 	const grouped = groupByDate(conversations);
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [usageOpen, setUsageOpen] = useState(false);
 
 	return (
 		<div className="flex h-full w-[280px] flex-col bg-background">
 			<div className="flex items-center justify-between px-3 py-3">
-				<div className="flex items-center gap-2">
+				<Link to="/" className="flex items-center gap-2">
 					<HarnessMark size={18} className="text-foreground" />
 					<span className="text-sm font-semibold tracking-tight text-foreground">
 						Harness
 					</span>
-				</div>
+				</Link>
 				<div className="flex items-center gap-1">
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -1401,9 +1520,9 @@ function ChatSidebar({
 														transition={{ duration: 0.15 }}
 														className="flex shrink-0"
 													>
-														<Loader2
+														<RoseCurveSpinner
 															size={12}
-															className="animate-spin text-muted-foreground"
+															className="text-muted-foreground"
 														/>
 													</motion.span>
 												) : doneConvoIds.has(convo._id) ? (
@@ -1454,7 +1573,22 @@ function ChatSidebar({
 			</ScrollArea>
 
 			<Separator />
+			<div className="px-2 py-1">
+				<UsageBadge onClick={() => setUsageOpen(true)} />
+			</div>
+			<Separator />
 			<div className="space-y-0.5 p-2">
+				<Button
+					variant="ghost"
+					size="sm"
+					className="w-full justify-start"
+					asChild
+				>
+					<Link to="/sandboxes">
+						<Box size={12} />
+						Manage Sandboxes
+					</Link>
+				</Button>
 				<Button
 					variant="ghost"
 					size="sm"
@@ -1478,6 +1612,7 @@ function ChatSidebar({
 			</div>
 
 			<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+			<UsageDialog open={usageOpen} onOpenChange={setUsageOpen} />
 		</div>
 	);
 }
@@ -1584,9 +1719,7 @@ function SettingsDialog({
 								</p>
 							</div>
 							<Select
-								value={
-									(userSettings?.modelSelectorMode as string) ?? "session"
-								}
+								value={(userSettings?.modelSelectorMode as string) ?? "session"}
 								onValueChange={(value) => {
 									updateSettings.mutate({
 										modelSelectorMode: value as "session" | "harness",
@@ -1634,6 +1767,47 @@ function SettingsDialog({
 									<SelectItem value="zen">Zen</SelectItem>
 									<SelectItem value="standard">Standard</SelectItem>
 									<SelectItem value="developer">Developer</SelectItem>
+								</SelectContent>
+							</Select>
+						</div>
+					</div>
+
+					<Separator />
+
+					{/* workspaces selector option */}
+					<div>
+						<p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+							Advanced Layout: Workspaces
+						</p>
+						<div className="flex items-center justify-between gap-3 py-1.5">
+							<div>
+								<p className="text-xs font-medium text-foreground">
+									Advanced Layout: Workspaces
+								</p>
+								<p className="text-[11px] text-muted-foreground">
+									Controls whether the basic layout or the workspaces advanced
+									layout is in use
+								</p>
+							</div>
+							<Select
+								value={(userSettings?.workspacesMode as string) ?? "basic"}
+								onValueChange={async (value) => {
+									await updateSettings.mutateAsync({
+										workspacesMode: value as "basic" | "workspaces",
+									});
+									onOpenChange(false);
+									navigate({
+										to: value === "workspaces" ? "/workspaces" : "/chat",
+										replace: true,
+									});
+								}}
+							>
+								<SelectTrigger className="w-[120px]">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value="basic">Basic</SelectItem>
+									<SelectItem value="workspaces">Workspaces</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
@@ -1735,54 +1909,22 @@ function McpFailureBanner({
 	);
 }
 
-function SkillsStatus({ skills }: { skills: SkillEntry[] }) {
-	if (skills.length === 0) return null;
-
-	return (
-		<DropdownMenu>
-			<DropdownMenuTrigger asChild>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<button
-							type="button"
-							className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-						>
-							<Zap size={10} />
-							{skills.length} Skill{skills.length !== 1 && "s"}
-						</button>
-					</TooltipTrigger>
-					<TooltipContent>Active skills</TooltipContent>
-				</Tooltip>
-			</DropdownMenuTrigger>
-
-			<DropdownMenuContent align="start" className="w-72">
-				<div className="border-b border-border px-3 py-2">
-					<span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-						Skills
-					</span>
-				</div>
-				<div className="max-h-48 overflow-y-auto py-1">
-					{skills.map((skill) => (
-						<DropdownMenuItem key={skill.name} className="px-3 py-1.5">
-							<span className="truncate text-xs font-medium">
-								{skill.name.split("/").pop() ?? skill.name}
-							</span>
-						</DropdownMenuItem>
-					))}
-				</div>
-			</DropdownMenuContent>
-		</DropdownMenu>
-	);
-}
-
 function ChatHeader({
 	harness,
 	harnesses,
 	onSwitchHarness,
+	sandboxes,
+	activeSandboxSelection,
+	onSwitchSandbox,
+	effectiveSandboxEnabled,
 	sidebarOpen,
 	onToggleSidebar,
 	isStreaming,
 	mcpHealthStatuses,
+	onRefreshCommands,
+	onRefreshHealth,
+	onAddSkill,
+	onRemoveSkill,
 }: {
 	harness?: {
 		_id: Id<"harnesses">;
@@ -1794,8 +1936,11 @@ function ChatHeader({
 			url: string;
 			authType: McpAuthType;
 			authToken?: string;
+			commandIds?: string[];
 		}>;
 		skills: SkillEntry[];
+		sandboxEnabled?: boolean;
+		daytonaSandboxId?: string;
 	};
 	harnesses: Array<{
 		_id: Id<"harnesses">;
@@ -1804,10 +1949,24 @@ function ChatHeader({
 		status: string;
 	}>;
 	onSwitchHarness: (id: Id<"harnesses">) => void;
+	sandboxes: Array<{
+		_id: Id<"sandboxes">;
+		name: string;
+		daytonaSandboxId: string;
+		status: string;
+		ephemeral: boolean;
+	}>;
+	activeSandboxSelection: SandboxSelection;
+	onSwitchSandbox: (selection: SandboxSelection) => void;
+	effectiveSandboxEnabled: boolean;
 	sidebarOpen: boolean;
 	onToggleSidebar: () => void;
 	isStreaming: boolean;
 	mcpHealthStatuses?: Record<string, HealthStatus>;
+	onRefreshCommands: () => void;
+	onRefreshHealth: () => void;
+	onAddSkill: (skill: SkillEntry) => void;
+	onRemoveSkill: (skill: SkillEntry) => void;
 }) {
 	return (
 		<header className="flex items-center justify-between border-b border-border px-4 py-2.5">
@@ -1863,51 +2022,181 @@ function ChatHeader({
 					</DropdownMenuContent>
 				</DropdownMenu>
 
-				{harness && harness.mcpServers.length > 0 && (
+				{harness && (
 					<McpServerStatus
 						servers={harness.mcpServers}
+						harnessId={harness._id}
 						healthStatuses={mcpHealthStatuses}
+						onReconnected={() => {
+							onRefreshHealth();
+							onRefreshCommands();
+						}}
+						onChanged={() => {
+							onRefreshHealth();
+							onRefreshCommands();
+						}}
 					/>
 				)}
 
-				{harness && harness.skills.length > 0 && (
-					<SkillsStatus skills={harness.skills} />
+				{harness && (
+					<HeaderSkillsMenu
+						skills={harness.skills}
+						onAdd={onAddSkill}
+						onRemove={onRemoveSkill}
+					/>
 				)}
 
-				{harness && (harness as any).sandboxEnabled && <SandboxBadge />}
+				<SandboxSelector
+					harness={harness}
+					sandboxes={sandboxes}
+					activeSandboxSelection={activeSandboxSelection}
+					onSwitchSandbox={onSwitchSandbox}
+					isStreaming={isStreaming}
+					panelAvailable={effectiveSandboxEnabled}
+				/>
 			</div>
 		</header>
 	);
 }
 
-/** Clickable sandbox badge in the header — toggles the sandbox panel. */
-function SandboxBadge() {
+function SandboxSelector({
+	harness,
+	sandboxes,
+	activeSandboxSelection,
+	onSwitchSandbox,
+	isStreaming,
+	panelAvailable,
+}: {
+	harness?: {
+		name: string;
+		sandboxEnabled?: boolean;
+		daytonaSandboxId?: string;
+	};
+	sandboxes: Array<{
+		_id: Id<"sandboxes">;
+		name: string;
+		daytonaSandboxId: string;
+		status: string;
+		ephemeral: boolean;
+	}>;
+	activeSandboxSelection: SandboxSelection;
+	onSwitchSandbox: (selection: SandboxSelection) => void;
+	isStreaming: boolean;
+	panelAvailable: boolean;
+}) {
 	const panel = useSandboxPanel();
+	const panelOpen = !!panel?.panelOpen;
+	const selectedSandbox =
+		activeSandboxSelection !== "harness" && activeSandboxSelection !== "none"
+			? sandboxes.find((sandbox) => sandbox._id === activeSandboxSelection)
+			: undefined;
+	const defaultSandbox = harness?.daytonaSandboxId
+		? sandboxes.find(
+				(sandbox) => sandbox.daytonaSandboxId === harness.daytonaSandboxId,
+			)
+		: undefined;
+	const defaultSandboxName =
+		defaultSandbox?.name ?? harness?.daytonaSandboxId ?? "None";
+	const label =
+		activeSandboxSelection === "none"
+			? "No sandbox"
+			: (selectedSandbox?.name ?? `Default: ${defaultSandboxName}`);
+
 	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<button
-					type="button"
-					onClick={() => panel?.togglePanel()}
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<Button
+					variant="ghost"
+					size="sm"
 					className={cn(
-						"flex items-center gap-1.5 border px-2 py-1 text-[10px] transition-colors",
-						panel?.panelOpen
-							? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-							: "border-border text-muted-foreground hover:bg-muted/30",
+						"gap-1.5",
+						panelOpen &&
+							"text-emerald-600 hover:text-emerald-600 dark:text-emerald-400 dark:hover:text-emerald-400",
 					)}
+					disabled={isStreaming}
 				>
-					<div className="h-1.5 w-1.5 bg-emerald-500" />
-					<span>Sandbox</span>
-				</button>
-			</TooltipTrigger>
-			<TooltipContent>
-				<p>
-					{panel?.panelOpen
-						? "Close sandbox panel"
-						: "Open sandbox panel — browse files and interact directly"}
-				</p>
-			</TooltipContent>
-		</Tooltip>
+					<Box size={12} />
+					<span className="max-w-[140px] truncate text-xs font-medium">
+						{label}
+					</span>
+					{panelOpen && (
+						<span className="h-1.5 w-1.5 bg-emerald-500" aria-hidden="true" />
+					)}
+					<ChevronDown size={12} className="text-muted-foreground" />
+				</Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="start" className="min-w-60">
+				<DropdownMenuItem
+					onClick={() => panel?.togglePanel()}
+					disabled={!panelAvailable}
+				>
+					<span className="w-3 shrink-0">
+						{panelOpen ? <Check size={12} /> : null}
+					</span>
+					<div className="min-w-0 flex-1">
+						<p className="truncate text-xs">
+							{panelOpen ? "Close sandbox panel" : "Open sandbox panel"}
+						</p>
+						<p className="truncate text-[10px] text-muted-foreground">
+							{panelAvailable
+								? "Browse files and interact directly"
+								: "Attach a sandbox to enable the panel"}
+						</p>
+					</div>
+				</DropdownMenuItem>
+				<DropdownMenuSeparator />
+				<DropdownMenuItem onClick={() => onSwitchSandbox("harness")}>
+					{activeSandboxSelection === "harness" ? (
+						<Check size={12} className="shrink-0" />
+					) : (
+						<span className="w-3 shrink-0" />
+					)}
+					<div className="min-w-0 flex-1">
+						<p className="truncate text-xs">
+							Use default: {defaultSandboxName}
+						</p>
+						<p className="truncate text-[10px] text-muted-foreground">
+							{harness?.daytonaSandboxId
+								? harness.daytonaSandboxId
+								: "No default sandbox"}
+						</p>
+					</div>
+				</DropdownMenuItem>
+				<DropdownMenuItem onClick={() => onSwitchSandbox("none")}>
+					{activeSandboxSelection === "none" ? (
+						<Check size={12} className="shrink-0" />
+					) : (
+						<span className="w-3 shrink-0" />
+					)}
+					<div className="min-w-0 flex-1">
+						<p className="truncate text-xs">No sandbox</p>
+						<p className="truncate text-[10px] text-muted-foreground">
+							Chat without sandbox tools
+						</p>
+					</div>
+				</DropdownMenuItem>
+				{sandboxes.length > 0 && <DropdownMenuSeparator />}
+				{sandboxes.map((sandbox) => (
+					<DropdownMenuItem
+						key={sandbox._id}
+						onClick={() => onSwitchSandbox(sandbox._id)}
+					>
+						{activeSandboxSelection === sandbox._id ? (
+							<Check size={12} className="shrink-0" />
+						) : (
+							<span className="w-3 shrink-0" />
+						)}
+						<div className="min-w-0 flex-1">
+							<p className="truncate text-xs">{sandbox.name}</p>
+							<p className="truncate text-[10px] text-muted-foreground">
+								{sandbox.status}
+								{sandbox.ephemeral ? " · ephemeral" : " · persistent"}
+							</p>
+						</div>
+					</DropdownMenuItem>
+				))}
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }
 
@@ -2154,9 +2443,13 @@ function ChatMessages({
 		lastMsg.content === pendingDoneContent;
 	const isActivelyStreaming =
 		streamingContent !== null || streamingReasoning !== null;
-	// Show the streaming bubble when we have content, reasoning, or tool calls, but Convex hasn't synced yet
+	// Show the streaming bubble while we're waiting for or receiving a response
+	// (content, reasoning, tool calls) but Convex hasn't synced yet. Include
+	// `isStreaming` so the bubble appears immediately with a pending spinner
+	// before the first chunk arrives.
 	const showStreamingBubble =
-		(streamingContent !== null ||
+		(isStreaming ||
+			streamingContent !== null ||
 			streamingReasoning !== null ||
 			activeToolCalls.length > 0) &&
 		!convexHasMessage;
@@ -2621,12 +2914,7 @@ function ChatMessages({
 										})
 									: !streamingReasoning &&
 										activeToolCalls.length === 0 &&
-										!streamingContent && (
-											<Loader2
-												size={14}
-												className="animate-spin text-muted-foreground"
-											/>
-										)}
+										!streamingContent && <PendingResponseIndicator />}
 							</div>
 							{displayMode === "developer" && streamUsage && (
 								<div className="flex items-center gap-3 pt-1">
@@ -2690,7 +2978,7 @@ function ThinkingBlock({
 				{isStreaming ? (
 					<span className="flex items-center gap-1">
 						Thinking
-						<Loader2 size={8} className="animate-spin" />
+						<RoseCurveSpinner size={8} />
 					</span>
 				) : (
 					<span>Thought process</span>
@@ -2803,7 +3091,7 @@ function ToolCallBlock({
 					<ChevronRight size={10} />
 				</motion.span>
 				{isStreaming ? (
-					<Loader2 size={10} className="animate-spin" />
+					<RoseCurveSpinner size={10} />
 				) : authError ? (
 					<Wrench size={10} className="text-destructive" />
 				) : (
@@ -2901,8 +3189,8 @@ function EmptyChat({
 				transition={{ duration: 0.4 }}
 				className="text-center"
 			>
-				<div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center bg-foreground">
-					<HarnessMark size={24} className="text-background" />
+				<div className="mx-auto mb-6 flex items-center justify-center">
+					<ThinkingFiveSpinner size={96} className="text-foreground" />
 				</div>
 				<h2 className="mb-2 text-lg font-medium text-foreground">
 					Start a conversation
@@ -2930,10 +3218,13 @@ function EmptyChat({
 function ChatInput({
 	conversationId,
 	activeHarness,
+	slashCommands,
 	sessionModel,
 	modelSelectorMode = "session",
 	onSessionModelChange,
 	onConvoCreated,
+	sandboxEnabled,
+	sandboxId,
 	isStreaming,
 	onStream,
 	onInterrupt,
@@ -2944,6 +3235,7 @@ function ChatInput({
 	onSendNow,
 	pendingPrompt,
 	onPendingPromptConsumed,
+	budgetExceeded,
 }: {
 	conversationId: Id<"conversations"> | null;
 	activeHarness?: {
@@ -2955,10 +3247,24 @@ function ChatInput({
 			url: string;
 			authType: McpAuthType;
 			authToken?: string;
+			commandIds?: string[];
 		}>;
 		skills: SkillEntry[];
+		systemPrompt?: string;
+		sandboxEnabled?: boolean;
+		daytonaSandboxId?: string;
+		sandboxConfig?: {
+			persistent: boolean;
+			autoStart: boolean;
+			defaultLanguage: string;
+			resourceTier: "basic" | "standard" | "performance";
+			gitRepo?: string;
+		};
 	};
+	slashCommands: McpServerCommand[];
 	onConvoCreated: (id: Id<"conversations">) => void;
+	sandboxEnabled: boolean;
+	sandboxId?: string;
 	isStreaming: boolean;
 	onStream: (body: {
 		messages: Array<{
@@ -2975,8 +3281,19 @@ function ChatInput({
 			}>;
 			skills: SkillEntry[];
 			name: string;
+			harness_id?: string;
+			system_prompt?: string;
+			sandbox_enabled?: boolean;
+			sandbox_id?: string;
+			sandbox_config?: {
+				persistent: boolean;
+				auto_start: boolean;
+				default_language: string;
+				resource_tier: string;
+			};
 		};
 		conversation_id: string;
+		forced_tool?: string;
 	}) => Promise<void>;
 	onInterrupt: (convoId: string) => void;
 	onEnqueue: (content: string) => void;
@@ -2998,6 +3315,7 @@ function ChatInput({
 	modelSelectorMode?: "session" | "harness";
 	onSessionModelChange: (model: string | null) => void;
 	onPendingPromptConsumed?: () => void;
+	budgetExceeded?: boolean;
 }) {
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -3006,7 +3324,9 @@ function ChatInput({
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
-		MODELS.find((m) => m.value === effectiveModel)?.label ?? effectiveModel ?? "Model";
+		MODELS.find((m) => m.value === effectiveModel)?.label ??
+		effectiveModel ??
+		"Model";
 
 	const supportsMedia = modelSupportsMedia(effectiveModel);
 	const supportsAudio = modelSupportsAudio(effectiveModel);
@@ -3030,6 +3350,14 @@ function ChatInput({
 	useEffect(() => {
 		if (!supportsAnyAttachment) clearAttachments();
 	}, [supportsAnyAttachment, clearAttachments]);
+
+	// ── Slash commands ──────────────────────────────────────────────
+	const slash = useSlashCommandInput({
+		storedCommands: slashCommands,
+		text,
+		setText,
+		textareaRef,
+	});
 
 	// ── Voice recording ──────────────────────────────────────────────
 	const [isRecording, setIsRecording] = useState(false);
@@ -3113,7 +3441,19 @@ function ChatInput({
 
 	const handleSend = async () => {
 		const content = text.trim();
-		if (!content || !activeHarness) return;
+		if (!content || !activeHarness || budgetExceeded) return;
+
+		// ── Slash command interception ────────────────────────────────
+		// If it's a slash command, trySend returns the forced tool + cleaned message.
+		// We then send it through the normal chat flow with forced_tool set.
+		const slashResult = slash.trySend(content);
+		if (slashResult !== null) {
+			if (!slashResult.forcedTool) return; // validation error (e.g. no message), already toasted
+		}
+
+		// Use the cleaned message for slash commands, or the raw content for normal messages
+		const messageContent = slashResult ? slashResult.message : content;
+		const forcedTool = slashResult?.forcedTool;
 
 		setText("");
 		setHistoryIndex(-1);
@@ -3125,6 +3465,8 @@ function ChatInput({
 			onEnqueue(content);
 			return;
 		}
+
+		const resolvedSandboxId = sandboxEnabled ? sandboxId : undefined;
 
 		// Snapshot harness config at send time (convert to snake_case for FastAPI)
 		const harnessConfig = {
@@ -3138,15 +3480,15 @@ function ChatInput({
 			skills: activeHarness.skills ?? [],
 			name: activeHarness.name,
 			harness_id: activeHarness._id,
-			sandbox_enabled: (activeHarness as any).sandboxEnabled ?? false,
-			sandbox_id: (activeHarness as any).daytonaSandboxId ?? undefined,
-			sandbox_config: (activeHarness as any).sandboxConfig
+			system_prompt: activeHarness.systemPrompt ?? undefined,
+			sandbox_enabled: Boolean(resolvedSandboxId),
+			sandbox_id: resolvedSandboxId,
+			sandbox_config: activeHarness.sandboxConfig
 				? {
-						persistent: (activeHarness as any).sandboxConfig.persistent,
-						auto_start: (activeHarness as any).sandboxConfig.autoStart,
-						default_language: (activeHarness as any).sandboxConfig
-							.defaultLanguage,
-						resource_tier: (activeHarness as any).sandboxConfig.resourceTier,
+						persistent: activeHarness.sandboxConfig.persistent,
+						auto_start: activeHarness.sandboxConfig.autoStart,
+						default_language: activeHarness.sandboxConfig.defaultLanguage,
+						resource_tier: activeHarness.sandboxConfig.resourceTier,
 					}
 				: undefined,
 		};
@@ -3171,7 +3513,7 @@ function ChatInput({
 				fileSize: a.fileSize,
 			}));
 
-		// Save user message to Convex
+		// Save user message to Convex (original text including /command prefix)
 		await sendMessage.mutateAsync({
 			conversationId: convoId,
 			role: "user",
@@ -3200,18 +3542,21 @@ function ChatInput({
 			}
 		}
 
+		// For slash commands, send the cleaned message (without /command prefix) to the LLM
+		const llmContent = messageContent;
+
 		// Add the new user message (with any current attachments)
 		if (readyAttachments.length > 0) {
 			history.push({
 				role: "user",
 				content: await buildMultimodalContent(
-					content,
+					llmContent,
 					readyAttachments,
 					resolveSignedUrls,
 				),
 			});
 		} else {
-			history.push({ role: "user", content });
+			history.push({ role: "user", content: llmContent });
 		}
 
 		// Start streaming from FastAPI
@@ -3219,10 +3564,14 @@ function ChatInput({
 			messages: history,
 			harness: harnessConfig,
 			conversation_id: convoId,
+			...(forcedTool ? { forced_tool: forcedTool } : {}),
 		});
 	};
 
 	const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+		// Slash command menu gets first shot at keyboard events
+		if (slash.handleKeyDown(e)) return;
+
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault();
 			handleSend();
@@ -3408,6 +3757,17 @@ function ChatInput({
 					)}
 				</AnimatePresence>
 
+				{/* Slash command autocomplete menu */}
+				<div className="relative">
+					<SlashCommandMenu
+						isOpen={slash.menuOpen}
+						commands={slash.commands}
+						filtered={slash.filtered}
+						selectedIndex={slash.selectedIndex}
+						onSelect={slash.selectCommand}
+					/>
+				</div>
+
 				<div className="flex items-center gap-2 border border-border bg-background px-3 py-2 focus-within:border-foreground/30">
 					{/* Attach button — hidden for models that don't support media */}
 					{supportsAnyAttachment && (
@@ -3461,6 +3821,7 @@ function ChatInput({
 						onPaste={handlePaste}
 						placeholder="Send a message..."
 						rows={1}
+						maxLength={CHAT_INPUT_MAX_LENGTH}
 						className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
 					/>
 					{activeHarness && (
@@ -3475,7 +3836,9 @@ function ChatInput({
 											{sessionModel && (
 												<span className="size-1.5 shrink-0 rounded-full bg-primary" />
 											)}
-											<span className="max-w-[90px] truncate">{currentModelLabel}</span>
+											<span className="max-w-[90px] truncate">
+												{currentModelLabel}
+											</span>
 											<ChevronDown size={10} />
 										</button>
 									</DropdownMenuTrigger>
@@ -3488,14 +3851,17 @@ function ChatInput({
 											: "Switch model for this session"}
 								</TooltipContent>
 							</Tooltip>
-							<DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+							<DropdownMenuContent
+								align="end"
+								className="max-h-72 overflow-y-auto"
+							>
 								{modelSelectorMode === "session" && sessionModel && (
 									<>
 										<DropdownMenuItem
 											onClick={() => onSessionModelChange(null)}
-											className="flex items-center gap-2 text-muted-foreground italic"
+											className="flex items-center gap-2"
 										>
-											<span className="w-3 shrink-0" />
+											<RotateCcw size={12} className="shrink-0" />
 											Use harness default
 										</DropdownMenuItem>
 										<DropdownMenuSeparator />
@@ -3531,7 +3897,8 @@ function ChatInput({
 								}}
 								disabled={
 									!showStopButton &&
-									(!text.trim() ||
+									(budgetExceeded ||
+										!text.trim() ||
 										hasUploading ||
 										sendMessage.isPending ||
 										createConvo.isPending)
@@ -3551,7 +3918,20 @@ function ChatInput({
 					</Tooltip>
 				</div>
 				<p className="mt-1.5 text-center text-[10px] text-muted-foreground">
-					Harness may produce inaccurate information.
+					{text.length >= CHAT_INPUT_COUNTER_THRESHOLD ? (
+						<span
+							className={
+								text.length >= CHAT_INPUT_MAX_LENGTH
+									? "text-destructive"
+									: "text-amber-500"
+							}
+						>
+							{text.length.toLocaleString()} /{" "}
+							{CHAT_INPUT_MAX_LENGTH.toLocaleString()} characters
+						</span>
+					) : (
+						"Harness may produce inaccurate information."
+					)}
 				</p>
 			</div>
 		</div>
@@ -3574,7 +3954,7 @@ function ChatSkeleton() {
 					<Skeleton className="h-6 w-40" />
 				</div>
 				<div className="flex flex-1 items-center justify-center">
-					<div className="h-5 w-5 animate-spin border-2 border-foreground border-t-transparent" />
+					<RoseCurveSpinner size={48} className="text-foreground" />
 				</div>
 			</div>
 		</div>

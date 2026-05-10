@@ -31,6 +31,7 @@ class HarnessConfig(BaseModel):
     skills: list[SkillRef] = []
     name: str
     harness_id: str | None = None
+    system_prompt: str | None = Field(default=None, max_length=4000)
     sandbox_enabled: bool = False
     sandbox_id: str | None = None
     sandbox_config: SandboxConfig | None = None
@@ -45,6 +46,7 @@ class ChatRequest(BaseModel):
     messages: list[MessagePayload]
     harness: HarnessConfig
     conversation_id: str
+    forced_tool: str | None = None
 
 
 class SandboxCreateRequest(BaseModel):
@@ -90,3 +92,9 @@ class GitAddRequest(BaseModel):
 class GitCommitRequest(BaseModel):
     path: str = "/home/daytona"
     message: str
+
+
+class CommandListRequest(BaseModel):
+    mcp_servers: list[McpServer] = []
+
+

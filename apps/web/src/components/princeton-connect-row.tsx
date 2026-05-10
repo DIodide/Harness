@@ -1,10 +1,15 @@
-import { useUser } from "@clerk/tanstack-react-start";
-import { GraduationCap, Loader2, Mail } from "lucide-react";
+import {
+	isClerkRuntimeError,
+	isReverificationCancelledError,
+} from "@clerk/clerk-react/errors";
+import { useReverification, useUser } from "@clerk/tanstack-react-start";
+import { GraduationCap, Mail } from "lucide-react";
 import { motion } from "motion/react";
 import { useCallback, useState } from "react";
 import toast from "react-hot-toast";
 import type { McpServerEntry } from "../lib/mcp";
 import { getPrincetonNetid } from "../lib/mcp";
+import { RoseCurveSpinner } from "./rose-curve-spinner";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -21,12 +26,33 @@ export function PrincetonConnectRow({ server }: { server: McpServerEntry }) {
 	const [loading, setLoading] = useState(false);
 	const [step, setStep] = useState<"email" | "code">("email");
 
+	// Adding an email address is a sensitive Clerk action and may require
+	// step-up reverification (a fresh credential check within the last 10
+	// minutes). Wrapping the call in `useReverification` lets Clerk show its
+	// built-in reverification modal automatically and retry once the user
+	// completes it — the same mechanism the Clerk <UserProfile> settings
+	// page uses internally. Without this wrapper, stale sessions get
+	// "you need to provide additional verification to perform this operation".
+	const createPrincetonEmailWithReverify = useReverification(
+		(email: string) => {
+			if (!user) {
+				return Promise.reject(new Error("You must be signed in"));
+			}
+			return user.createEmailAddress({ email });
+		},
+	);
+
 	const handleAddEmail = useCallback(async () => {
-		if (!user || !netidInput.trim()) return;
+		if (!user) return;
+		const rawNetid = netidInput
+			.trim()
+			.toLowerCase()
+			.replace(/@princeton\.edu$/, "");
+		if (!rawNetid) return;
 		setLoading(true);
 		try {
-			const email = `${netidInput.trim()}@princeton.edu`;
-			const res = await user.createEmailAddress({ email });
+			const email = `${rawNetid}@princeton.edu`;
+			const res = await createPrincetonEmailWithReverify(email);
 			await user.reload();
 
 			const emailAddress = user.emailAddresses.find((a) => a.id === res?.id);
@@ -37,6 +63,10 @@ export function PrincetonConnectRow({ server }: { server: McpServerEntry }) {
 			setStep("code");
 			toast.success(`Verification code sent to ${email}`);
 		} catch (err) {
+			// User dismissed Clerk's reverification modal — bail silently.
+			if (isClerkRuntimeError(err) && isReverificationCancelledError(err)) {
+				return;
+			}
 			console.error("[Princeton] Add email error:", err);
 			const message =
 				err instanceof Error ? err.message : "Failed to add email";
@@ -44,7 +74,7 @@ export function PrincetonConnectRow({ server }: { server: McpServerEntry }) {
 		} finally {
 			setLoading(false);
 		}
-	}, [user, netidInput]);
+	}, [user, netidInput, createPrincetonEmailWithReverify]);
 
 	const handleVerifyCode = useCallback(async () => {
 		if (!user || !emailId || !verificationCode.trim()) return;
@@ -132,11 +162,7 @@ export function PrincetonConnectRow({ server }: { server: McpServerEntry }) {
 							onClick={handleAddEmail}
 							disabled={loading || !netidInput.trim()}
 						>
-							{loading ? (
-								<Loader2 size={10} className="animate-spin" />
-							) : (
-								<Mail size={10} />
-							)}
+							{loading ? <RoseCurveSpinner size={10} /> : <Mail size={10} />}
 							Send Code
 						</Button>
 					</div>
@@ -155,7 +181,7 @@ export function PrincetonConnectRow({ server }: { server: McpServerEntry }) {
 							onClick={handleVerifyCode}
 							disabled={loading || !verificationCode.trim()}
 						>
-							{loading ? <Loader2 size={10} className="animate-spin" /> : null}
+							{loading ? <RoseCurveSpinner size={10} /> : null}
 							Verify
 						</Button>
 					</div>

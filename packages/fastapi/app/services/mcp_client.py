@@ -36,10 +36,26 @@ class UserContext:
     princeton_netid: str | None = None
 
 
+def _requires_princeton_auth(
+    server: McpServer, user_ctx: UserContext | None
+) -> bool:
+    """True when this is a Princeton MCP and we lack a verified netid.
+
+    All `tiger_junction` MCPs (Princeton Courses, TigerSnatch, TigerPath,
+    TigerJunction) require a verified @princeton.edu email on the user's
+    account. Some upstream servers don't enforce this on their end, so we
+    enforce it here for a consistent experience and to prevent unauthorized
+    use of Princeton-only data.
+    """
+    if server.auth_type != "tiger_junction":
+        return False
+    return user_ctx is None or not user_ctx.princeton_netid
+
+
 # Cache: Clerk user_id → (netid or empty string, timestamp).
 # TTL of 5 minutes so email changes propagate without a restart.
 _netid_cache: dict[str, tuple[str, float]] = {}
-_NETID_CACHE_TTL = 300.0  # seconds
+_NETID_CACHE_TTL = 60.0  # seconds
 
 
 async def resolve_princeton_netid(
@@ -70,8 +86,7 @@ async def resolve_princeton_netid(
             return value or None  # empty string means "looked up, not found"
 
     # Fetch full user profile from Clerk Backend API
-    import os
-    clerk_secret = os.environ.get("CLERK_SECRET_KEY")
+    clerk_secret = settings.clerk_secret_key
 
     if not clerk_secret:
         _netid_cache[user_id] = ("", time.monotonic())
@@ -85,13 +100,23 @@ async def resolve_princeton_netid(
         )
         if resp.status_code == 200:
             data = resp.json()
+            # Check verified email addresses
             for email_obj in data.get("email_addresses", []):
                 addr = email_obj.get("email_address", "")
                 verification = email_obj.get("verification", {})
                 if addr.endswith("@princeton.edu") and verification.get("status") == "verified":
                     netid = addr.split("@")[0]
                     _netid_cache[user_id] = (netid, time.monotonic())
-                    logger.info("Resolved Princeton netid '%s' for user '%s' via Clerk API", netid, user_id)
+                    logger.info("Resolved Princeton netid '%s' for user '%s' via Clerk API (email)", netid, user_id)
+                    return netid
+            # Check verified external accounts (Google, Microsoft Entra ID, etc.)
+            for ext in data.get("external_accounts", []):
+                addr = ext.get("email_address", "")
+                verification = ext.get("verification", {})
+                if addr.endswith("@princeton.edu") and verification.get("status") == "verified":
+                    netid = addr.split("@")[0]
+                    _netid_cache[user_id] = (netid, time.monotonic())
+                    logger.info("Resolved Princeton netid '%s' for user '%s' via Clerk API (external account)", netid, user_id)
                     return netid
         else:
             logger.warning("Clerk API returned %d for user '%s'", resp.status_code, user_id)
@@ -369,6 +394,9 @@ async def _list_tools_for_server(
 
     Results are cached per server URL for up to _TOOLS_CACHE_TTL seconds.
     """
+    if _requires_princeton_auth(server, user_ctx):
+        raise McpAuthRequiredError(server.name, server.url, reason="princeton")
+
     cached = _tools_cache.get(server.url)
     if cached:
         tools, ts = cached
@@ -425,7 +453,11 @@ async def list_tools(
     failures: list[McpServerFailure] = []
     for server, result in zip(mcp_servers, results):
         if isinstance(result, McpAuthRequiredError):
-            logger.warning("OAuth re-auth required for MCP '%s'", server.name)
+            logger.warning(
+                "Auth required for MCP '%s' (reason=%s)",
+                server.name,
+                result.reason,
+            )
             failures.append(McpServerFailure(server.name, server.url, "auth_required"))
             continue
         if isinstance(result, BaseException):
@@ -473,6 +505,21 @@ async def call_tool(
     if not server:
         logger.error("No MCP server found with name: %s", server_name)
         return json.dumps({"error": f"Unknown MCP server: {server_name}"})
+
+    if _requires_princeton_auth(server, user_ctx):
+        logger.warning(
+            "Blocked tool call '%s' on Princeton MCP '%s' — no verified netid",
+            actual_tool,
+            server.name,
+        )
+        return json.dumps({
+            "error": (
+                f"{server.name} requires a verified @princeton.edu email on your "
+                "account. Add and verify a Princeton email in your profile settings, "
+                "then retry."
+            ),
+            "princeton_auth_required": True,
+        })
 
     try:
         key = _session_key(server, user_ctx)
@@ -522,12 +569,18 @@ async def call_tool(
 
 
 class McpAuthRequiredError(Exception):
-    """Raised when an OAuth-protected MCP server returns 401."""
+    """Raised when an MCP server cannot be reached without further auth.
 
-    def __init__(self, server_name: str, server_url: str):
+    Used for two cases:
+      - OAuth-protected server returns 401.
+      - Princeton (tiger_junction) server is requested without a verified netid.
+    """
+
+    def __init__(self, server_name: str, server_url: str, reason: str = "auth"):
         self.server_name = server_name
         self.server_url = server_url
-        super().__init__(f"OAuth re-auth required for {server_name} at {server_url}")
+        self.reason = reason
+        super().__init__(f"Auth required for {server_name} at {server_url} ({reason})")
 
 
 def evict_session_cache(server_url: str) -> None:
@@ -545,11 +598,15 @@ async def check_server_health(
     """Check if an MCP server is reachable by attempting initialization.
 
     Returns True if reachable (HTTP 2xx), False otherwise.
-    Raises McpAuthRequiredError for OAuth 401.
+    Raises McpAuthRequiredError for OAuth 401 or for Princeton MCPs lacking
+    a verified netid.
 
     Unlike _initialize_session, this treats a successful response without a
     session ID as reachable (some servers like Context7 don't use sessions).
     """
+    if _requires_princeton_auth(server, user_ctx):
+        raise McpAuthRequiredError(server.name, server.url, reason="princeton")
+
     headers = await _build_headers(client, server, user_ctx=user_ctx)
     payload = {
         "jsonrpc": "2.0",

@@ -5,22 +5,26 @@ import {
 	useConvexMutation,
 } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
-import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
+import type {
+	Doc,
+	Id,
+} from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import {
+	createFileRoute,
+	Link,
+	redirect,
+	useNavigate,
+} from "@tanstack/react-router";
+import {
+	AlertCircle,
 	ArrowLeft,
 	Box,
 	Check,
-	ChevronDown,
 	Cpu,
 	Eye,
 	EyeOff,
-	Globe,
-	HardDrive,
-	Loader2,
 	Pencil,
-	Play,
 	Plus,
 	Server,
 	Shield,
@@ -35,6 +39,8 @@ import { OAuthConnectRow } from "../../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../../components/princeton-connect-row";
 import { RecommendedSkillsGrid } from "../../components/recommended-skills-grid";
+import { RoseCurveSpinner } from "../../components/rose-curve-spinner";
+import { SkillViewerDialog } from "../../components/skill-viewer-dialog";
 import { SkillsBrowser } from "../../components/skills-browser";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -57,13 +63,66 @@ import {
 } from "../../components/ui/select";
 import { Separator } from "../../components/ui/separator";
 import { Skeleton } from "../../components/ui/skeleton";
+import { Textarea } from "../../components/ui/textarea";
 import { env } from "../../env";
 import type { McpServerEntry } from "../../lib/mcp";
-import { PRESET_MCPS } from "../../lib/mcp";
+import {
+	fetchCommandsFromApi,
+	PRESET_MCPS,
+	sanitizeServerName,
+	toMcpServerPayload,
+	validateMcpUrl,
+} from "../../lib/mcp";
 import { MODELS } from "../../lib/models";
 import type { SkillEntry } from "../../lib/skills";
+import { SYSTEM_PROMPT_MAX_LENGTH } from "../../lib/system-prompt";
 
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
+
+type SandboxConfig = {
+	persistent: boolean;
+	autoStart: boolean;
+	defaultLanguage: string;
+	resourceTier: "basic" | "standard" | "performance";
+	snapshotId?: string;
+	gitRepo?: string;
+	networkRestricted?: boolean;
+};
+
+type Sandbox = Doc<"sandboxes">;
+
+type HarnessStatus = "draft" | "started" | "stopped";
+
+function getResourceTierFromSandbox(
+	sandbox: Sandbox,
+): SandboxConfig["resourceTier"] {
+	if (sandbox.resources.cpu >= 4 || sandbox.resources.memoryGB >= 8) {
+		return "performance";
+	}
+	if (sandbox.resources.cpu >= 2 || sandbox.resources.memoryGB >= 4) {
+		return "standard";
+	}
+	return "basic";
+}
+
+function getSandboxConfigFromSandbox(sandbox: Sandbox): SandboxConfig {
+	return {
+		persistent: !sandbox.ephemeral,
+		autoStart: true,
+		defaultLanguage: sandbox.language ?? "python",
+		resourceTier: getResourceTierFromSandbox(sandbox),
+		gitRepo: sandbox.gitRepo,
+		snapshotId: sandbox.snapshotId,
+	};
+}
+
+function formatSandboxMeta(sandbox: Sandbox) {
+	const type = sandbox.ephemeral ? "Ephemeral" : "Persistent";
+	const language = sandbox.language
+		? sandbox.language.charAt(0).toUpperCase() + sandbox.language.slice(1)
+		: "Default";
+	return `${type} - ${language} - ${sandbox.resources.cpu} CPU - ${sandbox.resources.memoryGB} GB RAM`;
+}
 
 export const Route = createFileRoute("/harnesses/$harnessId")({
 	beforeLoad: ({ context }) => {
@@ -75,15 +134,20 @@ export const Route = createFileRoute("/harnesses/$harnessId")({
 });
 
 function HarnessEditPage() {
+	const navigate = useNavigate();
 	const { harnessId } = Route.useParams();
 	const { data: harness, isLoading } = useQuery(
 		convexQuery(api.harnesses.get, {
 			id: harnessId as Id<"harnesses">,
 		}),
 	);
+	const { data: sandboxes, isLoading: sandboxesLoading } = useQuery(
+		convexQuery(api.sandboxes.list, {}),
+	);
 
 	const { getToken } = useAuth();
 	const updateHarnessFn = useConvexMutation(api.harnesses.update);
+	const upsertCommandsFn = useConvexMutation(api.commands.upsert);
 	const ensureSkillDetailsFn = useConvexAction(api.skills.ensureSkillDetails);
 
 	const updateHarness = useMutation({
@@ -94,9 +158,12 @@ function HarnessEditPage() {
 
 			setName(null);
 			setModel(null);
+			setStatus(null);
 			setMcpServers(null);
 			setSkills(null);
+			setSystemPrompt(null);
 			toast.success("Harness saved");
+			navigate({ to: "/harnesses" });
 
 			// Fire-and-forget: sync skill details for newly added skills
 			if (savedSkills !== null && savedSkills.length > 0) {
@@ -105,7 +172,7 @@ function HarnessEditPage() {
 				);
 			}
 
-			// Regenerate suggested prompts when MCP servers changed
+			// Regenerate suggested prompts and commands when MCP servers changed
 			if (savedMcpServers !== null && savedMcpServers.length > 0) {
 				(async () => {
 					try {
@@ -119,12 +186,7 @@ function HarnessEditPage() {
 									...(token ? { Authorization: `Bearer ${token}` } : {}),
 								},
 								body: JSON.stringify({
-									mcp_servers: savedMcpServers.map((s) => ({
-										name: s.name,
-										url: s.url,
-										auth_type: s.authType,
-										...(s.authToken ? { auth_token: s.authToken } : {}),
-									})),
+									mcp_servers: toMcpServerPayload(savedMcpServers),
 								}),
 							},
 						);
@@ -141,29 +203,70 @@ function HarnessEditPage() {
 						// Non-blocking
 					}
 				})();
+
+				// Fire-and-forget: fetch commands, upsert, and link to harness
+				(async () => {
+					try {
+						const token = await getToken();
+						const cmds = await fetchCommandsFromApi(
+							API_URL,
+							savedMcpServers,
+							token,
+						);
+						if (!cmds || cmds.length === 0) return;
+
+						const ids = await upsertCommandsFn({
+							commands: cmds.map((c) => ({
+								name: c.name,
+								server: c.server,
+								tool: c.tool,
+								description: c.description,
+								parametersJson: JSON.stringify(c.parameters),
+							})),
+						});
+
+						const idByName = new Map(cmds.map((c, i) => [c.name, ids[i]]));
+						const enriched = savedMcpServers.map((s) => ({
+							name: s.name,
+							url: s.url,
+							authType: s.authType,
+							...(s.authToken ? { authToken: s.authToken } : {}),
+							commandIds: [...idByName.entries()]
+								.filter(([name]) =>
+									name.startsWith(`${sanitizeServerName(s.name)}__`),
+								)
+								.map(([, cmdId]) => cmdId),
+						}));
+
+						await updateHarnessFn({
+							id: harnessId as Id<"harnesses">,
+							mcpServers: enriched,
+						});
+					} catch {
+						// Non-blocking
+					}
+				})();
 			}
 		},
 	});
 
 	const [name, setName] = useState<string | null>(null);
 	const [model, setModel] = useState<string | null>(null);
+	const [status, setStatus] = useState<HarnessStatus | null>(null);
 	const [mcpServers, setMcpServers] = useState<McpServerEntry[] | null>(null);
 	const [skills, setSkills] = useState<SkillEntry[] | null>(null);
 	const [skillsBrowserOpen, setSkillsBrowserOpen] = useState(false);
+	const [viewingSkillId, setViewingSkillId] = useState<string | null>(null);
+	const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
 	const [sandboxEnabled, setSandboxEnabled] = useState<boolean | null>(null);
-	const [sandboxConfig, setSandboxConfig] = useState<{
-		persistent: boolean;
-		autoStart: boolean;
-		defaultLanguage: string;
-		resourceTier: "basic" | "standard" | "performance";
-		snapshotId?: string;
-		gitRepo?: string;
-		networkRestricted?: boolean;
-	} | null>(null);
+	const [selectedSandboxId, setSelectedSandboxId] =
+		useState<Id<"sandboxes"> | null>(null);
 
 	// Use local state if edited, otherwise fall back to server data
 	const currentName = name ?? harness?.name ?? "";
 	const currentModel = model ?? harness?.model ?? "";
+	const currentStatus: HarnessStatus =
+		status ?? (harness?.status as HarnessStatus | undefined) ?? "draft";
 	const currentMcpServers = mcpServers ?? harness?.mcpServers ?? [];
 	const currentSkills: SkillEntry[] = skills ?? harness?.skills ?? [];
 
@@ -177,22 +280,35 @@ function HarnessEditPage() {
 	};
 
 	const currentSandboxEnabled =
-		sandboxEnabled ?? (harness as any)?.sandboxEnabled ?? false;
-	const currentSandboxConfig = sandboxConfig ??
-		(harness as any)?.sandboxConfig ?? {
-			persistent: false,
-			autoStart: true,
-			defaultLanguage: "python",
-			resourceTier: "basic" as const,
-		};
+		sandboxEnabled ?? harness?.sandboxEnabled ?? false;
+	const linkedSandbox = useMemo(
+		() =>
+			sandboxes?.find(
+				(sandbox) =>
+					sandbox._id === harness?.sandboxId ||
+					sandbox.daytonaSandboxId === harness?.daytonaSandboxId,
+			),
+		[sandboxes, harness?.sandboxId, harness?.daytonaSandboxId],
+	);
+	const currentSelectedSandboxId =
+		selectedSandboxId ?? linkedSandbox?._id ?? null;
+	const currentSelectedSandbox = useMemo(
+		() =>
+			sandboxes?.find((sandbox) => sandbox._id === currentSelectedSandboxId),
+		[sandboxes, currentSelectedSandboxId],
+	);
+
+	const currentSystemPrompt = systemPrompt ?? harness?.systemPrompt ?? "";
 
 	const hasChanges =
 		name !== null ||
 		model !== null ||
+		status !== null ||
 		mcpServers !== null ||
 		skills !== null ||
+		systemPrompt !== null ||
 		sandboxEnabled !== null ||
-		sandboxConfig !== null;
+		selectedSandboxId !== null;
 
 	// Derived: which preset IDs are already in the server list
 	const selectedPresetMcps = useMemo(
@@ -247,12 +363,26 @@ function HarnessEditPage() {
 		const updates: Record<string, unknown> = {
 			id: harnessId as Id<"harnesses">,
 		};
+		if (currentSandboxEnabled && !currentSelectedSandbox) {
+			toast.error("Select an existing sandbox");
+			return;
+		}
 		if (name !== null) updates.name = name;
 		if (model !== null) updates.model = model;
+		if (status !== null) updates.status = status;
 		if (mcpServers !== null) updates.mcpServers = mcpServers;
 		if (skills !== null) updates.skills = skills;
-		if (sandboxEnabled !== null) updates.sandboxEnabled = sandboxEnabled;
-		if (sandboxConfig !== null) updates.sandboxConfig = sandboxConfig;
+		if (systemPrompt !== null) updates.systemPrompt = systemPrompt.trim();
+		if (currentSandboxEnabled) {
+			updates.sandboxEnabled = true;
+			updates.sandboxId = currentSelectedSandbox?._id;
+			updates.daytonaSandboxId = currentSelectedSandbox?.daytonaSandboxId;
+			updates.sandboxConfig = currentSelectedSandbox
+				? getSandboxConfigFromSandbox(currentSelectedSandbox)
+				: undefined;
+		} else if (sandboxEnabled === false) {
+			updates.sandboxEnabled = false;
+		}
 		updateHarness.mutate(updates as Parameters<typeof updateHarness.mutate>[0]);
 	};
 
@@ -309,7 +439,7 @@ function HarnessEditPage() {
 					disabled={!hasChanges || updateHarness.isPending}
 				>
 					{updateHarness.isPending ? (
-						<Loader2 size={14} className="animate-spin" />
+						<RoseCurveSpinner size={14} />
 					) : (
 						<Check size={14} />
 					)}
@@ -319,6 +449,78 @@ function HarnessEditPage() {
 
 			<div className="flex-1 p-6">
 				<div className="mx-auto max-w-3xl space-y-8">
+					{/* Status */}
+					<motion.section
+						initial={{ opacity: 0, y: 8 }}
+						animate={{ opacity: 1, y: 0 }}
+					>
+						<h2 className="mb-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+							Status
+						</h2>
+						{harness.status === "draft" && (
+							<div className="mb-3 flex items-start gap-2 border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-foreground">
+								<AlertCircle
+									size={14}
+									className="mt-0.5 shrink-0 text-amber-500"
+								/>
+								<p>
+									This harness is a <strong>draft</strong> and won't appear in
+									the chat selector. Change the status to{" "}
+									<strong>Started</strong> and save to activate it and make it
+									selectable.
+								</p>
+							</div>
+						)}
+						{harness.status === "stopped" && (
+							<div className="mb-3 flex items-start gap-2 border border-border bg-muted/40 px-3 py-2 text-xs text-foreground">
+								<AlertCircle
+									size={14}
+									className="mt-0.5 shrink-0 text-muted-foreground"
+								/>
+								<p>
+									This harness is <strong>stopped</strong>. It's still
+									selectable in chats, but it isn't active. Change the status to{" "}
+									<strong>Started</strong> and save to activate it.
+								</p>
+							</div>
+						)}
+						<Select
+							value={currentStatus}
+							onValueChange={(v) => setStatus(v as HarnessStatus)}
+						>
+							<SelectTrigger className="max-w-sm">
+								<SelectValue placeholder="Select status" />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="draft">
+									<div className="flex items-center gap-2">
+										<div className="h-2 w-2 bg-amber-400" />
+										<span>Draft</span>
+									</div>
+								</SelectItem>
+								<SelectItem value="started">
+									<div className="flex items-center gap-2">
+										<div className="h-2 w-2 bg-emerald-500" />
+										<span>Started</span>
+									</div>
+								</SelectItem>
+								<SelectItem value="stopped">
+									<div className="flex items-center gap-2">
+										<div className="h-2 w-2 bg-muted-foreground/40" />
+										<span>Stopped</span>
+									</div>
+								</SelectItem>
+							</SelectContent>
+						</Select>
+						{harness.status === "draft" && currentStatus !== "draft" && (
+							<p className="mt-2 text-[11px] text-muted-foreground">
+								Saving will promote this harness out of draft.
+							</p>
+						)}
+					</motion.section>
+
+					<Separator />
+
 					{/* Name & Model */}
 					<motion.section
 						initial={{ opacity: 0, y: 8 }}
@@ -363,6 +565,29 @@ function HarnessEditPage() {
 										))}
 									</SelectContent>
 								</Select>
+							</div>
+							<div>
+								<label
+									htmlFor="system-prompt"
+									className="mb-1.5 block text-xs font-medium text-foreground"
+								>
+									System Prompt{" "}
+									<span className="font-normal text-muted-foreground">
+										(Optional)
+									</span>
+								</label>
+								<Textarea
+									id="system-prompt"
+									placeholder="e.g. You are a helpful coding assistant that always explains your reasoning."
+									value={currentSystemPrompt}
+									maxLength={SYSTEM_PROMPT_MAX_LENGTH}
+									onChange={(e) => setSystemPrompt(e.target.value)}
+									className="h-24 max-w-lg resize-y"
+								/>
+								<p className="mt-1.5 text-xs text-muted-foreground">
+									Custom instructions prepended to every conversation (max{" "}
+									{SYSTEM_PROMPT_MAX_LENGTH.toLocaleString()} characters).
+								</p>
 							</div>
 						</div>
 					</motion.section>
@@ -452,24 +677,30 @@ function HarnessEditPage() {
 
 						<div className="space-y-4">
 							{/* Enable toggle */}
-							<label className="flex cursor-pointer items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30">
+							<div className="flex items-center gap-3 border border-border px-3 py-2.5 transition-colors hover:bg-muted/30">
 								<Checkbox
+									id="harness-sandbox-enabled"
 									checked={currentSandboxEnabled}
 									onCheckedChange={(checked) =>
 										setSandboxEnabled(checked === true)
 									}
 								/>
-								<div className="flex-1">
-									<p className="text-xs font-medium text-foreground">
-										Enable sandbox for this harness
-									</p>
-									<p className="text-[11px] text-muted-foreground">
-										Gives this harness access to code execution, file system,
-										terminal, and git operations in an isolated environment
-									</p>
-								</div>
-								<Box size={14} className="shrink-0 text-muted-foreground" />
-							</label>
+								<label
+									htmlFor="harness-sandbox-enabled"
+									className="flex min-w-0 flex-1 cursor-pointer items-center gap-3"
+								>
+									<div className="flex-1">
+										<p className="text-xs font-medium text-foreground">
+											Enable sandbox for this harness
+										</p>
+										<p className="text-[11px] text-muted-foreground">
+											Gives this harness access to code execution, file system,
+											terminal, and git operations in an isolated environment
+										</p>
+									</div>
+									<Box size={14} className="shrink-0 text-muted-foreground" />
+								</label>
+							</div>
 
 							{currentSandboxEnabled && (
 								<motion.div
@@ -478,178 +709,47 @@ function HarnessEditPage() {
 									exit={{ opacity: 0, height: 0 }}
 									className="space-y-4"
 								>
-									{/* Sandbox type */}
-									<div>
-										<label className="mb-1.5 block text-xs font-medium text-foreground">
-											Sandbox Type
-										</label>
-										<div className="grid gap-2 sm:grid-cols-2">
-											<button
-												type="button"
-												onClick={() =>
-													setSandboxConfig({
-														...currentSandboxConfig,
-														persistent: false,
-													})
+									<div className="space-y-2">
+										<span className="block text-xs font-medium text-foreground">
+											Attach Existing Sandbox
+										</span>
+										{sandboxesLoading ? (
+											<p className="text-[11px] text-muted-foreground">
+												Loading sandboxes...
+											</p>
+										) : sandboxes && sandboxes.length > 0 ? (
+											<Select
+												value={currentSelectedSandboxId ?? undefined}
+												onValueChange={(value) =>
+													setSelectedSandboxId(value as Id<"sandboxes">)
 												}
-												className={`flex items-start gap-2.5 border px-3 py-2.5 text-left transition-colors ${
-													!currentSandboxConfig.persistent
-														? "border-foreground bg-foreground/5"
-														: "border-border hover:bg-muted/30"
-												}`}
 											>
-												<Play size={12} className="mt-0.5 shrink-0" />
-												<div>
-													<p className="text-xs font-medium">Ephemeral</p>
-													<p className="text-[11px] text-muted-foreground">
-														Created per conversation, auto-deleted when done
-													</p>
-												</div>
-											</button>
-											<button
-												type="button"
-												onClick={() =>
-													setSandboxConfig({
-														...currentSandboxConfig,
-														persistent: true,
-													})
-												}
-												className={`flex items-start gap-2.5 border px-3 py-2.5 text-left transition-colors ${
-													currentSandboxConfig.persistent
-														? "border-foreground bg-foreground/5"
-														: "border-border hover:bg-muted/30"
-												}`}
-											>
-												<HardDrive size={12} className="mt-0.5 shrink-0" />
-												<div>
-													<p className="text-xs font-medium">Persistent</p>
-													<p className="text-[11px] text-muted-foreground">
-														Maintains state across conversations
-													</p>
-												</div>
-											</button>
-										</div>
-									</div>
-
-									{/* Resource tier */}
-									<div>
-										<label className="mb-1.5 block text-xs font-medium text-foreground">
-											Resource Tier
-										</label>
-										<Select
-											value={currentSandboxConfig.resourceTier}
-											onValueChange={(v) =>
-												setSandboxConfig({
-													...currentSandboxConfig,
-													resourceTier: v as
-														| "basic"
-														| "standard"
-														| "performance",
-												})
-											}
-										>
-											<SelectTrigger className="max-w-sm text-xs">
-												<SelectValue />
-											</SelectTrigger>
-											<SelectContent>
-												<SelectItem value="basic">
-													<Cpu size={10} />
-													Basic — 1 CPU, 1 GB RAM, 3 GB Disk
-												</SelectItem>
-												<SelectItem value="standard">
-													<Cpu size={10} />
-													Standard — 2 CPU, 4 GB RAM, 8 GB Disk
-												</SelectItem>
-												<SelectItem value="performance">
-													<Cpu size={10} />
-													Performance — 4 CPU, 8 GB RAM, 10 GB Disk
-												</SelectItem>
-											</SelectContent>
-										</Select>
-									</div>
-
-									{/* Default language */}
-									<div>
-										<label className="mb-1.5 block text-xs font-medium text-foreground">
-											Default Language
-										</label>
-										<Select
-											value={currentSandboxConfig.defaultLanguage}
-											onValueChange={(v) =>
-												setSandboxConfig({
-													...currentSandboxConfig,
-													defaultLanguage: v,
-												})
-											}
-										>
-											<SelectTrigger className="max-w-sm text-xs">
-												<SelectValue />
-											</SelectTrigger>
-											<SelectContent>
-												<SelectItem value="python">Python</SelectItem>
-												<SelectItem value="javascript">JavaScript</SelectItem>
-												<SelectItem value="typescript">TypeScript</SelectItem>
-											</SelectContent>
-										</Select>
-									</div>
-
-									{/* Advanced options */}
-									<details className="group">
-										<summary className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground">
-											<ChevronDown
-												size={10}
-												className="transition-transform group-open:rotate-180"
-											/>
-											Advanced Options
-										</summary>
-										<div className="mt-3 space-y-3 border-l-2 border-border pl-3">
-											<div>
-												<label
-													htmlFor="sandbox-git-repo"
-													className="mb-1 block text-[11px] text-muted-foreground"
-												>
-													Auto-clone Repository
-												</label>
-												<Input
-													id="sandbox-git-repo"
-													value={currentSandboxConfig.gitRepo ?? ""}
-													onChange={(e) =>
-														setSandboxConfig({
-															...currentSandboxConfig,
-															gitRepo: e.target.value || undefined,
-														})
-													}
-													placeholder="https://github.com/user/repo.git"
-													className="max-w-sm text-xs"
-												/>
+												<SelectTrigger className="w-full max-w-lg text-xs">
+													<SelectValue placeholder="Choose a sandbox" />
+												</SelectTrigger>
+												<SelectContent>
+													{sandboxes.map((sandbox) => (
+														<SelectItem key={sandbox._id} value={sandbox._id}>
+															<span className="truncate">{sandbox.name}</span>
+															<span className="text-[10px] text-muted-foreground">
+																{formatSandboxMeta(sandbox)}
+															</span>
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+										) : (
+											<div className="border border-dashed border-border px-3 py-2.5">
+												<p className="text-xs font-medium text-foreground">
+													No existing sandboxes
+												</p>
+												<p className="mt-1 text-[11px] text-muted-foreground">
+													Create a sandbox from the Sandboxes page, then return
+													here to attach it.
+												</p>
 											</div>
-											<label className="flex cursor-pointer items-center gap-2.5">
-												<Checkbox
-													checked={
-														currentSandboxConfig.networkRestricted ?? false
-													}
-													onCheckedChange={(checked) =>
-														setSandboxConfig({
-															...currentSandboxConfig,
-															networkRestricted: checked === true,
-														})
-													}
-												/>
-												<div>
-													<p className="text-xs text-foreground">
-														Restrict network access
-													</p>
-													<p className="text-[11px] text-muted-foreground">
-														Block all outbound network traffic from the sandbox
-													</p>
-												</div>
-												<Globe
-													size={12}
-													className="shrink-0 text-muted-foreground"
-												/>
-											</label>
-										</div>
-									</details>
+										)}
+									</div>
 								</motion.div>
 							)}
 						</div>
@@ -718,25 +818,39 @@ function HarnessEditPage() {
 								{currentSkills.map((skill) => {
 									const displayName = skill.name.split("/").pop() ?? skill.name;
 									return (
-										<button
+										<div
 											key={skill.name}
-											type="button"
-											onClick={() => toggleSkill(skill)}
-											className="flex w-full items-start gap-3 border border-foreground bg-foreground/3 p-3 text-left transition-colors hover:border-foreground/20"
+											className="flex w-full items-start gap-3 border border-foreground bg-foreground/3 p-3 transition-colors hover:border-foreground/20"
 										>
 											<Checkbox
 												checked={true}
 												className="mt-0.5 shrink-0"
-												tabIndex={-1}
+												onCheckedChange={() => toggleSkill(skill)}
 											/>
-											<div className="min-w-0 flex-1">
+											<button
+												type="button"
+												onClick={() => toggleSkill(skill)}
+												className="min-w-0 flex-1 border-0 bg-transparent p-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+											>
 												<p className="text-xs font-medium text-foreground">
 													{displayName}
 												</p>
-											</div>
-										</button>
+											</button>
+											<button
+												type="button"
+												aria-label={`View skill ${displayName}`}
+												onClick={() => setViewingSkillId(skill.name)}
+												className="mt-0.5 shrink-0 text-muted-foreground/40 transition-colors hover:text-foreground"
+											>
+												<Eye size={14} />
+											</button>
+										</div>
 									);
 								})}
+								<SkillViewerDialog
+									fullId={viewingSkillId}
+									onClose={() => setViewingSkillId(null)}
+								/>
 							</div>
 						)}
 
@@ -770,49 +884,10 @@ function HarnessEditPage() {
 							</DialogContent>
 						</Dialog>
 					</motion.section>
-
-					<Separator />
-
-					{/* Status */}
-					<motion.section
-						initial={{ opacity: 0, y: 8 }}
-						animate={{ opacity: 1, y: 0 }}
-						transition={{ delay: 0.1 }}
-					>
-						<h2 className="mb-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-							Status
-						</h2>
-						<div className="flex items-center gap-3">
-							<div
-								className={`h-2 w-2 ${
-									harness.status === "started"
-										? "bg-emerald-500"
-										: harness.status === "stopped"
-											? "bg-muted-foreground/40"
-											: "bg-amber-400"
-								}`}
-							/>
-							<span className="text-sm text-foreground capitalize">
-								{harness.status}
-							</span>
-						</div>
-					</motion.section>
 				</div>
 			</div>
 		</div>
 	);
-}
-
-function validateMcpUrl(url: string): string | null {
-	if (/\s/.test(url)) return "URL must not contain spaces";
-	try {
-		const parsed = new URL(url);
-		if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-			return "URL must start with http:// or https://";
-	} catch {
-		return "Please enter a valid URL";
-	}
-	return null;
 }
 
 function McpServerRow({

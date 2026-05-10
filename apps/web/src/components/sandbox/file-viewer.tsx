@@ -1,9 +1,10 @@
 import { useAuth } from "@clerk/clerk-react";
-import { Check, Copy, Download, Loader2, Pencil, Save, X } from "lucide-react";
+import { Check, Copy, Download, Pencil, Save, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createSandboxApi } from "../../lib/sandbox-api";
 import { useSandboxPanel } from "../../lib/sandbox-panel-context";
 import { detectLanguage, useHighlighted } from "../../lib/syntax-highlight";
+import { RoseCurveSpinner } from "../rose-curve-spinner";
 import { ScrollArea } from "../ui/scroll-area";
 
 interface FileCache {
@@ -75,7 +76,7 @@ export function FileViewer() {
 	if (!entry || entry.loading) {
 		return (
 			<div className="flex flex-1 items-center justify-center">
-				<Loader2 size={14} className="animate-spin text-muted-foreground/40" />
+				<RoseCurveSpinner size={14} className="text-muted-foreground/40" />
 			</div>
 		);
 	}
@@ -242,11 +243,7 @@ function FileContent({
 								title="Save (Cmd+S)"
 								className="flex h-6 items-center gap-1 px-1.5 font-mono text-[10px] text-emerald-500/70 transition-colors hover:text-emerald-500 disabled:opacity-30"
 							>
-								{saving ? (
-									<Loader2 size={11} className="animate-spin" />
-								) : (
-									<Save size={11} />
-								)}
+								{saving ? <RoseCurveSpinner size={11} /> : <Save size={11} />}
 								Save
 							</button>
 						</>
@@ -297,8 +294,8 @@ function FileContent({
 						className="sticky left-0 shrink-0 select-none border-r border-border/60 bg-muted/15 px-2 py-1.5 text-right font-mono text-[10.5px] leading-[1.65] text-muted-foreground/20"
 						aria-hidden
 					>
-						{lines.map((_, i) => (
-							<div key={i}>{i + 1}</div>
+						{lines.map((line, i) => (
+							<div key={`${i + 1}:${line}`}>{i + 1}</div>
 						))}
 					</div>
 
@@ -316,7 +313,10 @@ function FileContent({
 							/>
 						) : highlighted ? (
 							<pre className="hljs whitespace-pre-wrap break-words py-1.5 pl-3 pr-3 font-mono text-[11.5px] leading-[1.65]">
-								<code dangerouslySetInnerHTML={{ __html: highlighted }} />
+								<code
+									// biome-ignore lint/security/noDangerouslySetInnerHtml: highlight.js output for read-only file display
+									dangerouslySetInnerHTML={{ __html: highlighted }}
+								/>
 							</pre>
 						) : (
 							<pre className="whitespace-pre-wrap break-words py-1.5 pl-3 pr-3 font-mono text-[11.5px] leading-[1.65] text-foreground/80">

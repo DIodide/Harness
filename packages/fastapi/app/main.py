@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routes import chat, health, mcp_health, mcp_oauth, sandbox, terminal
+from app.routes import chat, commands, harness_suggest, health, mcp_health, mcp_oauth, sandbox, terminal
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,14 +42,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_local_dev_origins = [
+    f"http://{host}:{port}"
+    for host in ("localhost", "127.0.0.1")
+    for port in range(3000, 3021)
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         settings.frontend_url,
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
+        *_local_dev_origins,
         "http://127.0.0.1:57177",
         "https://harness.nz",
         "https://staging.harness.nz",
@@ -65,5 +68,7 @@ app.include_router(health.router)
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(mcp_oauth.router, prefix="/api/mcp/oauth", tags=["mcp-oauth"])
 app.include_router(mcp_health.router, prefix="/api/mcp/health", tags=["mcp-health"])
+app.include_router(commands.router, prefix="/api/commands", tags=["commands"])
 app.include_router(sandbox.router, prefix="/api/sandbox", tags=["sandbox"])
 app.include_router(terminal.router, prefix="/api/sandbox", tags=["terminal"])
+app.include_router(harness_suggest.router, prefix="/api/harness/suggest", tags=["harness-suggest"])

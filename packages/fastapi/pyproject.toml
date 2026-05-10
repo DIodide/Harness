@@ -1,0 +1,34 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "app/main.py",
+    "app/routes/chat.py",
+    "app/routes/sandbox.py",
+    "app/routes/terminal.py",
+    "app/services/openrouter.py",
+    "app/services/mcp_client.py",
+    "app/services/mcp_oauth.py",
+    "app/services/daytona_service.py",
+    "app/services/sandbox_tools.py",
+]
+
+[tool.coverage.report]
+precision = 2
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "except Exception:",
+]
+show_missing = true
+skip_covered = false
+fail_under = 70
