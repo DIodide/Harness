@@ -6,6 +6,7 @@ import pytest
 import respx
 
 from app.services.convex import (
+    SandboxRecordError,
     create_sandbox_record,
     patch_message_usage,
     query_convex,
@@ -251,12 +252,35 @@ class TestCreateSandboxRecord:
         assert "harnessId" not in body["args"]
 
     @respx.mock
-    async def test_returns_none_on_error(self, convex_settings):
+    async def test_raises_on_http_error(self, convex_settings):
         respx.post(f"{CONVEX_URL}/api/mutation").mock(
             return_value=httpx.Response(500, text="boom")
         )
         async with httpx.AsyncClient() as client:
-            result = await create_sandbox_record(
-                client, "u1", None, "dsbx_1", "sandbox", "python", True, {}
+            with pytest.raises(SandboxRecordError):
+                await create_sandbox_record(
+                    client, "u1", None, "dsbx_1", "sandbox", "python", True, {}
+                )
+
+    @respx.mock
+    async def test_raises_with_code_on_convex_error(self, convex_settings):
+        respx.post(f"{CONVEX_URL}/api/mutation").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "status": "error",
+                    "errorMessage": "Sandbox limit reached",
+                    "errorData": {
+                        "code": "sandbox_limit_reached",
+                        "message": "You've hit the cap of 5 sandboxes.",
+                    },
+                },
             )
-        assert result is None
+        )
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(SandboxRecordError) as exc_info:
+                await create_sandbox_record(
+                    client, "u1", None, "dsbx_1", "sandbox", "python", True, {}
+                )
+        assert exc_info.value.code == "sandbox_limit_reached"
+        assert "cap of 5 sandboxes" in str(exc_info.value)
