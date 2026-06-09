@@ -31,6 +31,21 @@ class Settings(BaseSettings):
     # Clerk JWT verification — pinned issuer prevents attacker-controlled JWKS.
     clerk_issuer: str = ""
 
+    # ── ACP agent gateway (external agents in Daytona sandboxes) ──
+    # Daytona snapshot with node + codex-acp + claude-agent-acp preinstalled.
+    # Built by packages/fastapi/scripts/create_acp_snapshot.py.
+    acp_snapshot_name: str = "harness-acp-v1"
+    acp_shim_port: int = 8787
+    # Idle ACP sessions are torn down (sandbox deleted) after this many minutes.
+    acp_session_idle_minutes: int = 60
+    # Dev/server-level agent credentials. Per-user encrypted credentials will
+    # replace these (see services/agents/registry.resolve_credentials).
+    codex_auth_json: str = ""  # raw contents of a codex auth.json
+    codex_auth_json_path: str = ""  # or a path to one on the API host
+    openai_api_key_for_codex: str = ""
+    claude_code_oauth_token: str = ""
+    anthropic_api_key: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     def validate_startup(self) -> None:

@@ -13,6 +13,7 @@ import { useConvexAuth, usePaginatedQuery } from "convex/react";
 import {
 	AlertTriangle,
 	ArrowUp,
+	Bot,
 	Box,
 	Brain,
 	Check,
@@ -48,6 +49,7 @@ import React, {
 	useState,
 } from "react";
 import toast from "react-hot-toast";
+import { AgentPermissionCard } from "../../components/agent-permission-card";
 import { AttachmentChip } from "../../components/attachment-chip";
 import { useChatPaletteCommands } from "../../components/command-palette/commands/chat-commands";
 import { HarnessMark } from "../../components/harness-mark";
@@ -115,6 +117,7 @@ import { UsageDialog } from "../../components/usage-dialog";
 import { formatResetTime, UsageBadge } from "../../components/usage-display";
 import { env } from "../../env";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
+import { AGENT_MODES, type AgentMode } from "../../lib/agent-mode";
 import {
 	CHAT_INPUT_COUNTER_THRESHOLD,
 	CHAT_INPUT_MAX_LENGTH,
@@ -3294,6 +3297,7 @@ function ChatInput({
 		};
 		conversation_id: string;
 		forced_tool?: string;
+		agent?: AgentMode;
 	}) => Promise<void>;
 	onInterrupt: (convoId: string) => void;
 	onEnqueue: (content: string) => void;
@@ -3321,6 +3325,15 @@ function ChatInput({
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [isDragOver, setIsDragOver] = useState(false);
+
+	// ACP agent mode: route turns through an external agent (Codex CLI,
+	// Claude Code) instead of the Harness default loop. Usage is billed to
+	// the user's own agent account, so the budget gate doesn't apply.
+	const [agentMode, setAgentMode] = useState<AgentMode>("default");
+	const { pendingPermissions, answerPermission } = useChatStreamContext();
+	const pendingPermission = conversationId
+		? pendingPermissions[conversationId]
+		: undefined;
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
@@ -3441,7 +3454,8 @@ function ChatInput({
 
 	const handleSend = async () => {
 		const content = text.trim();
-		if (!content || !activeHarness || budgetExceeded) return;
+		if (!content || !activeHarness) return;
+		if (budgetExceeded && agentMode === "default") return;
 
 		// ── Slash command interception ────────────────────────────────
 		// If it's a slash command, trySend returns the forced tool + cleaned message.
@@ -3565,6 +3579,7 @@ function ChatInput({
 			harness: harnessConfig,
 			conversation_id: convoId,
 			...(forcedTool ? { forced_tool: forcedTool } : {}),
+			...(agentMode !== "default" ? { agent: agentMode } : {}),
 		});
 	};
 
@@ -3685,6 +3700,13 @@ function ChatInput({
 			/>
 
 			<div className="mx-auto max-w-xl">
+				{/* ACP agent approval — blocks the turn until answered */}
+				{pendingPermission && conversationId && (
+					<AgentPermissionCard
+						request={pendingPermission.request}
+						onAnswer={(optionId) => answerPermission(conversationId, optionId)}
+					/>
+				)}
 				{/* Queued messages as chips above the input */}
 				<AnimatePresence>
 					{messageQueue.length > 0 && (
@@ -3831,6 +3853,52 @@ function ChatInput({
 									<DropdownMenuTrigger asChild>
 										<button
 											type="button"
+											className={`flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs transition-colors hover:bg-foreground/10 hover:text-foreground ${agentMode !== "default" ? "text-foreground" : "text-muted-foreground"}`}
+										>
+											<Bot size={11} className="shrink-0" />
+											<span className="max-w-[80px] truncate">
+												{AGENT_MODES.find((a) => a.id === agentMode)?.label}
+											</span>
+											<ChevronDown size={10} />
+										</button>
+									</DropdownMenuTrigger>
+								</TooltipTrigger>
+								<TooltipContent>
+									{agentMode === "default"
+										? "Agent engine for this conversation"
+										: "External agent — usage billed to your own account"}
+								</TooltipContent>
+							</Tooltip>
+							<DropdownMenuContent align="end">
+								{AGENT_MODES.map((agentOption) => (
+									<DropdownMenuItem
+										key={agentOption.id}
+										onClick={() => setAgentMode(agentOption.id)}
+										className="flex items-center gap-2"
+									>
+										{agentOption.id === agentMode ? (
+											<Check size={12} className="shrink-0" />
+										) : (
+											<span className="w-3 shrink-0" />
+										)}
+										<div className="flex flex-col">
+											<span>{agentOption.label}</span>
+											<span className="text-[10px] text-muted-foreground">
+												{agentOption.description}
+											</span>
+										</div>
+									</DropdownMenuItem>
+								))}
+							</DropdownMenuContent>
+						</DropdownMenu>
+					)}
+					{activeHarness && agentMode === "default" && (
+						<DropdownMenu>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<DropdownMenuTrigger asChild>
+										<button
+											type="button"
 											className={`flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs transition-colors hover:bg-foreground/10 hover:text-foreground ${sessionModel ? "text-foreground" : "text-muted-foreground"}`}
 										>
 											{sessionModel && (
@@ -3897,7 +3965,7 @@ function ChatInput({
 								}}
 								disabled={
 									!showStopButton &&
-									(budgetExceeded ||
+									((budgetExceeded && agentMode === "default") ||
 										!text.trim() ||
 										hasUploading ||
 										sendMessage.isPending ||

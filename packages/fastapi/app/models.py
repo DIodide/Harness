@@ -98,3 +98,29 @@ class CommandListRequest(BaseModel):
     mcp_servers: list[McpServer] = []
 
 
+# ── ACP agent gateway ──────────────────────────────────────
+
+
+class AgentSessionCreateRequest(BaseModel):
+    agent: str  # registry id: "codex" | "claude-code"
+    harness: HarnessConfig
+    conversation_id: str
+
+
+class AgentPromptRequest(BaseModel):
+    message: str
+    # Prior conversation messages (text-only), used to seed the agent's
+    # context when a session is created mid-conversation.
+    history: list[MessagePayload] | None = None
+
+
+class AgentPermissionAnswer(BaseModel):
+    request_id: str
+    option_id: str | None = None
+    cancelled: bool = False
+
+
+class AgentSwitchHarnessRequest(BaseModel):
+    harness: HarnessConfig
+
+

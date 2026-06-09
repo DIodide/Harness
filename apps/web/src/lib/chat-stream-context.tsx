@@ -1,3 +1,4 @@
+import { useAuth } from "@clerk/tanstack-react-start";
 import {
 	createContext,
 	type ReactNode,
@@ -9,6 +10,10 @@ import {
 	useRef,
 	useState,
 } from "react";
+import {
+	type AgentPermissionRequest,
+	answerAgentPermission,
+} from "./agent-mode";
 import {
 	type BudgetExceededInfo,
 	type ChatStreamRequest,
@@ -49,6 +54,11 @@ interface ChatStreamSideEffects {
 	) => void;
 }
 
+export interface PendingAgentPermission {
+	sessionId: string;
+	request: AgentPermissionRequest;
+}
+
 interface ChatStreamContextValue {
 	streamStates: Record<string, ConvoStreamState>;
 	streamStatesRef: React.MutableRefObject<Record<string, ConvoStreamState>>;
@@ -60,6 +70,12 @@ interface ChatStreamContextValue {
 		conversationId: string,
 		updater: (state: ConvoStreamState) => ConvoStreamState,
 	) => void;
+	/** ACP agent mode: pending tool-approval per conversation. */
+	pendingPermissions: Record<string, PendingAgentPermission>;
+	answerPermission: (
+		conversationId: string,
+		optionId: string | null,
+	) => Promise<void>;
 }
 
 const ChatStreamContext = createContext<ChatStreamContextValue | null>(null);
@@ -80,6 +96,10 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 	streamStatesRef.current = streamStates;
 
 	const sideEffectsRegistryRef = useRef<SideEffectsRegistry>(new Map());
+	const { getToken } = useAuth();
+	const [pendingPermissions, setPendingPermissions] = useState<
+		Record<string, PendingAgentPermission>
+	>({});
 
 	const dispatchSideEffect = useCallback(
 		<K extends keyof ChatStreamSideEffects>(
@@ -220,7 +240,41 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 		onAbort: (convoId) => {
 			dispatchSideEffect("onAbort", (h) => h(convoId));
 		},
+		onPermissionRequest: (convoId, sessionId, request) => {
+			setPendingPermissions((prev) => ({
+				...prev,
+				[convoId]: { sessionId, request },
+			}));
+		},
+		onPermissionResolved: (convoId, requestId) => {
+			setPendingPermissions((prev) => {
+				if (prev[convoId]?.request.request_id !== requestId) return prev;
+				const next = { ...prev };
+				delete next[convoId];
+				return next;
+			});
+		},
 	});
+
+	const answerPermission = useCallback(
+		async (conversationId: string, optionId: string | null) => {
+			const pending = pendingPermissions[conversationId];
+			if (!pending) return;
+			setPendingPermissions((prev) => {
+				const next = { ...prev };
+				delete next[conversationId];
+				return next;
+			});
+			const token = await getToken({ template: "convex" });
+			await answerAgentPermission(
+				token,
+				pending.sessionId,
+				pending.request.request_id,
+				optionId,
+			);
+		},
+		[pendingPermissions, getToken],
+	);
 
 	const clearStreamState = useCallback((convoId: string) => {
 		setStreamStates((prev) => {
@@ -252,6 +306,8 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 			cancel: chatStream.cancel,
 			clearStreamState,
 			setStreamState,
+			pendingPermissions,
+			answerPermission,
 		}),
 		[
 			streamStates,
@@ -260,6 +316,8 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 			chatStream.cancel,
 			clearStreamState,
 			setStreamState,
+			pendingPermissions,
+			answerPermission,
 		],
 	);
 

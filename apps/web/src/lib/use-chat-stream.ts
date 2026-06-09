@@ -1,6 +1,12 @@
 import { useAuth, useUser } from "@clerk/tanstack-react-start";
 import { useCallback, useRef, useState } from "react";
 import { env } from "../env";
+import {
+	type AgentMode,
+	type AgentPermissionRequest,
+	ensureAgentSession,
+	forgetAgentSession,
+} from "./agent-mode";
 import { checkChatRateLimit } from "./chat-ratelimit";
 
 const FASTAPI_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
@@ -70,6 +76,14 @@ interface UseChatStreamCallbacks {
 	onError: (conversationId: string, error: string) => void;
 	onBudgetExceeded?: (conversationId: string, info: BudgetExceededInfo) => void;
 	onAbort?: (conversationId: string) => void;
+	/** ACP agent mode: the agent is waiting for a tool-use approval. */
+	onPermissionRequest?: (
+		conversationId: string,
+		sessionId: string,
+		request: AgentPermissionRequest,
+	) => void;
+	/** ACP agent mode: a pending permission request was resolved. */
+	onPermissionResolved?: (conversationId: string, requestId: string) => void;
 }
 
 export type MessageContent = string | Array<Record<string, unknown>>;
@@ -99,6 +113,154 @@ export interface ChatStreamRequest {
 	};
 	conversation_id: string;
 	forced_tool?: string;
+	/**
+	 * External ACP agent ("codex", "claude-code"). Omitted or "default" uses
+	 * the Harness-provided OpenRouter loop. In agent mode, usage is billed to
+	 * the user's own agent account — no OpenRouter usage tracking applies.
+	 */
+	agent?: AgentMode;
+}
+
+function extractText(content: MessageContent): string {
+	if (typeof content === "string") return content;
+	return content
+		.filter((part) => part.type === "text" && typeof part.text === "string")
+		.map((part) => part.text as string)
+		.join("\n");
+}
+
+/** Minimal SSE reader shared by the agent-mode stream. */
+async function consumeSse(
+	response: Response,
+	onEvent: (event: string, data: Record<string, unknown>) => void,
+): Promise<void> {
+	if (!response.body) throw new Error("Response body is null");
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let currentEvent = "message";
+
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		buffer += decoder.decode(value, { stream: true });
+		const lines = buffer.split("\n");
+		buffer = lines.pop() ?? "";
+		for (const line of lines) {
+			if (line.startsWith("event: ")) {
+				currentEvent = line.slice(7).trim();
+				continue;
+			}
+			if (line.startsWith("data: ")) {
+				try {
+					onEvent(currentEvent, JSON.parse(line.slice(6)));
+				} catch {
+					// Skip malformed JSON lines
+				}
+				currentEvent = "message";
+			}
+		}
+	}
+}
+
+/** One prompt turn against the ACP agent gateway (/api/agents). */
+async function runAgentStream(
+	body: ChatStreamRequest,
+	token: string | null,
+	controller: AbortController,
+	cbRef: { current: UseChatStreamCallbacks },
+): Promise<void> {
+	const cb = new Proxy({} as UseChatStreamCallbacks, {
+		get: (_target, prop) => cbRef.current[prop as keyof UseChatStreamCallbacks],
+	});
+	const convoId = body.conversation_id;
+	const agent = body.agent as AgentMode;
+	const messages = body.messages;
+	const last = messages[messages.length - 1];
+	const message = last ? extractText(last.content) : "";
+	const history = messages.slice(0, -1).map((m) => ({
+		role: m.role,
+		content: extractText(m.content),
+	}));
+
+	const prompt = async (sessionId: string) =>
+		fetch(`${FASTAPI_URL}/api/agents/sessions/${sessionId}/prompt`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...(token ? { Authorization: `Bearer ${token}` } : {}),
+			},
+			body: JSON.stringify({ message, history }),
+			signal: controller.signal,
+		});
+
+	let sessionId = await ensureAgentSession(
+		token,
+		agent,
+		body.harness as never,
+		convoId,
+	);
+	let response = await prompt(sessionId);
+	if (response.status === 404) {
+		// Session was reaped or the gateway restarted — recreate once.
+		forgetAgentSession(convoId, agent);
+		sessionId = await ensureAgentSession(
+			token,
+			agent,
+			body.harness as never,
+			convoId,
+		);
+		response = await prompt(sessionId);
+	}
+	if (!response.ok) {
+		throw new Error((await response.text()) || `HTTP ${response.status}`);
+	}
+
+	await consumeSse(response, (event, data) => {
+		switch (event) {
+			case "token":
+				cb.onToken(convoId, data.content as string);
+				break;
+			case "thinking":
+				cb.onThinking(convoId, data.content as string);
+				break;
+			case "tool_call":
+				cb.onToolCall(convoId, {
+					tool: data.tool as string,
+					arguments: (data.arguments ?? {}) as Record<string, unknown>,
+					call_id: data.call_id as string,
+				});
+				break;
+			case "tool_result":
+				cb.onToolResult(convoId, {
+					call_id: data.call_id as string,
+					result: (data.result ?? "") as string,
+				});
+				break;
+			case "permission_request":
+				cb.onPermissionRequest?.(
+					convoId,
+					sessionId,
+					data as unknown as AgentPermissionRequest,
+				);
+				break;
+			case "permission_resolved":
+				cb.onPermissionResolved?.(convoId, data.request_id as string);
+				break;
+			case "done":
+				cb.onDone(
+					convoId,
+					data.content as string,
+					undefined, // usage is user-side in agent mode
+					data.model as string,
+				);
+				break;
+			case "error":
+				cb.onError(convoId, data.message as string);
+				break;
+			// "status", "plan", "commands_update", "mode_update": not yet rendered
+		}
+	});
 }
 
 export function useChatStream(callbacks: UseChatStreamCallbacks) {
@@ -143,6 +305,13 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 				}
 
 				const token = await getToken({ template: "convex" });
+
+				// External ACP agent path (Codex CLI, Claude Code, ...).
+				if (body.agent && body.agent !== "default") {
+					await runAgentStream(body, token, controller, cbRef);
+					return;
+				}
+
 				const response = await fetch(`${FASTAPI_URL}/api/chat/stream`, {
 					method: "POST",
 					headers: {
