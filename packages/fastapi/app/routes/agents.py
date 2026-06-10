@@ -45,6 +45,16 @@ async def _user_context(http_client: httpx.AsyncClient, user: dict) -> UserConte
     return UserContext(user_id=user.get("sub"), princeton_netid=netid)
 
 
+def _diff_to_text(diff: dict) -> str:
+    """Render an ACP diff content block as plain unified-style text."""
+    lines = [f"--- {diff.get('path') or 'file'}"]
+    old_text = diff.get("oldText") or ""
+    new_text = diff.get("newText") or ""
+    lines += [f"-{line}" for line in old_text.splitlines()]
+    lines += [f"+{line}" for line in new_text.splitlines()]
+    return "\n".join(lines[:400])
+
+
 def _session_payload(session) -> dict:
     return {
         "session_id": session.id,
@@ -166,7 +176,11 @@ async def prompt(
         parts: list[dict] = []
         try:
             async for event in manager.prompt(
-                session_id, user["sub"], body.message, user_ctx,
+                session_id,
+                user["sub"],
+                body.message,
+                user_ctx,
+                history=[m.model_dump() for m in body.history or []],
             ):
                 if event["event"] == "done":
                     content = event["data"]["content"]
@@ -188,15 +202,21 @@ async def prompt(
                             "arguments": event["data"]["arguments"],
                             "call_id": event["data"]["call_id"],
                             "result": "",
+                            "kind": event["data"].get("kind") or "other",
                         }
                     )
                 elif event["event"] == "tool_result":
+                    result_text = event["data"].get("result") or ""
+                    diff = event["data"].get("diff")
+                    if diff and not result_text:
+                        # Persist file edits readably even without text content.
+                        result_text = _diff_to_text(diff)
                     for part in reversed(parts):
                         if (
                             part["type"] == "tool_call"
                             and part["call_id"] == event["data"]["call_id"]
                         ):
-                            part["result"] = event["data"].get("result") or ""
+                            part["result"] = result_text
                             break
                 yield {"event": event["event"], "data": json.dumps(event["data"])}
         finally:

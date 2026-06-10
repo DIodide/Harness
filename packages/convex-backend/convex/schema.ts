@@ -147,6 +147,9 @@ export default defineSchema({
 					arguments: v.optional(v.any()),
 					call_id: v.optional(v.string()),
 					result: v.optional(v.string()),
+					// ACP tool kind (execute|read|edit|...) for agent built-ins;
+					// absent for MCP/default-agent tool calls.
+					kind: v.optional(v.string()),
 				}),
 			),
 		),

@@ -17,6 +17,15 @@ export interface ToolCallEvent {
 	arguments: Record<string, unknown>;
 	call_id: string;
 	result?: string;
+	/** ACP tool kind (execute|read|edit|...) for agent built-ins. */
+	kind?: string;
+	locations?: Array<{ path?: string }>;
+}
+
+export interface ToolDiff {
+	path?: string | null;
+	oldText?: string | null;
+	newText?: string | null;
 }
 
 export interface UsageData {
@@ -33,6 +42,9 @@ export interface StreamPart {
 	arguments?: Record<string, unknown>;
 	call_id?: string;
 	result?: string;
+	kind?: string;
+	locations?: Array<{ path?: string }>;
+	diff?: ToolDiff | null;
 }
 
 export interface ConvoStreamState {
@@ -62,7 +74,7 @@ interface UseChatStreamCallbacks {
 	onToolCall: (conversationId: string, event: ToolCallEvent) => void;
 	onToolResult: (
 		conversationId: string,
-		event: { call_id: string; result: string },
+		event: { call_id: string; result: string; diff?: ToolDiff | null },
 	) => void;
 	onDone: (
 		conversationId: string,
@@ -241,12 +253,15 @@ async function runAgentStream(
 					tool: data.tool as string,
 					arguments: (data.arguments ?? {}) as Record<string, unknown>,
 					call_id: data.call_id as string,
+					kind: (data.kind ?? "other") as string,
+					locations: (data.locations ?? []) as Array<{ path?: string }>,
 				});
 				break;
 			case "tool_result":
 				cb.onToolResult(convoId, {
 					call_id: data.call_id as string,
 					result: (data.result ?? "") as string,
+					diff: (data.diff ?? null) as ToolDiff | null,
 				});
 				break;
 			case "permission_request":

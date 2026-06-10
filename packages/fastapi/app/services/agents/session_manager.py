@@ -125,8 +125,11 @@ def normalize_session_update(update: dict) -> dict | None:
                 "call_id": update.get("toolCallId", ""),
                 "tool": update.get("title") or update.get("kind") or "tool",
                 "arguments": update.get("rawInput") or {},
-                "kind": update.get("kind"),
+                # ACP tool kind (execute|read|edit|delete|move|search|fetch|
+                # think|switch_mode|other) — drives first-class rendering.
+                "kind": update.get("kind") or "other",
                 "status": update.get("status"),
+                "locations": update.get("locations") or [],
             },
         }
     if kind == "tool_call_update":
@@ -136,12 +139,26 @@ def normalize_session_update(update: dict) -> dict | None:
             for c in content
             if isinstance(c, dict) and c.get("type") == "content"
         )
+        # Structured diff content (file edits) gets first-class rendering.
+        diff = next(
+            (
+                {
+                    "path": c.get("path"),
+                    "oldText": c.get("oldText"),
+                    "newText": c.get("newText"),
+                }
+                for c in content
+                if isinstance(c, dict) and c.get("type") == "diff"
+            ),
+            None,
+        )
         return {
             "event": "tool_result",
             "data": {
                 "call_id": update.get("toolCallId", ""),
                 "status": update.get("status"),
                 "result": result_text or json.dumps(update.get("rawOutput") or {})[:4000],
+                **({"diff": diff} if diff else {}),
             },
         }
     if kind == "plan":

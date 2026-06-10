@@ -52,6 +52,7 @@ import toast from "react-hot-toast";
 import { AgentConnections } from "../../components/agent-connections";
 import { AgentPermissionCard } from "../../components/agent-permission-card";
 import { AgentPlanCard } from "../../components/agent-plan-card";
+import { AgentToolCallBlock } from "../../components/agent-tool-call";
 import { AttachmentChip } from "../../components/attachment-chip";
 import { useChatPaletteCommands } from "../../components/command-palette/commands/chat-commands";
 import { HarnessMark } from "../../components/harness-mark";
@@ -2279,6 +2280,7 @@ function ChatMessages({
 			arguments?: unknown;
 			call_id?: string;
 			result?: string;
+			kind?: string;
 		}>;
 		usage?: {
 			promptTokens: number;
@@ -2676,6 +2678,23 @@ function ChatMessages({
 														);
 													}
 													if (part.type === "tool_call" && part.tool) {
+														if (part.kind) {
+															return (
+																<AgentToolCallBlock
+																	key={key}
+																	kind={part.kind}
+																	title={part.tool}
+																	arguments={
+																		(part.arguments ?? {}) as Record<
+																			string,
+																			unknown
+																		>
+																	}
+																	result={part.result}
+																	isStreaming={false}
+																/>
+															);
+														}
 														return (
 															<ToolCallBlock
 																key={key}
@@ -2928,6 +2947,20 @@ function ChatMessages({
 												);
 											}
 											if (part.type === "tool_call" && part.tool) {
+												if (part.kind) {
+													return (
+														<AgentToolCallBlock
+															key={part.call_id ?? `sp-tc-${idx}`}
+															kind={part.kind}
+															title={part.tool}
+															arguments={part.arguments ?? {}}
+															result={part.result}
+															diff={part.diff}
+															locations={part.locations}
+															isStreaming={!part.result}
+														/>
+													);
+												}
 												return (
 													<ToolCallBlock
 														key={part.call_id ?? `sp-tc-${idx}`}

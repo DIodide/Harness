@@ -180,8 +180,11 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 								tool: event.tool,
 								arguments: event.arguments,
 								call_id: event.call_id,
+								kind: event.kind,
+								locations: event.locations,
 							},
 						],
+						agentStatus: null,
 					},
 				};
 			});
@@ -200,7 +203,7 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 						),
 						parts: state.parts.map((p) =>
 							p.type === "tool_call" && p.call_id === event.call_id
-								? { ...p, result: event.result }
+								? { ...p, result: event.result, diff: event.diff ?? p.diff }
 								: p,
 						),
 					},
