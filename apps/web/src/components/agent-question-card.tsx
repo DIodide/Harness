@@ -75,7 +75,11 @@ export function AgentQuestionCard({
 	const [answers, setAnswers] = useState<Record<string, AnswerValue>>({});
 	const [stepIndex, setStepIndex] = useState(0);
 	const [showOther, setShowOther] = useState(false);
-	const [otherText, setOtherText] = useState("");
+	// Custom ("Other") text per step. The adapter exposes a single global
+	// free-text field, so on submit these are joined with question
+	// attribution ("Format: weekends only") — without it the model reads
+	// the free text as the overall answer and ignores structured picks.
+	const [others, setOthers] = useState<Record<string, string>>({});
 
 	// Choice questions become wizard steps; free-text fields (Claude's
 	// trailing "customAnswer") stay form-global behind the "Other…" toggle.
@@ -112,9 +116,21 @@ export function AgentQuestionCard({
 			if (Array.isArray(value) && value.length === 0) continue;
 			content[key] = value;
 		}
-		// Free text goes to the first text field (Claude has exactly one).
+		// Free text goes to the first text field (Claude has exactly one),
+		// each line attributed to its question.
 		const textKey = textFields[0]?.key;
-		if (textKey && otherText.trim()) content[textKey] = otherText.trim();
+		if (textKey) {
+			const lines: string[] = [];
+			for (const s of steps) {
+				const text = (others[s.field.key] ?? "").trim();
+				if (!text) continue;
+				const label = s.field.title ?? s.field.description;
+				lines.push(steps.length > 1 && label ? `${label}: ${text}` : text);
+			}
+			const pure = (others[textKey] ?? "").trim();
+			if (pure) lines.push(pure);
+			if (lines.length > 0) content[textKey] = lines.join("\n");
+		}
 		return content;
 	};
 
@@ -148,6 +164,18 @@ export function AgentQuestionCard({
 	);
 
 	const multiSelections = (answers[step?.field.key ?? ""] as string[]) ?? [];
+	const otherKey = step ? step.field.key : (textFields[0]?.key ?? "__text");
+	const otherText = others[otherKey] ?? "";
+	const setOtherText = (value: string) =>
+		setOthers((prev) => ({ ...prev, [otherKey]: value }));
+	const advanceOrSubmit = () => {
+		if (isLastStep || !step) {
+			submit(answers);
+		} else {
+			setStepIndex((i) => i + 1);
+			setShowOther(false);
+		}
+	};
 
 	return (
 		<div className="mb-2 min-w-0 rounded-lg border border-border bg-muted/30 p-3">
@@ -212,7 +240,7 @@ export function AgentQuestionCard({
 						value={otherText}
 						onChange={(e) => setOtherText(e.target.value)}
 						onKeyDown={(e) => {
-							if (e.key === "Enter" && otherText.trim()) submit(answers);
+							if (e.key === "Enter" && otherText.trim()) advanceOrSubmit();
 						}}
 						placeholder="Type your own answer…"
 						className="h-8 text-xs"
@@ -269,10 +297,10 @@ export function AgentQuestionCard({
 					<Button
 						size="sm"
 						className="h-7 text-xs"
-						disabled={!otherText.trim()}
-						onClick={() => submit(answers)}
+						disabled={!otherText.trim() && multiSelections.length === 0}
+						onClick={advanceOrSubmit}
 					>
-						Submit
+						{isLastStep ? "Submit" : "Next"}
 					</Button>
 				)}
 				<div className="flex-1" />

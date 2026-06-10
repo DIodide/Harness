@@ -352,6 +352,26 @@ async def prompt(
                             ),
                         }
                     )
+                elif event["event"] == "question_answered":
+                    # Persist the Q→A exchange so the conversation keeps a
+                    # first-class record of what the user was asked and chose.
+                    qa = event["data"].get("qa") or []
+                    action = event["data"].get("action")
+                    result_text = (
+                        "\n".join(f"{e['q']} → {e['a']}" for e in qa)
+                        if qa
+                        else ("Skipped" if action != "cancel" else "Dismissed")
+                    )
+                    parts.append(
+                        {
+                            "type": "tool_call",
+                            "tool": event["data"].get("message") or "Question",
+                            "arguments": {"qa": qa, "action": action},
+                            "call_id": event["data"]["call_id"],
+                            "result": result_text,
+                            "kind": "ask_user",
+                        }
+                    )
                 elif event["event"] == "tool_result":
                     result_text = event["data"].get("result") or ""
                     diff = event["data"].get("diff")

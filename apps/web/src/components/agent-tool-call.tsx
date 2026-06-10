@@ -5,6 +5,7 @@ import {
 	FileDiff,
 	FileText,
 	Globe,
+	MessageCircleQuestion,
 	Search,
 	SquareTerminal,
 	Trash2,
@@ -86,9 +87,26 @@ export function kindIcon(kind: string, className: string) {
 			return <Brain size={10} className={className} />;
 		case "switch_mode":
 			return <ClipboardCheck size={10} className={className} />;
+		case "ask_user":
+			return <MessageCircleQuestion size={10} className={className} />;
 		default:
 			return <Wrench size={10} className={className} />;
 	}
+}
+
+/** Q→A rows for an answered agent question (kind "ask_user"). */
+function QaView({ qa }: { qa: Array<{ q: string; a: string }> }) {
+	return (
+		<div className="space-y-1 rounded-md border border-border bg-background px-3 py-2">
+			{qa.map((entry) => (
+				<div key={`${entry.q}-${entry.a}`} className="text-xs">
+					<span className="text-muted-foreground">{entry.q}</span>
+					<span className="mx-1.5 text-muted-foreground/60">→</span>
+					<span className="font-medium text-foreground">{entry.a}</span>
+				</div>
+			))}
+		</div>
+	);
 }
 
 function summaryText(
@@ -190,14 +208,20 @@ export function AgentToolCallBlock({
 	locations?: Array<{ path?: string }>;
 	isStreaming: boolean;
 }) {
-	// Diffs are the payload of an edit — show them without an extra click.
-	const [open, setOpen] = useState(kind === "edit" && Boolean(diff));
+	// Diffs and answered questions are their own payload — show them
+	// without an extra click.
+	const [open, setOpen] = useState(
+		(kind === "edit" && Boolean(diff)) || kind === "ask_user",
+	);
 	const [showRaw, setShowRaw] = useState(false);
 	const summary = summaryText(kind, title, args, locations);
 	const output = result ? stripFences(result) : "";
 	// ExitPlanMode-style calls carry the plan document as input — render it
 	// as markdown, not a JSON/mono blob.
 	const plan = typeof args.plan === "string" ? args.plan : null;
+	const qa = Array.isArray(args.qa)
+		? (args.qa as Array<{ q: string; a: string }>)
+		: null;
 
 	return (
 		<div className="mb-1.5">
@@ -232,7 +256,9 @@ export function AgentToolCallBlock({
 						className="overflow-hidden"
 					>
 						<div className="mt-1.5 ml-4 min-w-0 space-y-2">
-							{plan !== null ? (
+							{kind === "ask_user" && qa && qa.length > 0 ? (
+								<QaView qa={qa} />
+							) : plan !== null ? (
 								<div className="max-h-80 min-w-0 overflow-y-auto rounded-md border border-border bg-background px-3 py-2 text-sm">
 									<MarkdownMessage content={plan} />
 								</div>

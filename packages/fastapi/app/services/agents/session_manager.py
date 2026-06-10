@@ -75,6 +75,8 @@ class AgentSession:
     early_notifications: list[dict] = field(default_factory=list)
     # Pending AskUserQuestion / MCP elicitations (elicitation/create).
     pending_questions: dict[str, asyncio.Future] = field(default_factory=dict)
+    # message + parsed fields per pending question (for Q→A rendering).
+    question_meta: dict[str, dict] = field(default_factory=dict)
     # Harness-side transcript for context replay across harness switches.
     transcript: list[dict] = field(default_factory=list)
     pending_replay: bool = False
@@ -735,15 +737,18 @@ class AgentSessionManager:
         if params.get("mode") != "form":
             raise AcpError(-32602, "Only form elicitations are supported")
         request_id = uuid.uuid4().hex
+        message = params.get("message") or ""
         fields = parse_elicitation_fields(params.get("requestedSchema") or {})
         future: asyncio.Future = asyncio.get_running_loop().create_future()
         session.pending_questions[request_id] = future
+        # Kept so the answer can be rendered as a first-class Q→A exchange.
+        session.question_meta[request_id] = {"message": message, "fields": fields}
         await session.event_queue.put(
             {
                 "event": "question_request",
                 "data": {
                     "request_id": request_id,
-                    "message": params.get("message") or "",
+                    "message": message,
                     "tool_call_id": params.get("toolCallId"),
                     "fields": fields,
                 },
@@ -754,17 +759,13 @@ class AgentSessionManager:
                 future, timeout=self.QUESTION_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
-            await session.event_queue.put(
-                {
-                    "event": "question_resolved",
-                    "data": {"request_id": request_id, "action": "decline"},
-                }
-            )
+            await self._emit_question_outcome(session, request_id, "decline", {})
             # Decline = "user skipped" (the turn continues); cancel would
             # abort the whole tool call.
             return {"action": "decline"}
         finally:
             session.pending_questions.pop(request_id, None)
+            session.question_meta.pop(request_id, None)
 
     async def answer_question(
         self, session_id: str, user_id: str, request_id: str,
@@ -775,19 +776,60 @@ class AgentSessionManager:
         if future is None or future.done():
             raise KeyError(request_id)
         result: dict = {"action": action}
+        clean: dict = {}
         if action == "accept":
-            clean: dict = {}
             for key, value in (content or {}).items():
                 if isinstance(value, str | int | float | bool):
                     clean[key] = value
                 elif isinstance(value, list):
                     clean[key] = [str(v) for v in value]
             result["content"] = clean
+        await self._emit_question_outcome(session, request_id, action, clean)
         future.set_result(result)
+
+    async def _emit_question_outcome(
+        self, session: AgentSession, request_id: str, action: str, content: dict,
+    ) -> None:
+        """question_resolved (clears the card) + question_answered (a Q→A
+        exchange the UI renders and persists into the transcript)."""
         await session.event_queue.put(
             {
                 "event": "question_resolved",
                 "data": {"request_id": request_id, "action": action},
+            }
+        )
+        meta = session.question_meta.get(request_id) or {}
+        qa: list[dict] = []
+        for field_def in meta.get("fields") or []:
+            value = content.get(field_def["key"])
+            if value is None or value == "" or value == []:
+                continue
+            label_map = {
+                o["value"]: o["label"] for o in (field_def.get("options") or [])
+            }
+            if isinstance(value, list):
+                answer = ", ".join(label_map.get(v, str(v)) for v in value)
+            elif isinstance(value, bool):
+                answer = "Yes" if value else "No"
+            else:
+                answer = label_map.get(value, str(value))
+            qa.append(
+                {
+                    "q": field_def.get("title")
+                    or field_def.get("description")
+                    or field_def["key"],
+                    "a": answer,
+                }
+            )
+        await session.event_queue.put(
+            {
+                "event": "question_answered",
+                "data": {
+                    "call_id": f"question-{request_id}",
+                    "message": meta.get("message") or "Question",
+                    "action": action,
+                    "qa": qa,
+                },
             }
         )
 

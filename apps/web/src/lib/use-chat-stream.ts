@@ -365,6 +365,28 @@ async function runAgentStream(
 			case "question_resolved":
 				cb.onQuestionResolved?.(convoId, data.request_id as string);
 				break;
+			case "question_answered": {
+				// Surface the Q→A exchange as a transcript part (same shape the
+				// backend persists), via the existing tool-call plumbing.
+				const callId = data.call_id as string;
+				const qa = (data.qa ?? []) as Array<{ q: string; a: string }>;
+				cb.onToolCall(convoId, {
+					tool: (data.message ?? "Question") as string,
+					arguments: { qa, action: data.action },
+					call_id: callId,
+					kind: "ask_user",
+				});
+				cb.onToolResult(convoId, {
+					call_id: callId,
+					result: qa.length
+						? qa.map((e) => `${e.q} → ${e.a}`).join("\n")
+						: data.action !== "cancel"
+							? "Skipped"
+							: "Dismissed",
+					diff: null,
+				});
+				break;
+			}
 			case "status":
 				cb.onAgentStatus?.(convoId, data as { state?: string; agent?: string });
 				break;
