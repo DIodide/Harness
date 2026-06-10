@@ -147,9 +147,24 @@ def _to_agent_credentials(agent_id: str, kind: str, value: str) -> AgentCredenti
             )
         return AgentCredentials(env={"OPENAI_API_KEY": value.strip()})
     if agent_id == "claude-code":
+        files: dict[str, str] = {}
+        if settings.claude_available_models:
+            models = [
+                m.strip()
+                for m in settings.claude_available_models.split(",")
+                if m.strip()
+            ]
+            # availableModels entries surface in ACP configOptions and pass
+            # to setModel verbatim — exposes models (e.g. Fable) the
+            # headless SDK doesn't list by default.
+            files[f"{SANDBOX_HOME}/.claude/settings.json"] = json.dumps(
+                {"availableModels": models}
+            )
         if kind == "oauth_token":
-            return AgentCredentials(env={"CLAUDE_CODE_OAUTH_TOKEN": value.strip()})
-        return AgentCredentials(env={"ANTHROPIC_API_KEY": value.strip()})
+            return AgentCredentials(
+                files=files, env={"CLAUDE_CODE_OAUTH_TOKEN": value.strip()}
+            )
+        return AgentCredentials(files=files, env={"ANTHROPIC_API_KEY": value.strip()})
     if agent_id == "cursor":
         return AgentCredentials(env={"CURSOR_API_KEY": value.strip()})
     raise AgentCredentialsError(f"Unknown agent '{agent_id}'")

@@ -11,6 +11,7 @@ import {
 	Mic,
 	Paperclip,
 	RotateCcw,
+	SlidersHorizontal,
 	Square,
 	X,
 } from "lucide-react";
@@ -58,6 +59,7 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuLabel,
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
@@ -196,6 +198,18 @@ export function ChatInput({
 	// session — populated once the session exists (after the first send).
 	const { options: agentConfigOptions, setOption: setAgentOption } =
 		useAgentSessionConfig(conversationId, agentMode);
+	const agentOptionsSummary = useMemo(() => {
+		const model = agentConfigOptions.find((o) => o.id === "model");
+		if (model) {
+			const current = flattenConfigChoices(model).find(
+				(c) => c.value === model.currentValue,
+			);
+			return current?.name ?? model.currentValue ?? "Options";
+		}
+		const first = agentConfigOptions[0];
+		if (!first) return "Options";
+		return first.currentValue ?? first.name;
+	}, [agentConfigOptions]);
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
@@ -671,276 +685,297 @@ export function ChatInput({
 					/>
 				</div>
 
-				<div className="flex items-center gap-2 border border-border bg-background px-3 py-2 focus-within:border-foreground/30">
-					{/* Attach button — hidden for models that don't support media */}
-					{supportsAnyAttachment && (
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<button
-									type="button"
-									onClick={() => fileInputRef.current?.click()}
-									className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-								>
-									<Paperclip size={15} />
-								</button>
-							</TooltipTrigger>
-							<TooltipContent>Attach files</TooltipContent>
-						</Tooltip>
-					)}
-
-					{supportsAudio && (
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<button
-									type="button"
-									onClick={isRecording ? stopRecording : startRecording}
-									className={cn(
-										"shrink-0 transition-colors",
-										isRecording
-											? "animate-pulse text-destructive"
-											: "text-muted-foreground hover:text-foreground",
-									)}
-								>
-									{isRecording ? <Square size={15} /> : <Mic size={15} />}
-								</button>
-							</TooltipTrigger>
-							<TooltipContent>
-								{isRecording ? "Stop recording" : "Record audio"}
-							</TooltipContent>
-						</Tooltip>
-					)}
-
-					<textarea
-						ref={textareaRef}
-						value={text}
-						onChange={(e) => {
-							setText(e.target.value);
-							if (historyIndex !== -1) {
-								setHistoryIndex(-1);
-								setDraft("");
-							}
-						}}
-						onKeyDown={handleKeyDown}
-						onPaste={handlePaste}
-						placeholder={placeholder}
-						disabled={disabled}
-						rows={1}
-						maxLength={CHAT_INPUT_MAX_LENGTH}
-						className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
-					/>
-					{activeHarness && (
-						<DropdownMenu>
+				<div className="border border-border bg-background transition-colors focus-within:border-foreground/30">
+					{/* Input row */}
+					<div className="px-3 pt-2.5">
+						<textarea
+							ref={textareaRef}
+							value={text}
+							onChange={(e) => {
+								setText(e.target.value);
+								if (historyIndex !== -1) {
+									setHistoryIndex(-1);
+									setDraft("");
+								}
+							}}
+							onKeyDown={handleKeyDown}
+							onPaste={handlePaste}
+							placeholder={placeholder}
+							disabled={disabled}
+							rows={1}
+							maxLength={CHAT_INPUT_MAX_LENGTH}
+							className="max-h-[200px] min-h-[24px] w-full resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+						/>
+					</div>
+					{/* Controls bar */}
+					<div className="flex items-center gap-0.5 px-2 pb-1.5">
+						{supportsAnyAttachment && (
 							<Tooltip>
 								<TooltipTrigger asChild>
-									<DropdownMenuTrigger asChild>
-										<button
-											type="button"
-											className={`flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs transition-colors hover:bg-foreground/10 hover:text-foreground ${agentMode !== "default" ? "text-foreground" : "text-muted-foreground"}`}
-										>
-											<Bot size={11} className="shrink-0" />
-											<span className="max-w-[80px] truncate">
-												{AGENT_MODES.find((a) => a.id === agentMode)?.label}
-											</span>
-											<ChevronDown size={10} />
-										</button>
-									</DropdownMenuTrigger>
+									<button
+										type="button"
+										onClick={() => fileInputRef.current?.click()}
+										className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+									>
+										<Paperclip size={14} />
+									</button>
+								</TooltipTrigger>
+								<TooltipContent>Attach files</TooltipContent>
+							</Tooltip>
+						)}
+						{supportsAudio && (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<button
+										type="button"
+										onClick={isRecording ? stopRecording : startRecording}
+										className={cn(
+											"shrink-0 rounded p-1 transition-colors",
+											isRecording
+												? "animate-pulse text-destructive"
+												: "text-muted-foreground hover:bg-foreground/10 hover:text-foreground",
+										)}
+									>
+										{isRecording ? <Square size={14} /> : <Mic size={14} />}
+									</button>
 								</TooltipTrigger>
 								<TooltipContent>
-									{agentMode === "default"
-										? "Agent engine for this conversation"
-										: "External agent — usage billed to your own account"}
+									{isRecording ? "Stop recording" : "Record audio"}
 								</TooltipContent>
 							</Tooltip>
-							<DropdownMenuContent align="end">
-								{AGENT_MODES.map((agentOption) => {
-									const unavailable =
-										agentOption.id !== "default" &&
-										agentAvailability.get(agentOption.id) === false;
-									return (
-										<DropdownMenuItem
-											key={agentOption.id}
-											disabled={unavailable}
-											onClick={() => setAgentMode(agentOption.id)}
-											className="flex items-center gap-2"
-										>
-											{agentOption.id === agentMode ? (
-												<Check size={12} className="shrink-0" />
-											) : (
-												<span className="w-3 shrink-0" />
-											)}
-											<div className="flex flex-col">
-												<span>{agentOption.label}</span>
-												<span className="text-[10px] text-muted-foreground">
-													{unavailable
-														? "Connect in Settings → Agent Connections"
-														: agentOption.description}
+						)}
+						<div className="flex-1" />
+						{activeHarness && (
+							<DropdownMenu>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<DropdownMenuTrigger asChild>
+											<button
+												type="button"
+												className={`flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors hover:bg-foreground/10 hover:text-foreground ${agentMode !== "default" ? "text-foreground" : "text-muted-foreground"}`}
+											>
+												<Bot size={12} className="shrink-0" />
+												<span className="max-w-[100px] truncate">
+													{AGENT_MODES.find((a) => a.id === agentMode)?.label}
 												</span>
-											</div>
-										</DropdownMenuItem>
-									);
-								})}
-							</DropdownMenuContent>
-						</DropdownMenu>
-					)}
-					{activeHarness &&
-						agentMode !== "default" &&
-						agentConfigOptions.map((option) => {
-							const choices = flattenConfigChoices(option);
-							if (choices.length === 0) return null;
-							const current = choices.find(
-								(c) => c.value === option.currentValue,
-							);
-							return (
-								<DropdownMenu key={option.id}>
+												<ChevronDown size={10} />
+											</button>
+										</DropdownMenuTrigger>
+									</TooltipTrigger>
+									<TooltipContent>
+										{agentMode === "default"
+											? "Agent engine for this conversation"
+											: "External agent — usage billed to your own account"}
+									</TooltipContent>
+								</Tooltip>
+								<DropdownMenuContent align="end">
+									{AGENT_MODES.map((agentOption) => {
+										const unavailable =
+											agentOption.id !== "default" &&
+											agentAvailability.get(agentOption.id) === false;
+										return (
+											<DropdownMenuItem
+												key={agentOption.id}
+												disabled={unavailable}
+												onClick={() => setAgentMode(agentOption.id)}
+												className="flex items-center gap-2"
+											>
+												{agentOption.id === agentMode ? (
+													<Check size={12} className="shrink-0" />
+												) : (
+													<span className="w-3 shrink-0" />
+												)}
+												<div className="flex flex-col">
+													<span>{agentOption.label}</span>
+													<span className="text-[10px] text-muted-foreground">
+														{unavailable
+															? "Connect in Settings → Agent Connections"
+															: agentOption.description}
+													</span>
+												</div>
+											</DropdownMenuItem>
+										);
+									})}
+								</DropdownMenuContent>
+							</DropdownMenu>
+						)}
+						{/* Agent session options (model, mode, effort, ...) in one
+						    compact menu — the trigger shows the active model. */}
+						{activeHarness &&
+							agentMode !== "default" &&
+							agentConfigOptions.length > 0 && (
+								<DropdownMenu>
 									<Tooltip>
 										<TooltipTrigger asChild>
 											<DropdownMenuTrigger asChild>
 												<button
 													type="button"
-													className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+													className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
 												>
+													<SlidersHorizontal size={11} className="shrink-0" />
 													<span className="max-w-[110px] truncate">
-														{current?.name ??
-															option.currentValue ??
-															option.name}
+														{agentOptionsSummary}
 													</span>
 													<ChevronDown size={10} />
 												</button>
 											</DropdownMenuTrigger>
 										</TooltipTrigger>
 										<TooltipContent>
-											{option.name} (applies to this agent session)
+											Agent session options (model, mode, effort)
 										</TooltipContent>
 									</Tooltip>
 									<DropdownMenuContent
 										align="end"
-										className="max-h-72 overflow-y-auto"
+										className="max-h-80 w-56 overflow-y-auto"
 									>
-										{choices.map((choice) => (
-											<DropdownMenuItem
-												key={choice.value}
-												onClick={() =>
-													setAgentOption.mutate(
-														{ configId: option.id, value: choice.value },
-														{
-															onError: (error) => toast.error(error.message),
-														},
-													)
-												}
-												className="flex items-center gap-2"
-											>
-												{choice.value === option.currentValue ? (
-													<Check size={12} className="shrink-0" />
-												) : (
-													<span className="w-3 shrink-0" />
-												)}
-												<div className="flex flex-col">
-													<span>{choice.name ?? choice.value}</span>
-													{choice.description && (
-														<span className="max-w-[220px] text-[10px] text-muted-foreground">
-															{choice.description}
-														</span>
-													)}
-												</div>
-											</DropdownMenuItem>
-										))}
+										{agentConfigOptions.map((option, optionIdx) => {
+											const choices = flattenConfigChoices(option);
+											if (choices.length === 0) return null;
+											return (
+												<React.Fragment key={option.id}>
+													{optionIdx > 0 && <DropdownMenuSeparator />}
+													<DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+														{option.name}
+													</DropdownMenuLabel>
+													{choices.map((choice) => (
+														<DropdownMenuItem
+															key={`${option.id}-${choice.value}`}
+															onClick={() =>
+																setAgentOption.mutate(
+																	{
+																		configId: option.id,
+																		value: choice.value,
+																	},
+																	{
+																		onError: (error) =>
+																			toast.error(error.message),
+																	},
+																)
+															}
+															className="flex items-center gap-2"
+														>
+															{choice.value === option.currentValue ? (
+																<Check size={12} className="shrink-0" />
+															) : (
+																<span className="w-3 shrink-0" />
+															)}
+															<div className="flex min-w-0 flex-col">
+																<span className="truncate">
+																	{choice.name ?? choice.value}
+																</span>
+																{choice.description && (
+																	<span className="max-w-[200px] truncate text-[10px] text-muted-foreground">
+																		{choice.description}
+																	</span>
+																)}
+															</div>
+														</DropdownMenuItem>
+													))}
+												</React.Fragment>
+											);
+										})}
 									</DropdownMenuContent>
 								</DropdownMenu>
-							);
-						})}
-					{activeHarness && agentMode === "default" && (
-						<DropdownMenu>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<DropdownMenuTrigger asChild>
-										<button
-											type="button"
-											className={`flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs transition-colors hover:bg-foreground/10 hover:text-foreground ${sessionModel ? "text-foreground" : "text-muted-foreground"}`}
-										>
-											{sessionModel && (
-												<span className="size-1.5 shrink-0 rounded-full bg-primary" />
-											)}
-											<span className="max-w-[90px] truncate">
-												{currentModelLabel}
-											</span>
-											<ChevronDown size={10} />
-										</button>
-									</DropdownMenuTrigger>
-								</TooltipTrigger>
-								<TooltipContent>
-									{modelSelectorMode === "harness"
-										? "Set harness model"
-										: sessionModel
-											? `Session override: ${currentModelLabel}`
-											: "Switch model for this session"}
-								</TooltipContent>
-							</Tooltip>
-							<DropdownMenuContent
-								align="end"
-								className="max-h-72 overflow-y-auto"
-							>
-								{modelSelectorMode === "session" && sessionModel && (
-									<>
+							)}
+						{activeHarness && agentMode === "default" && (
+							<DropdownMenu>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<DropdownMenuTrigger asChild>
+											<button
+												type="button"
+												className={`flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors hover:bg-foreground/10 hover:text-foreground ${sessionModel ? "text-foreground" : "text-muted-foreground"}`}
+											>
+												{sessionModel && (
+													<span className="size-1.5 shrink-0 rounded-full bg-primary" />
+												)}
+												<span className="max-w-[110px] truncate">
+													{currentModelLabel}
+												</span>
+												<ChevronDown size={10} />
+											</button>
+										</DropdownMenuTrigger>
+									</TooltipTrigger>
+									<TooltipContent>
+										{modelSelectorMode === "harness"
+											? "Set harness model"
+											: sessionModel
+												? `Session override: ${currentModelLabel}`
+												: "Switch model for this session"}
+									</TooltipContent>
+								</Tooltip>
+								<DropdownMenuContent
+									align="end"
+									className="max-h-72 overflow-y-auto"
+								>
+									{modelSelectorMode === "session" && sessionModel && (
+										<>
+											<DropdownMenuItem
+												onClick={() => onSessionModelChange(null)}
+												className="flex items-center gap-2"
+											>
+												<RotateCcw size={12} className="shrink-0" />
+												Use harness default
+											</DropdownMenuItem>
+											<DropdownMenuSeparator />
+										</>
+									)}
+									{MODELS.map((model) => (
 										<DropdownMenuItem
-											onClick={() => onSessionModelChange(null)}
+											key={model.value}
+											onClick={() => onSessionModelChange(model.value)}
 											className="flex items-center gap-2"
 										>
-											<RotateCcw size={12} className="shrink-0" />
-											Use harness default
+											{model.value === effectiveModel ? (
+												<Check size={12} className="shrink-0" />
+											) : (
+												<span className="w-3 shrink-0" />
+											)}
+											{model.label}
 										</DropdownMenuItem>
-										<DropdownMenuSeparator />
-									</>
-								)}
-								{MODELS.map((model) => (
-									<DropdownMenuItem
-										key={model.value}
-										onClick={() => onSessionModelChange(model.value)}
-										className="flex items-center gap-2"
-									>
-										{model.value === effectiveModel ? (
-											<Check size={12} className="shrink-0" />
-										) : (
-											<span className="w-3 shrink-0" />
-										)}
-										{model.label}
-									</DropdownMenuItem>
-								))}
-							</DropdownMenuContent>
-						</DropdownMenu>
-					)}
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								size="icon-xs"
-								onClick={() => {
-									if (showStopButton && conversationId) {
-										onInterrupt(conversationId);
-									} else {
-										handleSend();
+									))}
+								</DropdownMenuContent>
+							</DropdownMenu>
+						)}
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									size="icon-xs"
+									className="ml-1"
+									onClick={() => {
+										if (showStopButton && conversationId) {
+											onInterrupt(conversationId);
+										} else {
+											handleSend();
+										}
+									}}
+									disabled={
+										!showStopButton &&
+										(disabled ||
+											(budgetExceeded && agentMode === "default") ||
+											!text.trim() ||
+											hasUploading ||
+											sendMessage.isPending ||
+											createConvo.isPending)
 									}
-								}}
-								disabled={
-									!showStopButton &&
-									(disabled ||
-										(budgetExceeded && agentMode === "default") ||
-										!text.trim() ||
-										hasUploading ||
-										sendMessage.isPending ||
-										createConvo.isPending)
-								}
-								variant={showStopButton ? "destructive" : "default"}
-							>
-								{showStopButton ? <Square size={10} /> : <ArrowUp size={14} />}
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent>
-							{showStopButton
-								? "Stop generation"
-								: isStreaming
-									? "Queue message"
-									: "Send message"}
-						</TooltipContent>
-					</Tooltip>
+									variant={showStopButton ? "destructive" : "default"}
+								>
+									{showStopButton ? (
+										<Square size={10} />
+									) : (
+										<ArrowUp size={14} />
+									)}
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent>
+								{showStopButton
+									? "Stop generation"
+									: isStreaming
+										? "Queue message"
+										: "Send message"}
+							</TooltipContent>
+						</Tooltip>
+					</div>
 				</div>
 				<p className="mt-1.5 text-center text-[10px] text-muted-foreground">
 					{text.length >= CHAT_INPUT_COUNTER_THRESHOLD ? (
