@@ -50,6 +50,10 @@ class AgentDefinition:
     # Offset on settings.acp_shim_port so multiple agents can run shims in
     # the same (attached harness) sandbox without port clashes.
     port_offset: int = 0
+    # Models selectable for harnesses on this agent. Applied to live
+    # sessions via the ACP "model" config option (best-effort — sessions
+    # surface the authoritative list); the harness flow uses this statically.
+    models: tuple[str, ...] = ()
 
 
 AGENT_REGISTRY: dict[str, AgentDefinition] = {
@@ -59,6 +63,7 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
         command=["/usr/local/bin/codex-acp"],
         env={"CODEX_HOME": f"{SANDBOX_HOME}/.codex"},
         port_offset=0,
+        models=("gpt-5.5-codex", "gpt-5.5", "gpt-5.4-codex"),
     ),
     "claude-code": AgentDefinition(
         id="claude-code",
@@ -68,6 +73,9 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
         command=["claude-agent-acp"],
         env={},
         port_offset=1,
+        # Mirrors settings.claude_available_models (written to the
+        # sandbox's ~/.claude/settings.json availableModels).
+        models=("claude-fable-5", "opus", "sonnet", "haiku"),
     ),
     "cursor": AgentDefinition(
         id="cursor",
@@ -79,6 +87,7 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
         command=["/usr/local/bin/cursor-agent", "--force", "acp"],
         env={},
         port_offset=2,
+        models=("composer-2.5", "sonnet-4.6", "gpt-5.5"),
     ),
 }
 

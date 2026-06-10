@@ -103,35 +103,44 @@ async def store_user_credential(
     kind: str,
     value: str,
     label: str | None = None,
-) -> None:
+    credential_id: str | None = None,
+) -> str:
+    """Encrypt and store a credential. Returns the credential id.
+
+    With credential_id the existing row's secret is replaced in place
+    (rotating a token); otherwise a new credential is created — users may
+    hold several per agent (e.g. work + personal accounts), each harness
+    referencing one.
+    """
     ciphertext = encrypt_secret(value)
     try:
-        await run_convex_mutation(
-            http_client,
-            "agentCredentials:store",
-            {
-                "userId": user_id,
-                "agent": agent_id,
-                "kind": kind,
-                "ciphertext": ciphertext,
-                **({"label": label} if label else {}),
-            },
-        )
+        if credential_id:
+            result = await run_convex_mutation(
+                http_client,
+                "agentCredentials:updateSecret",
+                {
+                    "credentialId": credential_id,
+                    "userId": user_id,
+                    "kind": kind,
+                    "ciphertext": ciphertext,
+                    **({"label": label} if label else {}),
+                },
+            )
+        else:
+            result = await run_convex_mutation(
+                http_client,
+                "agentCredentials:create",
+                {
+                    "userId": user_id,
+                    "agent": agent_id,
+                    "kind": kind,
+                    "ciphertext": ciphertext,
+                    **({"label": label} if label else {}),
+                },
+            )
     except ConvexMutationError as e:
         raise AgentCredentialsError(f"Could not save the credential: {e}") from e
-
-
-async def delete_user_credential(
-    http_client: httpx.AsyncClient, user_id: str, agent_id: str,
-) -> None:
-    try:
-        await run_convex_mutation(
-            http_client,
-            "agentCredentials:remove",
-            {"userId": user_id, "agent": agent_id},
-        )
-    except ConvexMutationError as e:
-        raise AgentCredentialsError(f"Could not remove the credential: {e}") from e
+    return str(result)
 
 
 async def list_user_credentials(
@@ -182,19 +191,40 @@ def _to_agent_credentials(agent_id: str, kind: str, value: str) -> AgentCredenti
 
 
 async def resolve_agent_credentials(
-    http_client: httpx.AsyncClient, agent_id: str, user_id: str,
+    http_client: httpx.AsyncClient,
+    agent_id: str,
+    user_id: str,
+    credential_id: str | None = None,
 ) -> AgentCredentials:
-    """Resolve the user's stored credential. No server-level fallback —
-    the web app is the only place credentials come from."""
-    row = await query_convex(
-        http_client,
-        "agentCredentials:getForAgent",
-        {"userId": user_id, "agent": agent_id},
-    )
+    """Resolve a stored credential for an agent run.
+
+    With credential_id (the harness's linked credential), that exact row is
+    used — ownership and agent match are enforced. Without one, the user's
+    most recent credential for the agent is the fallback. No server-level
+    fallback — the web app is the only place credentials come from.
+    """
+    if credential_id:
+        row = await query_convex(
+            http_client,
+            "agentCredentials:getById",
+            {"credentialId": credential_id, "userId": user_id},
+        )
+        if row and row.get("agent") != agent_id:
+            raise AgentCredentialsError(
+                f"This harness's credential belongs to '{row.get('agent')}', "
+                f"not '{agent_id}' — pick a matching credential in the "
+                "harness settings."
+            )
+    else:
+        row = await query_convex(
+            http_client,
+            "agentCredentials:getForAgent",
+            {"userId": user_id, "agent": agent_id},
+        )
     if not row or not row.get("ciphertext"):
         raise AgentCredentialsError(
-            "No credentials connected for this agent — add them in "
-            "Settings → Agent Connections."
+            "No credential connected for this agent — add one in the "
+            "harness settings."
         )
     try:
         value = decrypt_secret(row["ciphertext"])
@@ -205,47 +235,57 @@ async def resolve_agent_credentials(
         )
         raise AgentCredentialsError(
             "Your stored credential could not be decrypted (the server key "
-            "may have rotated). Reconnect it in Settings → Agent Connections."
+            "may have rotated). Reconnect it in the harness settings."
         ) from e
     creds = _to_agent_credentials(agent_id, row.get("kind", ""), value)
     # lastUsedAt bookkeeping is best-effort.
     import contextlib
 
-    with contextlib.suppress(ConvexMutationError):
-        await run_convex_mutation(
-            http_client,
-            "agentCredentials:touch",
-            {"userId": user_id, "agent": agent_id},
-        )
+    touch_id = credential_id or row.get("credentialId")
+    if touch_id:
+        with contextlib.suppress(ConvexMutationError):
+            await run_convex_mutation(
+                http_client,
+                "agentCredentials:touch",
+                {"credentialId": touch_id},
+            )
     return creds
 
 
 async def credential_sources(
     http_client: httpx.AsyncClient, user_id: str,
 ) -> dict[str, dict]:
-    """Per-agent availability summary for the catalog endpoint."""
-    user_rows = {row["agent"]: row for row in await list_user_credentials(http_client, user_id)}
+    """Per-agent credential summary for the catalog endpoint.
+
+    Each agent lists ALL of the user's stored credentials (newest first) so
+    the harness flow can offer reuse; `available` means at least one exists.
+    """
+    rows = await list_user_credentials(http_client, user_id)
+    by_agent: dict[str, list[dict]] = {}
+    for row in sorted(rows, key=lambda r: r.get("createdAt") or 0, reverse=True):
+        by_agent.setdefault(row["agent"], []).append(
+            {
+                "credential_id": row.get("credentialId"),
+                "kind": row.get("kind"),
+                "label": row.get("label"),
+                "created_at": row.get("createdAt"),
+            }
+        )
     out: dict[str, dict] = {}
     from app.services.agents.registry import AGENT_REGISTRY
 
     for agent_id in AGENT_REGISTRY:
-        row = user_rows.get(agent_id)
-        if row:
-            out[agent_id] = {
-                "source": "user",
-                "kind": row.get("kind"),
-                "connected_at": row.get("createdAt"),
-                "available": True,
-                "unavailable_reason": None,
-            }
-        else:
-            out[agent_id] = {
-                "source": None,
-                "kind": None,
-                "connected_at": None,
-                "available": False,
-                "unavailable_reason": (
-                    "Not connected — add credentials in Settings → Agent Connections."
-                ),
-            }
+        creds = by_agent.get(agent_id, [])
+        newest = creds[0] if creds else None
+        out[agent_id] = {
+            "credentials": creds,
+            # Back-compat summary fields (newest credential)
+            "source": "user" if creds else None,
+            "kind": newest.get("kind") if newest else None,
+            "connected_at": newest.get("created_at") if newest else None,
+            "available": bool(creds),
+            "unavailable_reason": None if creds else (
+                "Not connected — add a credential in the harness settings."
+            ),
+        }
     return out

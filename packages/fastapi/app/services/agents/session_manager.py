@@ -292,6 +292,7 @@ class AgentSessionManager:
         agent = get_agent(agent_id)  # raises KeyError for unknown agents
         creds = await resolve_agent_credentials(
             self._http_client(), agent_id, user_id,
+            credential_id=harness.agent_credential_id,
         )
 
         session = AgentSession(
@@ -396,6 +397,7 @@ class AgentSessionManager:
         agent = get_agent(session.agent_id)
         creds = await resolve_agent_credentials(
             self._http_client(), session.agent_id, session.user_id,
+            credential_id=session.harness.agent_credential_id,
         )
         session.runtime = await asyncio.to_thread(
             provision_agent_sandbox,
@@ -474,6 +476,51 @@ class AgentSessionManager:
         )
         session.acp_session_id = result["sessionId"]
         session.config_options = result.get("configOptions") or []
+        await self._apply_harness_model(session)
+
+    async def _apply_harness_model(self, session: AgentSession) -> None:
+        """Best-effort: select the harness's configured model on a fresh ACP
+        session via the generic "model" config option. Harness model choice
+        and agent loop are linked — the agent's own option list stays
+        authoritative, so unknown values are skipped, not errors."""
+        model = (session.harness.model or "").strip()
+        if (
+            not model
+            or model == "acp"
+            or session.connection is None
+            or session.acp_session_id is None
+        ):
+            return
+        option = next(
+            (o for o in session.config_options if o.get("id") == "model"), None,
+        )
+        if not option or option.get("currentValue") == model:
+            return
+        values: list[str] = []
+        for entry in option.get("options") or []:
+            if isinstance(entry, dict) and isinstance(entry.get("options"), list):
+                values.extend(
+                    c.get("value") for c in entry["options"] if isinstance(c, dict)
+                )
+            elif isinstance(entry, dict):
+                values.append(entry.get("value"))
+        if model not in values:
+            logger.info(
+                "Harness model %r not offered by agent '%s' (choices: %d)",
+                model, session.agent_id, len(values),
+            )
+            return
+        try:
+            result = await session.connection.set_config_option(
+                session.acp_session_id, "model", model,
+            )
+            if result.get("configOptions") is not None:
+                session.config_options = result["configOptions"]
+            logger.info(
+                "Applied harness model %r to session '%s'", model, session.id,
+            )
+        except Exception as e:
+            logger.warning("Could not apply harness model %r: %s", model, e)
 
     def _make_relay_handler(self, session: AgentSession):
         async def handle(payload: dict) -> None:
@@ -612,12 +659,17 @@ class AgentSessionManager:
     async def prompt(
         self, session_id: str, user_id: str, message: str, user_ctx,
         history: list[dict] | None = None,
+        blocks: list[dict] | None = None,
     ):
         """Run one prompt turn; yields normalized SSE events.
 
         If the session has no transcript yet and `history` is provided
         (conversation predates the session), it seeds the transcript and is
         replayed as context — same mechanism as a harness switch.
+
+        `blocks` are extra ACP content blocks (images) attached to the user
+        message; dropped (with a log) when the agent doesn't advertise
+        promptCapabilities.image.
         """
         session = self.get(session_id, user_id)
         session.last_activity = time.monotonic()
@@ -682,8 +734,20 @@ class AgentSessionManager:
             session.extra_turns = []
             text_parts: list[str] = []
 
+            extra_blocks = blocks or []
+            if extra_blocks:
+                prompt_caps = session.agent_capabilities.get("promptCapabilities") or {}
+                if not prompt_caps.get("image", False):
+                    logger.info(
+                        "Agent '%s' does not accept images — dropping %d block(s)",
+                        session.agent_id, len(extra_blocks),
+                    )
+                    extra_blocks = []
+
             turn = asyncio.create_task(
-                session.connection.prompt(session.acp_session_id, outgoing)
+                session.connection.prompt(
+                    session.acp_session_id, outgoing, blocks=extra_blocks,
+                )
             )
             try:
                 while True:

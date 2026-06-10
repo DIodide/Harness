@@ -32,6 +32,10 @@ class HarnessConfig(BaseModel):
     name: str
     harness_id: str | None = None
     system_prompt: str | None = Field(default=None, max_length=4000)
+    # Agent loop: "default" (Harness via OpenRouter) or an ACP agent id.
+    agent: str | None = None
+    # The stored credential this harness's agent runs with.
+    agent_credential_id: str | None = None
     sandbox_enabled: bool = False
     sandbox_id: str | None = None
     sandbox_config: SandboxConfig | None = None
@@ -112,6 +116,9 @@ class AgentPromptRequest(BaseModel):
     # Prior conversation messages (text-only), used to seed the agent's
     # context when a session is created mid-conversation.
     history: list[MessagePayload] | None = None
+    # Extra ACP content blocks for this message — image attachments as
+    # {type: "image", data: <base64>, mimeType: "image/..."}.
+    blocks: list[dict] | None = None
 
 
 class AgentQueuePromptRequest(BaseModel):
@@ -134,9 +141,11 @@ class AgentSwitchHarnessRequest(BaseModel):
 
 
 class AgentCredentialStoreRequest(BaseModel):
-    agent: str  # "codex" | "claude-code"
+    agent: str  # "codex" | "claude-code" | "cursor"
     kind: Literal["auth_json", "api_key", "oauth_token"]
     value: str  # plaintext secret; encrypted server-side, never echoed back
     label: str | None = Field(default=None, max_length=80)
+    # Replace this existing credential's secret instead of creating a new one.
+    credential_id: str | None = None
 
 

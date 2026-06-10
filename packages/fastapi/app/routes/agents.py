@@ -27,7 +27,6 @@ from app.models import (
 from app.services.agents.credentials import (
     CredentialCryptoError,
     credential_sources,
-    delete_user_credential,
     store_user_credential,
     validate_secret,
 )
@@ -45,6 +44,47 @@ USER_MESSAGE_MAX_LENGTH = 16000  # mirror /api/chat/stream
 async def _user_context(http_client: httpx.AsyncClient, user: dict) -> UserContext:
     netid = await resolve_princeton_netid(http_client, user)
     return UserContext(user_id=user.get("sub"), princeton_netid=netid)
+
+
+# Combined base64 payload cap for image blocks (~15 MB of raw image data).
+MAX_IMAGE_BLOCK_BYTES = 20_000_000
+
+
+def _validated_image_blocks(blocks: list[dict] | None) -> list[dict]:
+    """Keep only well-formed ACP image blocks, within a total size budget."""
+    out: list[dict] = []
+    total = 0
+    for block in blocks or []:
+        if not isinstance(block, dict) or block.get("type") != "image":
+            continue
+        data = block.get("data")
+        mime = block.get("mimeType")
+        if not isinstance(data, str) or not isinstance(mime, str):
+            continue
+        if not mime.startswith("image/"):
+            continue
+        total += len(data)
+        if total > MAX_IMAGE_BLOCK_BYTES:
+            logger.warning("Dropping image blocks over the %dB cap", MAX_IMAGE_BLOCK_BYTES)
+            break
+        out.append({"type": "image", "data": data, "mimeType": mime})
+    return out
+
+
+# ACP stopReasons that should surface like an interrupted response. Plain
+# "end_turn" (and queue-related reasons) are normal completions.
+_STOP_REASON_NOTES = {
+    "cancelled": "Stopped by user",
+    "refusal": "The agent declined to continue",
+    "max_tokens": "Stopped at the agent's token limit",
+    "max_turn_requests": "Stopped at the agent's turn-request limit",
+}
+
+
+def _interruption_for_stop_reason(stop_reason: str | None) -> str | None:
+    if not stop_reason:
+        return None
+    return _STOP_REASON_NOTES.get(stop_reason)
 
 
 def _diff_to_text(diff: dict) -> str:
@@ -68,6 +108,8 @@ def _session_payload(session) -> dict:
         "prompt_queueing": session.supports_prompt_queueing,
         # ACP session config options (model, mode, ...) for selector UIs.
         "config_options": session.config_options,
+        # Agent-advertised slash commands for the composer's slash menu.
+        "available_commands": session.available_commands,
     }
 
 
@@ -84,7 +126,12 @@ async def list_agents(
     sources = await credential_sources(http_client, user.get("sub", ""))
     return {
         "agents": [
-            {"id": agent.id, "name": agent.name, **sources[agent.id]}
+            {
+                "id": agent.id,
+                "name": agent.name,
+                "models": list(agent.models),
+                **sources[agent.id],
+            }
             for agent in AGENT_REGISTRY.values()
         ]
     }
@@ -96,36 +143,39 @@ async def store_credential(
     user: dict = Depends(get_current_user),
     http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
-    """Store a per-user agent credential (write-only; value never echoed)."""
+    """Store a per-user agent credential (write-only; value never echoed).
+
+    Without credential_id a NEW credential is created (users may keep
+    several per agent — work/personal accounts); with one, that
+    credential's secret is replaced in place. Returns the credential id so
+    the harness flow can link it. Deletion goes through the Convex
+    `agentCredentials.remove` mutation directly (user-authenticated).
+    """
     if body.agent not in AGENT_REGISTRY:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{body.agent}'")
     error = validate_secret(body.agent, body.kind, body.value)
     if error:
         raise HTTPException(status_code=422, detail=error)
     try:
-        await store_user_credential(
-            http_client, user["sub"], body.agent, body.kind, body.value, body.label,
+        credential_id = await store_user_credential(
+            http_client,
+            user["sub"],
+            body.agent,
+            body.kind,
+            body.value,
+            body.label,
+            credential_id=body.credential_id,
         )
     except CredentialCryptoError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except AgentCredentialsError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    return {"ok": True, "agent": body.agent, "kind": body.kind}
-
-
-@router.delete("/credentials/{agent_id}")
-async def delete_credential(
-    agent_id: str,
-    user: dict = Depends(get_current_user),
-    http_client: httpx.AsyncClient = Depends(get_http_client),
-):
-    if agent_id not in AGENT_REGISTRY:
-        raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_id}'")
-    try:
-        await delete_user_credential(http_client, user["sub"], agent_id)
-    except AgentCredentialsError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    return {"ok": True}
+    return {
+        "ok": True,
+        "agent": body.agent,
+        "kind": body.kind,
+        "credential_id": credential_id,
+    }
 
 
 @router.post("/sessions")
@@ -183,6 +233,7 @@ async def prompt(
         # Distinct ACP messageIds (e.g. before/after a background task
         # completes) must become distinct parts, not one merged blob.
         last_text_mid = last_reasoning_mid = object()
+        stop_reason = None
         try:
             async for event in manager.prompt(
                 session_id,
@@ -190,11 +241,13 @@ async def prompt(
                 body.message,
                 user_ctx,
                 history=[m.model_dump() for m in body.history or []],
+                blocks=_validated_image_blocks(body.blocks),
             ):
                 if event["event"] in ("done", "error"):
                     terminal_event = event["event"]
                 if event["event"] == "done":
                     content = event["data"]["content"]
+                    stop_reason = event["data"].get("stop_reason")
                 elif event["event"] == "token":
                     mid = event["data"].get("message_id")
                     parent = event["data"].get("parent_id")
@@ -256,12 +309,15 @@ async def prompt(
                     session_id, session.conversation_id,
                 )
             if content or parts:
+                interruption = _interruption_for_stop_reason(stop_reason)
                 await save_assistant_message(
                     http_client,
                     session.conversation_id,
                     content,
                     parts=parts or None,
                     model=f"acp:{session.agent_id}",
+                    interrupted=interruption is not None,
+                    interruption_reason=interruption,
                 )
 
     return EventSourceResponse(event_stream())
