@@ -84,14 +84,16 @@ interface ChatStreamContextValue {
 		conversationId: string,
 		updater: (state: ConvoStreamState) => ConvoStreamState,
 	) => void;
-	/** ACP agent mode: pending tool-approval per conversation. */
-	pendingPermissions: Record<string, PendingAgentPermission>;
+	/** ACP agent mode: pending tool-approvals per conversation (FIFO —
+	 * agents can issue parallel tool calls, each awaiting its own answer;
+	 * a single slot would clobber all but the latest). */
+	pendingPermissions: Record<string, PendingAgentPermission[]>;
 	answerPermission: (
 		conversationId: string,
 		optionId: string | null,
 	) => Promise<void>;
-	/** ACP agent mode: pending agent question (AskUserQuestion) per convo. */
-	pendingQuestions: Record<string, PendingAgentQuestion>;
+	/** ACP agent mode: pending agent questions per conversation (FIFO). */
+	pendingQuestions: Record<string, PendingAgentQuestion[]>;
 	answerQuestion: (
 		conversationId: string,
 		action: AgentQuestionAction,
@@ -120,10 +122,10 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 	const { getToken } = useAuth();
 	const queryClient = useQueryClient();
 	const [pendingPermissions, setPendingPermissions] = useState<
-		Record<string, PendingAgentPermission>
+		Record<string, PendingAgentPermission[]>
 	>({});
 	const [pendingQuestions, setPendingQuestions] = useState<
-		Record<string, PendingAgentQuestion>
+		Record<string, PendingAgentQuestion[]>
 	>({});
 
 	const dispatchSideEffect = useCallback(
@@ -231,6 +233,13 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 			});
 		},
 		onToolResult: (convoId, event) => {
+			// Status-only progress updates (in_progress, no content) must not
+			// blank a result an earlier update already delivered — and a
+			// truthy result is what marks the call finished in the UI.
+			const overwrite =
+				Boolean(event.result) ||
+				event.status === "completed" ||
+				event.status === "failed";
 			setStreamStates((prev) => {
 				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
 				return {
@@ -238,13 +247,17 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 					[convoId]: {
 						...state,
 						toolCalls: state.toolCalls.map((tc) =>
-							tc.call_id === event.call_id
+							tc.call_id === event.call_id && overwrite
 								? { ...tc, result: event.result }
 								: tc,
 						),
 						parts: state.parts.map((p) =>
 							p.type === "tool_call" && p.call_id === event.call_id
-								? { ...p, result: event.result, diff: event.diff ?? p.diff }
+								? {
+										...p,
+										...(overwrite ? { result: event.result } : {}),
+										diff: event.diff ?? p.diff,
+									}
 								: p,
 						),
 					},
@@ -294,14 +307,26 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 		onPermissionRequest: (convoId, sessionId, request) => {
 			setPendingPermissions((prev) => ({
 				...prev,
-				[convoId]: { sessionId, request },
+				[convoId]: [
+					...(prev[convoId] ?? []).filter(
+						(p) => p.request.request_id !== request.request_id,
+					),
+					{ sessionId, request },
+				],
 			}));
 		},
 		onPermissionResolved: (convoId, requestId) => {
 			setPendingPermissions((prev) => {
-				if (prev[convoId]?.request.request_id !== requestId) return prev;
+				const queue = prev[convoId];
+				if (!queue?.some((p) => p.request.request_id === requestId)) {
+					return prev;
+				}
+				const remaining = queue.filter(
+					(p) => p.request.request_id !== requestId,
+				);
 				const next = { ...prev };
-				delete next[convoId];
+				if (remaining.length > 0) next[convoId] = remaining;
+				else delete next[convoId];
 				return next;
 			});
 		},
@@ -335,14 +360,26 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 		onQuestionRequest: (convoId, sessionId, request) => {
 			setPendingQuestions((prev) => ({
 				...prev,
-				[convoId]: { sessionId, request },
+				[convoId]: [
+					...(prev[convoId] ?? []).filter(
+						(q) => q.request.request_id !== request.request_id,
+					),
+					{ sessionId, request },
+				],
 			}));
 		},
 		onQuestionResolved: (convoId, requestId) => {
 			setPendingQuestions((prev) => {
-				if (prev[convoId]?.request.request_id !== requestId) return prev;
+				const queue = prev[convoId];
+				if (!queue?.some((q) => q.request.request_id === requestId)) {
+					return prev;
+				}
+				const remaining = queue.filter(
+					(q) => q.request.request_id !== requestId,
+				);
 				const next = { ...prev };
-				delete next[convoId];
+				if (remaining.length > 0) next[convoId] = remaining;
+				else delete next[convoId];
 				return next;
 			});
 		},
@@ -362,11 +399,15 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 			action: AgentQuestionAction,
 			content?: Record<string, string | string[] | boolean>,
 		) => {
-			const pending = pendingQuestions[conversationId];
+			const pending = pendingQuestions[conversationId]?.[0];
 			if (!pending) return;
 			setPendingQuestions((prev) => {
+				const remaining = (prev[conversationId] ?? []).filter(
+					(q) => q.request.request_id !== pending.request.request_id,
+				);
 				const next = { ...prev };
-				delete next[conversationId];
+				if (remaining.length > 0) next[conversationId] = remaining;
+				else delete next[conversationId];
 				return next;
 			});
 			try {
@@ -389,11 +430,15 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 
 	const answerPermission = useCallback(
 		async (conversationId: string, optionId: string | null) => {
-			const pending = pendingPermissions[conversationId];
+			const pending = pendingPermissions[conversationId]?.[0];
 			if (!pending) return;
 			setPendingPermissions((prev) => {
+				const remaining = (prev[conversationId] ?? []).filter(
+					(p) => p.request.request_id !== pending.request.request_id,
+				);
 				const next = { ...prev };
-				delete next[conversationId];
+				if (remaining.length > 0) next[conversationId] = remaining;
+				else delete next[conversationId];
 				return next;
 			});
 			try {

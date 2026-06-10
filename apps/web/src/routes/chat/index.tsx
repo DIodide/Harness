@@ -74,6 +74,10 @@ import {
 	useChatStreamContext,
 	useChatStreamSideEffects,
 } from "../../lib/chat-stream-context";
+import {
+	agentStreamFields,
+	buildHarnessStreamConfig,
+} from "../../lib/harness-stream";
 import type { McpAuthType } from "../../lib/mcp";
 import { fetchCommandsFromApi, sanitizeServerName } from "../../lib/mcp";
 import {
@@ -473,38 +477,16 @@ function ChatPage() {
 		[activeHarness, updateHarness],
 	);
 
+	// Shared builder: queued sends, regenerate, and edit-resend must carry
+	// the same agent/credential fields as the composer path — without them
+	// the request silently reroutes to the default OpenRouter loop.
 	const buildHarnessConfig = useCallback(() => {
 		if (!activeHarness) return null;
-
-		return {
-			model: sessionModel ?? activeHarness.model,
-			mcp_servers: activeHarness.mcpServers.map((s) => ({
-				name: s.name,
-				url: s.url,
-				auth_type: s.authType as "none" | "bearer" | "oauth" | "tiger_junction",
-				auth_token: s.authToken,
-			})),
-			skills: activeHarness.skills ?? [],
-			name: activeHarness.name,
-			harness_id: activeHarness._id,
-			system_prompt: activeHarness.systemPrompt ?? undefined,
-			sandbox_enabled: effectiveSandboxEnabled,
-			sandbox_id: effectiveSandboxDaytonaId ?? undefined,
-			sandbox_config: activeHarness.sandboxConfig
-				? {
-						persistent: activeHarness.sandboxConfig.persistent,
-						auto_start: activeHarness.sandboxConfig.autoStart,
-						default_language: activeHarness.sandboxConfig.defaultLanguage,
-						resource_tier: activeHarness.sandboxConfig.resourceTier,
-					}
-				: undefined,
-		};
-	}, [
-		activeHarness,
-		effectiveSandboxDaytonaId,
-		effectiveSandboxEnabled,
-		sessionModel,
-	]);
+		return buildHarnessStreamConfig(activeHarness, {
+			model: sessionModel,
+			sandboxId: effectiveSandboxDaytonaId,
+		});
+	}, [activeHarness, effectiveSandboxDaytonaId, sessionModel]);
 
 	// Collect all command IDs across the active harness's MCP servers
 	const allCommandIds = useMemo(
@@ -746,6 +728,7 @@ function ChatPage() {
 				messages: history,
 				harness: harnessConfig,
 				conversation_id: convoId,
+				...agentStreamFields(harnessConfig),
 			});
 		};
 
@@ -811,6 +794,7 @@ function ChatPage() {
 				messages: history,
 				harness: harnessConfig,
 				conversation_id: activeConvoId,
+				...agentStreamFields(harnessConfig),
 			});
 		},
 		[
@@ -889,6 +873,7 @@ function ChatPage() {
 					messages: history,
 					harness: harnessConfig,
 					conversation_id: newConvoId,
+					...agentStreamFields(harnessConfig),
 				});
 
 				setEditingMessageId(null);

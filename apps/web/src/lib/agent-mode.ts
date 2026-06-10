@@ -144,9 +144,22 @@ function cacheKey(conversationId: string, agent: AgentMode): string {
 }
 
 function harnessKey(harness: AgentHarnessConfig): string {
+	// Everything the live session SNAPSHOTS at open must be in this key —
+	// a same-key send skips the /harness switch, so a field missing here
+	// silently keeps the old value on the session. The backend snapshots
+	// each server's name/auth (static bearer tokens included; OAuth is
+	// re-resolved per relayed request and needs no key entry).
+	const servers = harness.mcp_servers as Array<{
+		name: string;
+		url: string;
+		auth_type?: string;
+		auth_token?: string;
+	}>;
 	return JSON.stringify([
 		harness.harness_id ?? null,
-		harness.mcp_servers.map((s) => s.url).sort(),
+		servers
+			.map((s) => [s.url, s.name, s.auth_type ?? "none", s.auth_token ?? ""])
+			.sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
 	]);
 }
 

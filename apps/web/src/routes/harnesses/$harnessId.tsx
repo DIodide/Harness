@@ -21,7 +21,6 @@ import {
 	ArrowLeft,
 	Box,
 	Check,
-	Cpu,
 	Eye,
 	EyeOff,
 	Pencil,
@@ -35,6 +34,7 @@ import {
 import { motion } from "motion/react";
 import { type KeyboardEvent, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
+import { AgentLoopPicker } from "../../components/agent-loop-picker";
 import { OAuthConnectRow } from "../../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../../components/princeton-connect-row";
@@ -65,6 +65,7 @@ import { Separator } from "../../components/ui/separator";
 import { Skeleton } from "../../components/ui/skeleton";
 import { Textarea } from "../../components/ui/textarea";
 import { env } from "../../env";
+import type { AgentMode } from "../../lib/agent-mode";
 import type { McpServerEntry } from "../../lib/mcp";
 import {
 	fetchCommandsFromApi,
@@ -73,7 +74,6 @@ import {
 	toMcpServerPayload,
 	validateMcpUrl,
 } from "../../lib/mcp";
-import { MODELS } from "../../lib/models";
 import type { SkillEntry } from "../../lib/skills";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "../../lib/system-prompt";
 
@@ -252,6 +252,12 @@ function HarnessEditPage() {
 
 	const [name, setName] = useState<string | null>(null);
 	const [model, setModel] = useState<string | null>(null);
+	// Agent loop: null = untouched; credential undefined = untouched,
+	// null = explicitly none selected.
+	const [agent, setAgent] = useState<string | null>(null);
+	const [agentCredentialId, setAgentCredentialId] = useState<
+		string | null | undefined
+	>(undefined);
 	const [status, setStatus] = useState<HarnessStatus | null>(null);
 	const [mcpServers, setMcpServers] = useState<McpServerEntry[] | null>(null);
 	const [skills, setSkills] = useState<SkillEntry[] | null>(null);
@@ -265,6 +271,11 @@ function HarnessEditPage() {
 	// Use local state if edited, otherwise fall back to server data
 	const currentName = name ?? harness?.name ?? "";
 	const currentModel = model ?? harness?.model ?? "";
+	const currentAgent = (agent ?? harness?.agent ?? "default") as AgentMode;
+	const currentAgentCredentialId =
+		agentCredentialId === undefined
+			? ((harness?.agentCredentialId as string | undefined) ?? null)
+			: agentCredentialId;
 	const currentStatus: HarnessStatus =
 		status ?? (harness?.status as HarnessStatus | undefined) ?? "draft";
 	const currentMcpServers = mcpServers ?? harness?.mcpServers ?? [];
@@ -303,6 +314,8 @@ function HarnessEditPage() {
 	const hasChanges =
 		name !== null ||
 		model !== null ||
+		agent !== null ||
+		agentCredentialId !== undefined ||
 		status !== null ||
 		mcpServers !== null ||
 		skills !== null ||
@@ -369,6 +382,12 @@ function HarnessEditPage() {
 		}
 		if (name !== null) updates.name = name;
 		if (model !== null) updates.model = model;
+		if (agent !== null) updates.agent = agent;
+		// The update mutation auto-unlinks a stale credential when the agent
+		// changes without one; only send an explicit selection.
+		if (agentCredentialId !== undefined && agentCredentialId !== null) {
+			updates.agentCredentialId = agentCredentialId;
+		}
 		if (status !== null) updates.status = status;
 		if (mcpServers !== null) updates.mcpServers = mcpServers;
 		if (skills !== null) updates.skills = skills;
@@ -547,27 +566,6 @@ function HarnessEditPage() {
 							</div>
 							<div>
 								<label
-									htmlFor="harness-model"
-									className="mb-1.5 block text-xs font-medium text-foreground"
-								>
-									Model
-								</label>
-								<Select value={currentModel} onValueChange={(v) => setModel(v)}>
-									<SelectTrigger className="max-w-sm">
-										<SelectValue placeholder="Select a model" />
-									</SelectTrigger>
-									<SelectContent>
-										{MODELS.map((m) => (
-											<SelectItem key={m.value} value={m.value}>
-												<Cpu size={12} />
-												{m.label}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							</div>
-							<div>
-								<label
 									htmlFor="system-prompt"
 									className="mb-1.5 block text-xs font-medium text-foreground"
 								>
@@ -590,6 +588,28 @@ function HarnessEditPage() {
 								</p>
 							</div>
 						</div>
+					</motion.section>
+
+					<Separator />
+
+					{/* Agent loop + credential + model — the same picker the
+					    creation flow uses, so credential problems surfaced by
+					    badges/errors are fixable here. */}
+					<motion.section
+						initial={{ opacity: 0, y: 8 }}
+						animate={{ opacity: 1, y: 0 }}
+					>
+						<h2 className="mb-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+							Agent
+						</h2>
+						<AgentLoopPicker
+							agent={currentAgent}
+							onAgentChange={(value) => setAgent(value)}
+							credentialId={currentAgentCredentialId}
+							onCredentialChange={(id) => setAgentCredentialId(id)}
+							model={currentModel}
+							onModelChange={(value) => setModel(value)}
+						/>
 					</motion.section>
 
 					<Separator />
