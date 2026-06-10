@@ -8,6 +8,7 @@ All functions here are synchronous (the Daytona SDK is sync) — call them
 via asyncio.to_thread from async code.
 """
 
+import contextlib
 import json
 import logging
 import secrets
@@ -124,8 +125,15 @@ class ProvisionedRuntime:
     owns_sandbox: bool = True
 
 
-def _build_launcher(agent: AgentDefinition, creds: AgentCredentials, shim_token: str) -> str:
-    """Launcher script: exports env and backgrounds the shim with nohup."""
+def _build_launcher(agent: AgentDefinition, shim_token: str) -> str:
+    """Launcher script: exports NON-SECRET config and backgrounds the shim.
+
+    Agent credentials (creds.env: OAuth tokens, API keys) are deliberately
+    NOT written here — they are passed via the exec environment so they
+    never land in a readable file on the sandbox disk (which users can see
+    through the sandbox terminal). The nohup'd shim inherits them from the
+    launching shell's environment instead.
+    """
     env = {
         "SHIM_PORT": str(shim_port(agent)),
         "SHIM_TOKEN": shim_token,
@@ -135,12 +143,13 @@ def _build_launcher(agent: AgentDefinition, creds: AgentCredentials, shim_token:
         # the shim and any Node-based agent (claude-agent-acp).
         "NODE_OPTIONS": "--dns-result-order=ipv4first",
         **agent.env,
-        **creds.env,
     }
     lines = ["#!/bin/bash", "set -e"]
     # Replace any stale shim for this agent (reattach after gateway restart).
     lines.append(f"pkill -f {shlex.quote(_shim_remote_path(agent))} 2>/dev/null || true")
     lines += [f"export {key}={shlex.quote(value)}" for key, value in env.items()]
+    # `exec env -i`-free: the shell already holds the secret env vars passed
+    # to process.exec; nohup'd node inherits them without them appearing here.
     lines.append(
         f"nohup node {_shim_remote_path(agent)} > /tmp/acp-shim-{agent.id}.log 2>&1 &"
     )
@@ -213,7 +222,9 @@ def provision_agent_sandbox(
             "create workspace",
         )
 
-        # Credential files (e.g. ~/.codex/auth.json).
+        # Credential files (e.g. ~/.codex/auth.json) — the agents' native
+        # on-disk credential stores. chmod 600 so they aren't world-readable
+        # within the sandbox (the user owns them, but defense in depth).
         for remote_path, content in creds.files.items():
             parent = remote_path.rsplit("/", 1)[0]
             if parent and parent != SANDBOX_HOME:
@@ -227,6 +238,8 @@ def provision_agent_sandbox(
                 ),
                 "upload credential file",
             )
+            with contextlib.suppress(Exception):
+                sandbox.process.exec(f"chmod 600 {shlex.quote(remote_path)}", timeout=15)
 
         # Shim + launcher.
         shim_token = secrets.token_urlsafe(24)
@@ -236,16 +249,22 @@ def provision_agent_sandbox(
             ),
             "upload shim",
         )
-        launcher = _build_launcher(agent, creds, shim_token)
+        launcher = _build_launcher(agent, shim_token)
         _with_retries(
             lambda: sandbox.fs.upload_file(
                 launcher.encode("utf-8"), _launcher_remote_path(agent),
             ),
             "upload launcher",
         )
+        # Secrets travel only through the exec environment — the launcher
+        # script on disk holds no credentials. The nohup'd shim (and the
+        # agent it spawns) inherit them from this shell's environment.
         _with_retries(
             lambda: sandbox.process.exec(
-                f"bash {_launcher_remote_path(agent)}", cwd=SANDBOX_HOME, timeout=30,
+                f"bash {_launcher_remote_path(agent)}",
+                cwd=SANDBOX_HOME,
+                env=creds.env or None,
+                timeout=30,
             ),
             "start shim",
         )
