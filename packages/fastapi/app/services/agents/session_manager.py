@@ -67,6 +67,9 @@ class AgentSession:
     # ACP session config options (model, mode, effort, ...) — generic across
     # agents; the UI renders a selector per option.
     config_options: list[dict] = field(default_factory=list)
+    # Agent-advertised slash commands (available_commands_update). Invoked by
+    # sending "/name args" as plain prompt text; surfaced in the slash menu.
+    available_commands: list[dict] = field(default_factory=list)
     # Harness-side transcript for context replay across harness switches.
     transcript: list[dict] = field(default_factory=list)
     pending_replay: bool = False
@@ -371,6 +374,68 @@ class AgentSessionManager:
         finally:
             session.ready_event.set()
 
+    async def _revive(self, session: AgentSession) -> None:
+        """Re-provision a session whose runtime went stale.
+
+        Session sandboxes auto-stop after 30 idle minutes while in-memory
+        sessions live longer; a stopped/restarted sandbox loses the shim
+        process and rotates the Daytona preview token, so the old runtime
+        is unusable (proxy 401/502). Relaunch the shim into the SAME
+        sandbox with fresh tokens, rebuild the connection, and open a new
+        ACP session — the transcript replays on the next prompt.
+        """
+        assert session.runtime is not None
+        logger.info(
+            "Reviving stale runtime for session '%s' (agent=%s, sandbox=%s)",
+            session.id, session.agent_id, session.runtime.sandbox_id,
+        )
+        if session.connection is not None:
+            await session.connection.close()
+            session.connection = None
+
+        agent = get_agent(session.agent_id)
+        creds = await resolve_agent_credentials(
+            self._http_client(), session.agent_id, session.user_id,
+        )
+        session.runtime = await asyncio.to_thread(
+            provision_agent_sandbox,
+            session.user_id,
+            agent,
+            creds,
+            None,
+            session.runtime,
+        )
+        conn = AcpConnection(session.runtime.base_url, session.runtime.headers)
+        session.connection = conn
+        conn.on_notification = self._make_notification_handler(session)
+        conn.on_request = self._make_request_handler(session)
+        conn.on_relay_request = self._make_relay_handler(session)
+        await conn.start()
+        init = await conn.initialize()
+        session.agent_capabilities = init.get("agentCapabilities") or {}
+        await self._open_acp_session(session, session.user_ctx)
+        session.pending_replay = bool(session.transcript)
+        session.status = "ready"
+        session.error = None
+        logger.info(
+            "Session '%s' revived (acp_session=%s)",
+            session.id, session.acp_session_id,
+        )
+
+    async def _ensure_alive(self, session: AgentSession) -> bool:
+        """Health-check the runtime; revive if stale. False on hard failure."""
+        conn = session.connection
+        if conn is not None and conn.agent_exited is None and await conn.healthz():
+            return True
+        try:
+            await self._revive(session)
+            return True
+        except Exception as e:
+            logger.exception("Revive failed for session '%s'", session.id)
+            session.status = "error"
+            session.error = f"Could not reconnect to the agent sandbox: {e}"
+            return False
+
     async def _open_acp_session(self, session: AgentSession, user_ctx) -> None:
         assert session.connection is not None
         mcp_caps = session.agent_capabilities.get("mcpCapabilities") or {}
@@ -468,10 +533,13 @@ class AgentSessionManager:
             if params.get("sessionId") != session.acp_session_id:
                 return
             update = params.get("update") or {}
-            # Keep session-level config state fresh even between turns (the
-            # event queue is only drained while a prompt streams).
+            # Keep session-level state fresh even between turns (the event
+            # queue is only drained while a prompt streams — the initial
+            # available_commands_update would otherwise be lost as stale).
             if update.get("sessionUpdate") == "config_option_update":
                 session.config_options = update.get("configOptions") or []
+            elif update.get("sessionUpdate") == "available_commands_update":
+                session.available_commands = update.get("availableCommands") or []
             event = normalize_session_update(update)
             if event is not None:
                 await session.event_queue.put(event)
@@ -578,6 +646,25 @@ class AgentSessionManager:
         if session.status == "prompting":
             yield {"event": "error", "data": {"message": "A turn is already in progress"}}
             return
+
+        # Stale-runtime guard: the sandbox may have auto-stopped since the
+        # last turn (shim gone, preview token rotated). Revive in place.
+        conn = session.connection
+        if conn is None or conn.agent_exited is not None or not await conn.healthz():
+            yield {
+                "event": "status",
+                "data": {"state": "reviving", "agent": session.agent_id},
+            }
+            if not await self._ensure_alive(session):
+                yield {
+                    "event": "error",
+                    "data": {"message": session.error or "could not reconnect"},
+                }
+                return
+            yield {
+                "event": "status",
+                "data": {"state": "ready", "agent": session.agent_id},
+            }
 
         assert session.connection is not None and session.acp_session_id is not None
         async with session.lock:
@@ -731,6 +818,12 @@ class AgentSessionManager:
             await session.ready_event.wait()
         if session.status not in ("ready",):
             raise RuntimeError(f"Cannot switch harness while {session.status}")
+        # The runtime may have gone stale since the last turn (sandbox
+        # auto-stop) — switching opens a new ACP session on the connection,
+        # so make sure it is alive first.
+        session.harness = harness  # _revive's open uses the NEW harness
+        if not await self._ensure_alive(session):
+            raise RuntimeError(session.error or "could not reconnect to the agent")
         async with session.lock:
             session.harness = harness
             await self._open_acp_session(session, user_ctx)

@@ -77,6 +77,28 @@ class AcpConnection:
     def agent_exited(self) -> str | None:
         return self._agent_exited
 
+    async def healthz(self) -> bool:
+        """True when the shim is reachable AND the agent process is alive.
+
+        False covers every stale-runtime mode: sandbox auto-stopped (proxy
+        502), preview token rotated across a restart (proxy 401), or the
+        agent process died.
+        """
+        try:
+            resp = await self._http.get(
+                f"{self._base_url}/healthz",
+                headers=self._headers,
+                timeout=10.0,
+            )
+        except httpx.HTTPError:
+            return False
+        if resp.status_code != 200:
+            return False
+        try:
+            return bool(resp.json().get("agentRunning"))
+        except ValueError:
+            return False
+
     # ── Outgoing ───────────────────────────────────────────
 
     async def request(self, method: str, params: dict, timeout: float = 600.0) -> dict:
@@ -303,13 +325,24 @@ class AcpConnection:
             timeout=60.0,
         )
 
-    async def prompt(self, session_id: str, text: str, timeout: float = 1200.0) -> dict:
+    async def prompt(
+        self,
+        session_id: str,
+        text: str,
+        blocks: list[dict] | None = None,
+        timeout: float = 1200.0,
+    ) -> dict:
+        """session/prompt with a text block plus optional extra content
+        blocks (e.g. images for agents advertising promptCapabilities.image)."""
+        prompt_blocks: list[dict] = []
+        if text:
+            prompt_blocks.append({"type": "text", "text": text})
+        prompt_blocks.extend(blocks or [])
+        if not prompt_blocks:
+            prompt_blocks.append({"type": "text", "text": ""})
         return await self.request(
             "session/prompt",
-            {
-                "sessionId": session_id,
-                "prompt": [{"type": "text", "text": text}],
-            },
+            {"sessionId": session_id, "prompt": prompt_blocks},
             timeout=timeout,
         )
 

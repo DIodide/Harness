@@ -162,6 +162,7 @@ def provision_agent_sandbox(
     agent: AgentDefinition,
     creds: AgentCredentials,
     attach_sandbox_id: str | None = None,
+    reuse: ProvisionedRuntime | None = None,
 ) -> ProvisionedRuntime:
     """Start the agent shim in a sandbox and wait until it is healthy.
 
@@ -169,12 +170,29 @@ def provision_agent_sandbox(
     persistent sandbox (bootstrapping node + adapters on first use) so it
     works on the user's real files; otherwise a fresh session-owned sandbox
     is created from the ACP snapshot.
+
+    With `reuse`, the shim is relaunched into the session's EXISTING sandbox
+    (auto-started if stopped) with a fresh shim token and preview link —
+    Daytona rotates preview tokens across stop/start and the shim process
+    does not survive a restart, so a stale session must re-provision rather
+    than reuse its old runtime.
     """
     service = get_daytona_service()
     client = service._get_client()
 
-    owns_sandbox = attach_sandbox_id is None
-    if attach_sandbox_id:
+    if reuse is not None:
+        logger.info(
+            "Reviving agent '%s' shim in sandbox '%s' for user '%s'",
+            agent.id, reuse.sandbox_id, user_id,
+        )
+        sandbox = service._ensure_running(reuse.sandbox_id)
+        sandbox_id = reuse.sandbox_id
+        owns_sandbox = reuse.owns_sandbox
+        cwd = reuse.cwd
+        if not owns_sandbox:
+            _ensure_agent_runtime(sandbox)
+    elif attach_sandbox_id:
+        owns_sandbox = False
         logger.info(
             "Attaching agent '%s' to harness sandbox '%s' for user '%s'",
             agent.id, attach_sandbox_id, user_id,
@@ -184,6 +202,7 @@ def provision_agent_sandbox(
         _ensure_agent_runtime(sandbox)
         cwd = SANDBOX_HOME
     else:
+        owns_sandbox = True
         params = CreateSandboxFromSnapshotParams(
             snapshot=settings.acp_snapshot_name,
             labels={
@@ -276,7 +295,7 @@ def provision_agent_sandbox(
         if preview_token:
             headers["x-daytona-preview-token"] = preview_token
 
-        _wait_for_shim(sandbox, base_url, headers)
+        _wait_for_shim(sandbox, base_url, headers, agent=agent)
         logger.info(
             "ACP sandbox '%s' ready (agent=%s, url=%s)",
             sandbox_id, agent.id, base_url,
@@ -290,8 +309,9 @@ def provision_agent_sandbox(
         )
     except Exception:
         # Don't leak half-provisioned sandboxes — but never delete a
-        # harness's own sandbox on attach failure.
-        if owns_sandbox:
+        # harness's own sandbox on attach failure, and never delete an
+        # existing session sandbox on a failed revive (workspace files!).
+        if owns_sandbox and reuse is None:
             try:
                 client.delete(sandbox)
             except Exception:
@@ -331,6 +351,7 @@ def stop_agent_shim(sandbox_id: str, agent: AgentDefinition) -> None:
 
 def _wait_for_shim(
     sandbox, base_url: str, headers: dict[str, str], timeout: float = 60.0,
+    agent: AgentDefinition | None = None,
 ) -> None:
     """Poll the shim /healthz until the agent process is confirmed running."""
     deadline = time.monotonic() + timeout
@@ -352,9 +373,10 @@ def _wait_for_shim(
 
     # Pull the shim log + the agent's buffered stderr for a useful error.
     shim_log = ""
+    log_path = f"/tmp/acp-shim-{agent.id}.log" if agent else "/tmp/acp-shim.log"
     try:
         result = sandbox.process.exec(
-            "tail -50 /tmp/acp-shim.log", cwd=SANDBOX_HOME, timeout=10,
+            f"tail -50 {log_path}", cwd=SANDBOX_HOME, timeout=10,
         )
         shim_log = result.result or ""
     except Exception:
