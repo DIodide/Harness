@@ -35,6 +35,28 @@ SHIM_REMOTE_PATH = f"{SANDBOX_HOME}/acp-shim.mjs"
 LAUNCHER_REMOTE_PATH = f"{SANDBOX_HOME}/acp-shim-start.sh"
 
 
+def _with_retries(operation, what: str, attempts: int = 4):
+    """Run a Daytona toolbox call, retrying transient connection failures.
+
+    Freshly created sandboxes occasionally reset the first toolbox
+    connection ("Connection aborted / reset by peer"), and the SDK does not
+    retry non-idempotent requests itself. requests.ConnectionError is an
+    OSError subclass, so OSError covers the whole family.
+    """
+    last: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return operation()
+        except OSError as e:
+            last = e
+            logger.warning(
+                "Daytona toolbox call '%s' failed (attempt %d/%d): %s",
+                what, attempt, attempts, e,
+            )
+            time.sleep(1.5 * attempt)
+    raise RuntimeError(f"Daytona toolbox call '{what}' kept failing: {last}")
+
+
 @dataclass
 class ProvisionedRuntime:
     sandbox_id: str
@@ -94,28 +116,53 @@ def provision_agent_sandbox(
         # reset), and many MCP hosts are dual-stack. Prefer IPv4 for every
         # getaddrinfo consumer (full table: a lone precedence line would
         # drop glibc's defaults).
-        sandbox.fs.upload_file(
-            b"precedence ::ffff:0:0/96  100\nprecedence ::/0  10\n",
-            "/etc/gai.conf",
+        _with_retries(
+            lambda: sandbox.fs.upload_file(
+                b"precedence ::ffff:0:0/96  100\nprecedence ::/0  10\n",
+                "/etc/gai.conf",
+            ),
+            "upload gai.conf",
         )
 
         # Workspace dir the agent runs in (ACP session cwd).
-        sandbox.fs.create_folder(SANDBOX_WORKSPACE, "0755")
+        _with_retries(
+            lambda: sandbox.fs.create_folder(SANDBOX_WORKSPACE, "0755"),
+            "create workspace",
+        )
 
         # Credential files (e.g. ~/.codex/auth.json).
         for remote_path, content in creds.files.items():
             parent = remote_path.rsplit("/", 1)[0]
             if parent and parent != SANDBOX_HOME:
-                sandbox.fs.create_folder(parent, "0700")
-            sandbox.fs.upload_file(content.encode("utf-8"), remote_path)
+                _with_retries(
+                    lambda parent=parent: sandbox.fs.create_folder(parent, "0700"),
+                    "create credential dir",
+                )
+            _with_retries(
+                lambda remote_path=remote_path, content=content: sandbox.fs.upload_file(
+                    content.encode("utf-8"), remote_path,
+                ),
+                "upload credential file",
+            )
 
         # Shim + launcher.
         shim_token = secrets.token_urlsafe(24)
-        sandbox.fs.upload_file(SHIM_PATH.read_bytes(), SHIM_REMOTE_PATH)
+        _with_retries(
+            lambda: sandbox.fs.upload_file(SHIM_PATH.read_bytes(), SHIM_REMOTE_PATH),
+            "upload shim",
+        )
         launcher = _build_launcher(agent, creds, shim_token)
-        sandbox.fs.upload_file(launcher.encode("utf-8"), LAUNCHER_REMOTE_PATH)
-        sandbox.process.exec(
-            f"bash {LAUNCHER_REMOTE_PATH}", cwd=SANDBOX_HOME, timeout=30,
+        _with_retries(
+            lambda: sandbox.fs.upload_file(
+                launcher.encode("utf-8"), LAUNCHER_REMOTE_PATH,
+            ),
+            "upload launcher",
+        )
+        _with_retries(
+            lambda: sandbox.process.exec(
+                f"bash {LAUNCHER_REMOTE_PATH}", cwd=SANDBOX_HOME, timeout=30,
+            ),
+            "start shim",
         )
 
         preview = sandbox.get_preview_link(settings.acp_shim_port)
