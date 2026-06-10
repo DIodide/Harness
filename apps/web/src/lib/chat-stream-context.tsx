@@ -36,6 +36,7 @@ export const EMPTY_STREAM_STATE: ConvoStreamState = {
 	model: null,
 	agentStatus: null,
 	plan: null,
+	agentUsage: null,
 };
 
 interface ChatStreamSideEffects {
@@ -119,18 +120,28 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 	);
 
 	const chatStream = useChatStream({
-		onToken: (convoId, content) => {
+		onToken: (convoId, content, meta) => {
 			setStreamStates((prev) => {
 				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
 				const parts = [...state.parts];
 				const last = parts[parts.length - 1];
-				if (last?.type === "text") {
+				// Distinct ACP messageIds (e.g. before/after a background task
+				// completes) become distinct parts instead of one merged blob.
+				const sameMessage =
+					last?.type === "text" &&
+					(last.messageId ?? null) === (meta?.messageId ?? null);
+				if (sameMessage && last) {
 					parts[parts.length - 1] = {
 						...last,
 						content: (last.content ?? "") + content,
 					};
 				} else {
-					parts.push({ type: "text", content } as StreamPart);
+					parts.push({
+						type: "text",
+						content,
+						messageId: meta?.messageId ?? null,
+						parentId: meta?.parentId ?? null,
+					} as StreamPart);
 				}
 				return {
 					...prev,
@@ -143,18 +154,26 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 				};
 			});
 		},
-		onThinking: (convoId, content) => {
+		onThinking: (convoId, content, meta) => {
 			setStreamStates((prev) => {
 				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
 				const parts = [...state.parts];
 				const last = parts[parts.length - 1];
-				if (last?.type === "reasoning") {
+				const sameMessage =
+					last?.type === "reasoning" &&
+					(last.messageId ?? null) === (meta?.messageId ?? null);
+				if (sameMessage && last) {
 					parts[parts.length - 1] = {
 						...last,
 						content: (last.content ?? "") + content,
 					};
 				} else {
-					parts.push({ type: "reasoning", content } as StreamPart);
+					parts.push({
+						type: "reasoning",
+						content,
+						messageId: meta?.messageId ?? null,
+						parentId: meta?.parentId ?? null,
+					} as StreamPart);
 				}
 				return {
 					...prev,
@@ -183,6 +202,7 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 								call_id: event.call_id,
 								kind: event.kind,
 								locations: event.locations,
+								parentId: event.parentId ?? null,
 							},
 						],
 						agentStatus: null,
@@ -230,6 +250,7 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 					model: model ?? prev[convoId]?.model ?? null,
 					agentStatus: null,
 					plan: null,
+					agentUsage: prev[convoId]?.agentUsage ?? null,
 				},
 			}));
 			dispatchSideEffect("onDone", (h) =>
@@ -279,6 +300,15 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 				[convoId]: {
 					...(prev[convoId] ?? EMPTY_STREAM_STATE),
 					plan: entries,
+				},
+			}));
+		},
+		onAgentUsage: (convoId, usage) => {
+			setStreamStates((prev) => ({
+				...prev,
+				[convoId]: {
+					...(prev[convoId] ?? EMPTY_STREAM_STATE),
+					agentUsage: usage,
 				},
 			}));
 		},

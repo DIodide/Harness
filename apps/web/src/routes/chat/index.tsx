@@ -1026,6 +1026,7 @@ function ChatPage() {
 							streamModel={activeStreamState.model}
 							agentStatus={activeStreamState.agentStatus}
 							streamPlan={activeStreamState.plan}
+							agentUsage={activeStreamState.agentUsage}
 							onStreamSynced={handleStreamSynced}
 							displayMode={
 								(userSettings?.displayMode as DisplayMode) ?? "standard"

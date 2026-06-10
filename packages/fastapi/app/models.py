@@ -114,6 +114,10 @@ class AgentPromptRequest(BaseModel):
     history: list[MessagePayload] | None = None
 
 
+class AgentQueuePromptRequest(BaseModel):
+    message: str
+
+
 class AgentPermissionAnswer(BaseModel):
     request_id: str
     option_id: str | None = None

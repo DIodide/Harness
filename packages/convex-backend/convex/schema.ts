@@ -150,6 +150,7 @@ export default defineSchema({
 					// ACP tool kind (execute|read|edit|...) for agent built-ins;
 					// absent for MCP/default-agent tool calls.
 					kind: v.optional(v.string()),
+					parent_id: v.optional(v.string()),
 				}),
 			),
 		),

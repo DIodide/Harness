@@ -20,6 +20,22 @@ export interface ToolCallEvent {
 	/** ACP tool kind (execute|read|edit|...) for agent built-ins. */
 	kind?: string;
 	locations?: Array<{ path?: string }>;
+	/** Set when a background/sub agent made this call (nest under parent). */
+	parentId?: string | null;
+}
+
+/** Message-boundary metadata on agent text/thought chunks. */
+export interface ChunkMeta {
+	messageId?: string | null;
+	parentId?: string | null;
+}
+
+/** Live context/cost usage from the user's own agent account. */
+export interface AgentUsage {
+	used: number | null;
+	size: number | null;
+	cost: number | null;
+	currency: string;
 }
 
 export interface ToolDiff {
@@ -45,6 +61,8 @@ export interface StreamPart {
 	kind?: string;
 	locations?: Array<{ path?: string }>;
 	diff?: ToolDiff | null;
+	messageId?: string | null;
+	parentId?: string | null;
 }
 
 export interface ConvoStreamState {
@@ -59,6 +77,8 @@ export interface ConvoStreamState {
 	agentStatus: string | null;
 	/** ACP agent mode: latest plan snapshot from the agent. */
 	plan: AgentPlanEntry[] | null;
+	/** ACP agent mode: live context/cost usage (user's own account). */
+	agentUsage: AgentUsage | null;
 }
 
 export interface BudgetExceededInfo {
@@ -69,8 +89,12 @@ export interface BudgetExceededInfo {
 }
 
 interface UseChatStreamCallbacks {
-	onToken: (conversationId: string, content: string) => void;
-	onThinking: (conversationId: string, content: string) => void;
+	onToken: (conversationId: string, content: string, meta?: ChunkMeta) => void;
+	onThinking: (
+		conversationId: string,
+		content: string,
+		meta?: ChunkMeta,
+	) => void;
 	onToolCall: (conversationId: string, event: ToolCallEvent) => void;
 	onToolResult: (
 		conversationId: string,
@@ -108,6 +132,8 @@ interface UseChatStreamCallbacks {
 	) => void;
 	/** ACP agent mode: agent plan snapshot. */
 	onPlan?: (conversationId: string, entries: AgentPlanEntry[]) => void;
+	/** ACP agent mode: context window + cost from the user's own account. */
+	onAgentUsage?: (conversationId: string, usage: AgentUsage) => void;
 }
 
 export type MessageContent = string | Array<Record<string, unknown>>;
@@ -245,10 +271,16 @@ async function runAgentStream(
 		if (event === "done" || event === "error") finished = true;
 		switch (event) {
 			case "token":
-				cb.onToken(convoId, data.content as string);
+				cb.onToken(convoId, data.content as string, {
+					messageId: (data.message_id ?? null) as string | null,
+					parentId: (data.parent_id ?? null) as string | null,
+				});
 				break;
 			case "thinking":
-				cb.onThinking(convoId, data.content as string);
+				cb.onThinking(convoId, data.content as string, {
+					messageId: (data.message_id ?? null) as string | null,
+					parentId: (data.parent_id ?? null) as string | null,
+				});
 				break;
 			case "tool_call":
 				cb.onToolCall(convoId, {
@@ -257,6 +289,7 @@ async function runAgentStream(
 					call_id: data.call_id as string,
 					kind: (data.kind ?? "other") as string,
 					locations: (data.locations ?? []) as Array<{ path?: string }>,
+					parentId: (data.parent_id ?? null) as string | null,
 				});
 				break;
 			case "tool_result":
@@ -281,6 +314,14 @@ async function runAgentStream(
 				break;
 			case "plan":
 				cb.onPlan?.(convoId, (data.entries ?? []) as AgentPlanEntry[]);
+				break;
+			case "agent_usage":
+				cb.onAgentUsage?.(convoId, {
+					used: (data.used ?? null) as number | null,
+					size: (data.size ?? null) as number | null,
+					cost: (data.cost ?? null) as number | null,
+					currency: (data.currency ?? "USD") as string,
+				});
 				break;
 			case "done":
 				cb.onDone(

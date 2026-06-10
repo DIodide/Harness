@@ -19,6 +19,7 @@ from app.models import (
     AgentCredentialStoreRequest,
     AgentPermissionAnswer,
     AgentPromptRequest,
+    AgentQueuePromptRequest,
     AgentSessionCreateRequest,
     AgentSwitchHarnessRequest,
 )
@@ -63,6 +64,7 @@ def _session_payload(session) -> dict:
         "error": session.error,
         "conversation_id": session.conversation_id,
         "harness_name": session.harness.name,
+        "prompt_queueing": session.supports_prompt_queueing,
     }
 
 
@@ -175,6 +177,9 @@ async def prompt(
         content = ""
         parts: list[dict] = []
         terminal_event = None  # "done" | "error" once the turn concluded
+        # Distinct ACP messageIds (e.g. before/after a background task
+        # completes) must become distinct parts, not one merged blob.
+        last_text_mid = last_reasoning_mid = object()
         try:
             async for event in manager.prompt(
                 session_id,
@@ -188,15 +193,26 @@ async def prompt(
                 if event["event"] == "done":
                     content = event["data"]["content"]
                 elif event["event"] == "token":
-                    if parts and parts[-1]["type"] == "text":
+                    mid = event["data"].get("message_id")
+                    parent = event["data"].get("parent_id")
+                    if parts and parts[-1]["type"] == "text" and mid == last_text_mid:
                         parts[-1]["content"] += event["data"]["content"]
                     else:
-                        parts.append({"type": "text", "content": event["data"]["content"]})
+                        parts.append(
+                            {
+                                "type": "text",
+                                "content": event["data"]["content"],
+                                **({"parent_id": parent} if parent else {}),
+                            }
+                        )
+                    last_text_mid = mid
                 elif event["event"] == "thinking":
-                    if parts and parts[-1]["type"] == "reasoning":
+                    mid = event["data"].get("message_id")
+                    if parts and parts[-1]["type"] == "reasoning" and mid == last_reasoning_mid:
                         parts[-1]["content"] += event["data"]["content"]
                     else:
                         parts.append({"type": "reasoning", "content": event["data"]["content"]})
+                    last_reasoning_mid = mid
                 elif event["event"] == "tool_call":
                     parts.append(
                         {
@@ -206,6 +222,11 @@ async def prompt(
                             "call_id": event["data"]["call_id"],
                             "result": "",
                             "kind": event["data"].get("kind") or "other",
+                            **(
+                                {"parent_id": event["data"]["parent_id"]}
+                                if event["data"].get("parent_id")
+                                else {}
+                            ),
                         }
                     )
                 elif event["event"] == "tool_result":
@@ -255,6 +276,27 @@ async def answer_permission(
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="No such pending permission request")
+    return {"ok": True}
+
+
+@router.post("/sessions/{session_id}/queue")
+async def queue_prompt(
+    session_id: str,
+    body: AgentQueuePromptRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Queue an extra prompt onto an in-flight turn (promptQueueing agents).
+
+    409 means the caller should fall back to client-side queueing.
+    """
+    if len(body.message) > USER_MESSAGE_MAX_LENGTH:
+        raise HTTPException(status_code=422, detail="Message too long")
+    try:
+        await get_session_manager().queue_prompt(session_id, user["sub"], body.message)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    except (RuntimeError, PermissionError) as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return {"ok": True}
 
 

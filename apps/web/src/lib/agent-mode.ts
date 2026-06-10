@@ -182,6 +182,32 @@ export async function ensureAgentSession(
 	return payload.session_id;
 }
 
+/** Session id from the cache without any network round trip. */
+export function getCachedAgentSessionId(
+	conversationId: string,
+	agent: AgentMode,
+): string | null {
+	return sessionCache.get(cacheKey(conversationId, agent))?.sessionId ?? null;
+}
+
+/**
+ * Queue an extra prompt onto an in-flight turn (promptQueueing agents,
+ * e.g. Claude Code). Returns false when the gateway can't queue it
+ * (unsupported agent, turn already over, session gone) — the caller
+ * should fall back to client-side queueing.
+ */
+export async function queueAgentPrompt(
+	token: string | null,
+	sessionId: string,
+	message: string,
+): Promise<boolean> {
+	const response = await api(token, `/sessions/${sessionId}/queue`, {
+		method: "POST",
+		body: JSON.stringify({ message }),
+	});
+	return response.ok;
+}
+
 export function forgetAgentSession(
 	conversationId: string,
 	agent: AgentMode,

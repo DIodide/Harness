@@ -11,6 +11,7 @@ import React, {
 } from "react";
 import type { AgentPlanEntry } from "../../lib/agent-mode";
 import type {
+	AgentUsage,
 	StreamPart,
 	ToolCallEvent,
 	UsageData,
@@ -25,6 +26,101 @@ import { PendingResponseIndicator } from "../pending-response-indicator";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { StreamingUsage, ThinkingBlock, ToolCallBlock } from "./message-blocks";
 
+/** Superset of stream parts and persisted Convex parts. */
+interface RenderablePart {
+	type: "text" | "reasoning" | "tool_call";
+	content?: string;
+	tool?: string;
+	arguments?: Record<string, unknown>;
+	call_id?: string;
+	result?: string;
+	kind?: string;
+	locations?: Array<{ path?: string }>;
+	diff?: {
+		path?: string | null;
+		oldText?: string | null;
+		newText?: string | null;
+	} | null;
+	messageId?: string | null;
+	parentId?: string | null; // stream shape
+	parent_id?: string | null; // persisted shape
+}
+
+interface OrganizedPart extends RenderablePart {
+	children: RenderablePart[];
+}
+
+/**
+ * Group background/sub-agent activity (parts tagged with a parent tool-use
+ * id, e.g. Claude Code's Task tool) under the tool call that spawned it.
+ */
+function organizeParts(parts: RenderablePart[]): OrganizedPart[] {
+	const top: OrganizedPart[] = [];
+	const byCallId = new Map<string, OrganizedPart>();
+	for (const part of parts) {
+		const organized: OrganizedPart = { ...part, children: [] };
+		if (part.type === "tool_call" && part.call_id) {
+			byCallId.set(part.call_id, organized);
+		}
+		const parentId = part.parentId ?? part.parent_id ?? null;
+		const parent = parentId ? byCallId.get(parentId) : undefined;
+		if (parent) {
+			parent.children.push(organized);
+		} else {
+			top.push(organized);
+		}
+	}
+	return top;
+}
+
+/** Indented rendering of a background agent's work under its Task block. */
+function SubagentActivity({
+	parts,
+	isStreaming,
+}: {
+	parts: RenderablePart[];
+	isStreaming: boolean;
+}) {
+	return (
+		<div className="mt-1 mb-1.5 ml-4 space-y-1 border-l-2 border-muted-foreground/15 pl-3">
+			{parts.map((part, idx) => {
+				const key = part.call_id ?? `sub-${part.type}-${idx}`;
+				if (part.type === "tool_call" && part.tool) {
+					return (
+						<AgentToolCallBlock
+							key={key}
+							kind={part.kind ?? "other"}
+							title={part.tool}
+							arguments={part.arguments ?? {}}
+							result={part.result}
+							diff={part.diff}
+							locations={part.locations}
+							isStreaming={isStreaming && !part.result}
+						/>
+					);
+				}
+				if (part.type === "reasoning" && part.content) {
+					return (
+						<ThinkingBlock
+							key={key}
+							content={part.content}
+							isStreaming={false}
+						/>
+					);
+				}
+				if (part.type === "text" && part.content) {
+					return (
+						<div key={key} className="text-[11px] text-muted-foreground">
+							<MarkdownMessage content={part.content} />
+						</div>
+					);
+				}
+				return null;
+			})}
+		</div>
+	);
+}
+
 export function ChatMessages({
 	conversationId,
 	messages,
@@ -37,6 +133,7 @@ export function ChatMessages({
 	streamModel,
 	agentStatus,
 	streamPlan,
+	agentUsage,
 	onStreamSynced,
 	displayMode,
 	onRegenerate,
@@ -102,6 +199,7 @@ export function ChatMessages({
 	streamModel: string | null;
 	agentStatus: string | null;
 	streamPlan: AgentPlanEntry[] | null;
+	agentUsage: AgentUsage | null;
 	onStreamSynced: (convoId: string) => void;
 	displayMode: DisplayMode;
 	onRegenerate: (
@@ -442,21 +540,14 @@ export function ChatMessages({
 										>
 											{msg.role === "assistant" &&
 											(msg as Record<string, unknown>).parts ? (
-												(
-													(msg as Record<string, unknown>).parts as Array<{
-														type: "text" | "reasoning" | "tool_call";
-														content?: string;
-														tool?: string;
-														arguments?: Record<string, unknown>;
-														call_id?: string;
-														result?: string;
-														kind?: string;
-													}>
-												).map((part) => {
+												organizeParts(
+													(msg as Record<string, unknown>)
+														.parts as RenderablePart[],
+												).map((part, partIdx) => {
 													const key =
 														part.type === "tool_call"
 															? (part.call_id ?? part.tool)
-															: `${part.type}-${part.content?.slice(0, 32)}`;
+															: `${part.type}-${partIdx}-${part.content?.slice(0, 24)}`;
 													if (part.type === "reasoning" && part.content) {
 														return (
 															<ThinkingBlock
@@ -475,31 +566,39 @@ export function ChatMessages({
 														);
 													}
 													if (part.type === "tool_call" && part.tool) {
-														if (part.kind) {
-															return (
-																<AgentToolCallBlock
-																	key={key}
-																	kind={part.kind}
-																	title={part.tool}
-																	arguments={
-																		(part.arguments ?? {}) as Record<
-																			string,
-																			unknown
-																		>
-																	}
-																	result={part.result}
-																	isStreaming={false}
-																/>
-															);
-														}
-														return (
+														const block = part.kind ? (
+															// biome-ignore lint/correctness/useJsxKeyInIterable: rendered inside a keyed fragment below
+															<AgentToolCallBlock
+																kind={part.kind}
+																title={part.tool}
+																arguments={
+																	(part.arguments ?? {}) as Record<
+																		string,
+																		unknown
+																	>
+																}
+																result={part.result}
+																isStreaming={false}
+															/>
+														) : (
+															// biome-ignore lint/correctness/useJsxKeyInIterable: rendered inside a keyed fragment below
 															<ToolCallBlock
-																key={key}
 																tool={part.tool}
 																arguments={part.arguments ?? {}}
 																result={part.result}
 																isStreaming={false}
 															/>
+														);
+														return (
+															<React.Fragment key={key}>
+																{block}
+																{part.children.length > 0 && (
+																	<SubagentActivity
+																		parts={part.children}
+																		isStreaming={false}
+																	/>
+																)}
+															</React.Fragment>
 														);
 													}
 													return null;
@@ -724,30 +823,34 @@ export function ChatMessages({
 							)}
 							<div className="text-sm leading-relaxed text-foreground">
 								{streamParts.length > 0
-									? streamParts.map((part, idx) => {
-											const isLast = idx === streamParts.length - 1;
-											if (part.type === "reasoning" && part.content) {
-												return (
-													<ThinkingBlock
-														key={`sp-${part.type}-${idx}`}
-														content={part.content}
-														isStreaming={isLast && isActivelyStreaming}
-													/>
-												);
-											}
-											if (part.type === "text" && part.content) {
-												return (
-													<MarkdownMessage
-														key={`sp-${part.type}-${idx}`}
-														content={part.content}
-													/>
-												);
-											}
-											if (part.type === "tool_call" && part.tool) {
-												if (part.kind) {
+									? (() => {
+											const organized = organizeParts(
+												streamParts as RenderablePart[],
+											);
+											return organized.map((part, idx) => {
+												const isLast = idx === organized.length - 1;
+												const key =
+													part.type === "tool_call"
+														? (part.call_id ?? `sp-tc-${idx}`)
+														: `sp-${part.type}-${idx}`;
+												if (part.type === "reasoning" && part.content) {
 													return (
+														<ThinkingBlock
+															key={key}
+															content={part.content}
+															isStreaming={isLast && isActivelyStreaming}
+														/>
+													);
+												}
+												if (part.type === "text" && part.content) {
+													return (
+														<MarkdownMessage key={key} content={part.content} />
+													);
+												}
+												if (part.type === "tool_call" && part.tool) {
+													const block = part.kind ? (
+														// biome-ignore lint/correctness/useJsxKeyInIterable: rendered inside a keyed fragment below
 														<AgentToolCallBlock
-															key={part.call_id ?? `sp-tc-${idx}`}
 															kind={part.kind}
 															title={part.tool}
 															arguments={part.arguments ?? {}}
@@ -756,20 +859,30 @@ export function ChatMessages({
 															locations={part.locations}
 															isStreaming={!part.result}
 														/>
+													) : (
+														// biome-ignore lint/correctness/useJsxKeyInIterable: rendered inside a keyed fragment below
+														<ToolCallBlock
+															tool={part.tool}
+															arguments={part.arguments ?? {}}
+															result={part.result}
+															isStreaming={!part.result}
+														/>
+													);
+													return (
+														<React.Fragment key={key}>
+															{block}
+															{part.children.length > 0 && (
+																<SubagentActivity
+																	parts={part.children}
+																	isStreaming={isActivelyStreaming}
+																/>
+															)}
+														</React.Fragment>
 													);
 												}
-												return (
-													<ToolCallBlock
-														key={part.call_id ?? `sp-tc-${idx}`}
-														tool={part.tool}
-														arguments={part.arguments ?? {}}
-														result={part.result}
-														isStreaming={!part.result}
-													/>
-												);
-											}
-											return null;
-										})
+												return null;
+											});
+										})()
 									: !streamingReasoning &&
 										activeToolCalls.length === 0 &&
 										!streamingContent && (
@@ -779,6 +892,22 @@ export function ChatMessages({
 							{displayMode === "developer" && streamUsage && (
 								<div className="flex items-center gap-3 pt-1">
 									<StreamingUsage usage={streamUsage} model={streamModel} />
+								</div>
+							)}
+							{displayMode === "developer" && agentUsage && (
+								<div className="flex items-center gap-2 pt-1 font-mono text-[10px] text-muted-foreground">
+									{agentUsage.used != null && agentUsage.size != null && (
+										<span>
+											ctx {Math.round(agentUsage.used / 1000)}k /{" "}
+											{Math.round(agentUsage.size / 1000)}k
+										</span>
+									)}
+									{agentUsage.cost != null && (
+										<span>
+											{agentUsage.currency === "USD" ? "$" : ""}
+											{agentUsage.cost.toFixed(4)} (your account)
+										</span>
+									)}
 								</div>
 							)}
 						</div>

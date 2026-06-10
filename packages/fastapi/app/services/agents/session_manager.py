@@ -67,10 +67,20 @@ class AgentSession:
     user_ctx: UserContext | None = None
     # Queue of normalized events for the currently streaming prompt turn.
     event_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
+    # Prompts queued onto an in-flight turn (agents advertising
+    # promptQueueing, e.g. Claude Code). Their events flow into the same
+    # event_queue; the active stream ends only when all turns complete.
+    extra_turns: list[asyncio.Task] = field(default_factory=list)
     pending_permissions: dict[str, asyncio.Future] = field(default_factory=dict)
     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_activity: float = field(default_factory=time.monotonic)
+
+    @property
+    def supports_prompt_queueing(self) -> bool:
+        meta = self.agent_capabilities.get("_meta") or {}
+        claude = meta.get("claudeCode") or {}
+        return bool(claude.get("promptQueueing"))
 
 
 async def resolve_mcp_auth_headers(
@@ -111,13 +121,38 @@ def _content_block_text(block: dict) -> str:
     return ""
 
 
+def _claude_meta(update: dict) -> dict:
+    """claude-agent-acp tucks subagent parentage under _meta.claudeCode."""
+    meta = update.get("_meta") or {}
+    claude = meta.get("claudeCode") or {}
+    return claude if isinstance(claude, dict) else {}
+
+
 def normalize_session_update(update: dict) -> dict | None:
     """Map an ACP session/update payload to a Harness SSE event."""
     kind = update.get("sessionUpdate")
+    parent_id = _claude_meta(update).get("parentToolUseId")
     if kind == "agent_message_chunk":
-        return {"event": "token", "data": {"content": _content_block_text(update.get("content") or {})}}
+        return {
+            "event": "token",
+            "data": {
+                "content": _content_block_text(update.get("content") or {}),
+                # Distinct assistant messages within one turn (e.g. before and
+                # after a background task completes) carry distinct messageIds;
+                # the UI starts a new text part on change.
+                "message_id": update.get("messageId"),
+                **({"parent_id": parent_id} if parent_id else {}),
+            },
+        }
     if kind == "agent_thought_chunk":
-        return {"event": "thinking", "data": {"content": _content_block_text(update.get("content") or {})}}
+        return {
+            "event": "thinking",
+            "data": {
+                "content": _content_block_text(update.get("content") or {}),
+                "message_id": update.get("messageId"),
+                **({"parent_id": parent_id} if parent_id else {}),
+            },
+        }
     if kind == "tool_call":
         return {
             "event": "tool_call",
@@ -130,6 +165,9 @@ def normalize_session_update(update: dict) -> dict | None:
                 "kind": update.get("kind") or "other",
                 "status": update.get("status"),
                 "locations": update.get("locations") or [],
+                # Set for tool calls made by a background/sub agent — the UI
+                # nests these under the spawning Task tool call.
+                **({"parent_id": parent_id} if parent_id else {}),
             },
         }
     if kind == "tool_call_update":
@@ -159,6 +197,18 @@ def normalize_session_update(update: dict) -> dict | None:
                 "status": update.get("status"),
                 "result": result_text or json.dumps(update.get("rawOutput") or {})[:4000],
                 **({"diff": diff} if diff else {}),
+            },
+        }
+    if kind == "usage_update":
+        # Context window + cost, billed to the user's own agent account.
+        cost = update.get("cost") or {}
+        return {
+            "event": "agent_usage",
+            "data": {
+                "used": update.get("used"),
+                "size": update.get("size"),
+                "cost": cost.get("amount"),
+                "currency": cost.get("currency", "USD"),
             },
         }
     if kind == "plan":
@@ -470,6 +520,7 @@ class AgentSessionManager:
                 session.pending_replay = False
 
             session.transcript.append({"role": "user", "content": message})
+            session.extra_turns = []
             text_parts: list[str] = []
 
             turn = asyncio.create_task(
@@ -478,8 +529,11 @@ class AgentSessionManager:
             try:
                 while True:
                     queue_get = asyncio.create_task(session.event_queue.get())
+                    # Queued prompts (promptQueueing agents) add turns whose
+                    # events flow through the same stream.
+                    turns = {turn, *session.extra_turns}
                     done, _ = await asyncio.wait(
-                        {queue_get, turn}, return_when=asyncio.FIRST_COMPLETED,
+                        {queue_get, *turns}, return_when=asyncio.FIRST_COMPLETED,
                     )
                     if queue_get in done:
                         event = queue_get.result()
@@ -488,9 +542,9 @@ class AgentSessionManager:
                         yield event
                         session.last_activity = time.monotonic()
                         continue
-                    # Turn finished — flush anything already queued. The
-                    # cancelled get() may have already consumed an item;
-                    # recover it instead of dropping it.
+                    # A turn finished — recover the event a cancelled get()
+                    # may have consumed, flush the queue, then either keep
+                    # waiting (turns still in flight) or conclude.
                     queue_get.cancel()
                     leftover = None
                     with contextlib.suppress(asyncio.CancelledError):
@@ -502,7 +556,16 @@ class AgentSessionManager:
                         if event["event"] == "token":
                             text_parts.append(event["data"]["content"])
                         yield event
+                    turns = {turn, *session.extra_turns}
+                    if any(not t.done() for t in turns):
+                        continue
                     result = turn.result()  # raises on AcpError/transport error
+                    for extra in session.extra_turns:
+                        if extra.exception() is not None:
+                            logger.warning(
+                                "Queued turn failed on session '%s': %s",
+                                session.id, extra.exception(),
+                            )
                     content = "".join(text_parts)
                     session.transcript.append({"role": "assistant", "content": content})
                     yield {
@@ -540,6 +603,29 @@ class AgentSessionManager:
         session = self.get(session_id, user_id)
         if session.connection and session.acp_session_id:
             await session.connection.cancel(session.acp_session_id)
+
+    async def queue_prompt(self, session_id: str, user_id: str, message: str) -> None:
+        """Send an additional prompt onto an in-flight turn.
+
+        Only valid for agents advertising promptQueueing (Claude Code): the
+        agent queues the prompt and runs it after the current turn; all its
+        events flow through the already-open stream.
+        """
+        session = self.get(session_id, user_id)
+        if session.status != "prompting":
+            raise RuntimeError("No active turn — send a regular prompt instead")
+        if not session.supports_prompt_queueing:
+            raise PermissionError(
+                f"Agent '{session.agent_id}' does not support prompt queueing"
+            )
+        assert session.connection is not None and session.acp_session_id is not None
+        session.transcript.append({"role": "user", "content": message})
+        session.extra_turns.append(
+            asyncio.create_task(
+                session.connection.prompt(session.acp_session_id, message)
+            )
+        )
+        session.last_activity = time.monotonic()
 
     # ── Harness switching (MCP quick-switch) ───────────────
 

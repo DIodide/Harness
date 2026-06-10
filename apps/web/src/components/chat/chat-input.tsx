@@ -1,3 +1,4 @@
+import { useAuth } from "@clerk/tanstack-react-start";
 import { useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
@@ -24,7 +25,12 @@ import React, {
 } from "react";
 import toast from "react-hot-toast";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
-import { AGENT_MODES, type AgentMode } from "../../lib/agent-mode";
+import {
+	AGENT_MODES,
+	type AgentMode,
+	getCachedAgentSessionId,
+	queueAgentPrompt,
+} from "../../lib/agent-mode";
 import {
 	CHAT_INPUT_COUNTER_THRESHOLD,
 	CHAT_INPUT_MAX_LENGTH,
@@ -173,6 +179,7 @@ export function ChatInput({
 	// Claude Code) instead of the Harness default loop. Usage is billed to
 	// the user's own agent account, so the budget gate doesn't apply.
 	const [agentMode, setAgentMode] = useState<AgentMode>("default");
+	const { getToken } = useAuth();
 	const { pendingPermissions, answerPermission } = useChatStreamContext();
 	const pendingPermission = conversationId
 		? pendingPermissions[conversationId]
@@ -323,8 +330,26 @@ export function ChatInput({
 		setDraft("");
 		clearAttachments();
 
-		// If streaming, just enqueue — don't interrupt
+		// If streaming: agents that support prompt queueing (Claude Code)
+		// accept the message immediately and run it after the current turn —
+		// no need to lock the conversation. Otherwise fall back to the
+		// client-side queue.
 		if (isStreaming && conversationId) {
+			if (agentMode !== "default") {
+				const sessionId = getCachedAgentSessionId(conversationId, agentMode);
+				if (sessionId) {
+					const token = await getToken({ template: "convex" });
+					if (await queueAgentPrompt(token, sessionId, content)) {
+						await sendMessage.mutateAsync({
+							conversationId,
+							role: "user",
+							content,
+							harnessId: activeHarness._id,
+						});
+						return;
+					}
+				}
+			}
 			onEnqueue(content);
 			return;
 		}
