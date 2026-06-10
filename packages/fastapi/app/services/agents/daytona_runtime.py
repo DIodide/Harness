@@ -210,7 +210,7 @@ def _wait_for_shim(
                 last_error = str(e)
             time.sleep(1.5)
 
-    # Pull the shim log for a useful error before giving up.
+    # Pull the shim log + the agent's buffered stderr for a useful error.
     shim_log = ""
     try:
         result = sandbox.process.exec(
@@ -219,9 +219,38 @@ def _wait_for_shim(
         shim_log = result.result or ""
     except Exception:
         pass
+    agent_stderr = _collect_agent_stderr(base_url, headers)
     raise RuntimeError(
-        f"ACP shim failed to become healthy: {last_error}\nshim log:\n{shim_log}"
+        f"ACP shim failed to become healthy: {last_error}\n"
+        f"shim log:\n{shim_log}\nagent output:\n{agent_stderr}"
     )
+
+
+def _collect_agent_stderr(
+    base_url: str, headers: dict[str, str], budget: float = 4.0,
+) -> str:
+    """Briefly read the shim's event stream to capture agent stderr/exit
+    lines buffered before the agent process died."""
+    lines: list[str] = []
+    try:
+        with httpx.Client(timeout=httpx.Timeout(budget, read=budget)) as http:
+            with http.stream(
+                "GET", f"{base_url}/events", params={"since": 0}, headers=headers,
+            ) as resp:
+                current_event = "message"
+                for raw in resp.iter_lines():
+                    line = raw.rstrip("\r")
+                    if line.startswith("event: "):
+                        current_event = line[7:]
+                    elif line.startswith("data: ") and current_event in (
+                        "stderr", "exit", "spawn_error",
+                    ):
+                        lines.append(f"[{current_event}] {line[6:]}")
+                    if len(lines) >= 40:
+                        break
+    except httpx.HTTPError:
+        pass  # read timeout simply ends collection
+    return "\n".join(lines) or "(none captured)"
 
 
 def teardown_sandbox(sandbox_id: str) -> None:

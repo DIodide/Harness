@@ -59,7 +59,9 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
     "claude-code": AgentDefinition(
         id="claude-code",
         name="Claude Code",
-        command=["/usr/local/bin/claude-agent-acp"],
+        # PATH lookup: npm global bin location depends on the node install
+        # (/usr/bin with nodesource, /usr/local/bin with the official image).
+        command=["claude-agent-acp"],
         env={},
     ),
 }
