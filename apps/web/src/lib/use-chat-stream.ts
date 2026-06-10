@@ -171,6 +171,33 @@ export interface ChatStreamRequest {
 	agent?: AgentMode;
 }
 
+/**
+ * Strip stream-only fields (messageId, locations, diff) and map camelCase
+ * parentId to the persisted parent_id before writing parts to Convex —
+ * the message validators reject unknown fields.
+ */
+export function toPersistableParts(parts: StreamPart[]): Array<{
+	type: "text" | "reasoning" | "tool_call";
+	content?: string;
+	tool?: string;
+	arguments?: Record<string, unknown>;
+	call_id?: string;
+	result?: string;
+	kind?: string;
+	parent_id?: string;
+}> {
+	return parts.map((part) => ({
+		type: part.type,
+		...(part.content !== undefined ? { content: part.content } : {}),
+		...(part.tool !== undefined ? { tool: part.tool } : {}),
+		...(part.arguments !== undefined ? { arguments: part.arguments } : {}),
+		...(part.call_id !== undefined ? { call_id: part.call_id } : {}),
+		...(part.result !== undefined ? { result: part.result } : {}),
+		...(part.kind !== undefined ? { kind: part.kind } : {}),
+		...(part.parentId ? { parent_id: part.parentId } : {}),
+	}));
+}
+
 function extractText(content: MessageContent): string {
 	if (typeof content === "string") return content;
 	return content

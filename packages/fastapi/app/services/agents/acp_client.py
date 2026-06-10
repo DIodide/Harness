@@ -285,13 +285,23 @@ class AcpConnection:
             timeout=60.0,
         )
 
-    async def new_session(self, cwd: str, mcp_servers: list[dict]) -> str:
-        result = await self.request(
+    async def new_session(self, cwd: str, mcp_servers: list[dict]) -> dict:
+        """Returns the full session/new result (sessionId, configOptions, modes)."""
+        return await self.request(
             "session/new",
             {"cwd": cwd, "mcpServers": mcp_servers},
             timeout=120.0,
         )
-        return result["sessionId"]
+
+    async def set_config_option(
+        self, session_id: str, config_id: str, value: str,
+    ) -> dict:
+        """session/set_config_option — model/mode/effort selection (ACP)."""
+        return await self.request(
+            "session/set_config_option",
+            {"sessionId": session_id, "configId": config_id, "value": value},
+            timeout=60.0,
+        )
 
     async def prompt(self, session_id: str, text: str, timeout: float = 1200.0) -> dict:
         return await self.request(

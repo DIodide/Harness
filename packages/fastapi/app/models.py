@@ -118,6 +118,11 @@ class AgentQueuePromptRequest(BaseModel):
     message: str
 
 
+class AgentConfigOptionRequest(BaseModel):
+    config_id: str  # e.g. "model", "mode", "effort"
+    value: str
+
+
 class AgentPermissionAnswer(BaseModel):
     request_id: str
     option_id: str | None = None

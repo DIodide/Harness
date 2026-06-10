@@ -57,6 +57,9 @@ class AgentSession:
     connection: AcpConnection | None = None
     acp_session_id: str | None = None
     agent_capabilities: dict = field(default_factory=dict)
+    # ACP session config options (model, mode, effort, ...) — generic across
+    # agents; the UI renders a selector per option.
+    config_options: list[dict] = field(default_factory=list)
     # Harness-side transcript for context replay across harness switches.
     transcript: list[dict] = field(default_factory=list)
     pending_replay: bool = False
@@ -199,6 +202,11 @@ def normalize_session_update(update: dict) -> dict | None:
                 **({"diff": diff} if diff else {}),
             },
         }
+    if kind == "config_option_update":
+        return {
+            "event": "config_update",
+            "data": {"options": update.get("configOptions") or []},
+        }
     if kind == "usage_update":
         # Context window + cost, billed to the user's own agent account.
         cost = update.get("cost") or {}
@@ -339,9 +347,11 @@ class AgentSessionManager:
             }
             for index, server in enumerate(servers)
         ]
-        session.acp_session_id = await session.connection.new_session(
+        result = await session.connection.new_session(
             cwd=SANDBOX_WORKSPACE, mcp_servers=acp_servers,
         )
+        session.acp_session_id = result["sessionId"]
+        session.config_options = result.get("configOptions") or []
 
     def _make_relay_handler(self, session: AgentSession):
         async def handle(payload: dict) -> None:
@@ -400,7 +410,12 @@ class AgentSessionManager:
                 return
             if params.get("sessionId") != session.acp_session_id:
                 return
-            event = normalize_session_update(params.get("update") or {})
+            update = params.get("update") or {}
+            # Keep session-level config state fresh even between turns (the
+            # event queue is only drained while a prompt streams).
+            if update.get("sessionUpdate") == "config_option_update":
+                session.config_options = update.get("configOptions") or []
+            event = normalize_session_update(update)
             if event is not None:
                 await session.event_queue.put(event)
 
@@ -603,6 +618,23 @@ class AgentSessionManager:
         session = self.get(session_id, user_id)
         if session.connection and session.acp_session_id:
             await session.connection.cancel(session.acp_session_id)
+
+    async def set_config_option(
+        self, session_id: str, user_id: str, config_id: str, value: str,
+    ) -> list[dict]:
+        """Change an ACP session config option (model, mode, effort, ...)."""
+        session = self.get(session_id, user_id)
+        if session.status == "provisioning":
+            await session.ready_event.wait()
+        if session.connection is None or session.acp_session_id is None:
+            raise RuntimeError(session.error or "Session is not ready")
+        result = await session.connection.set_config_option(
+            session.acp_session_id, config_id, value,
+        )
+        if result.get("configOptions") is not None:
+            session.config_options = result["configOptions"]
+        session.last_activity = time.monotonic()
+        return session.config_options
 
     async def queue_prompt(self, session_id: str, user_id: str, message: str) -> None:
         """Send an additional prompt onto an in-flight turn.

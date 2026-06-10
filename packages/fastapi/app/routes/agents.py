@@ -16,6 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.dependencies import get_current_user, get_http_client
 from app.models import (
+    AgentConfigOptionRequest,
     AgentCredentialStoreRequest,
     AgentPermissionAnswer,
     AgentPromptRequest,
@@ -65,6 +66,8 @@ def _session_payload(session) -> dict:
         "conversation_id": session.conversation_id,
         "harness_name": session.harness.name,
         "prompt_queueing": session.supports_prompt_queueing,
+        # ACP session config options (model, mode, ...) for selector UIs.
+        "config_options": session.config_options,
     }
 
 
@@ -277,6 +280,28 @@ async def answer_permission(
     except KeyError:
         raise HTTPException(status_code=404, detail="No such pending permission request")
     return {"ok": True}
+
+
+@router.post("/sessions/{session_id}/config")
+async def set_config_option(
+    session_id: str,
+    body: AgentConfigOptionRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Set an ACP session config option (session/set_config_option)."""
+    manager = get_session_manager()
+    try:
+        options = await manager.set_config_option(
+            session_id, user["sub"], body.config_id, body.value,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        # AcpError from the agent (invalid model id, unsupported option).
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"config_options": options}
 
 
 @router.post("/sessions/{session_id}/queue")

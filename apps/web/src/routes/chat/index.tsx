@@ -81,6 +81,7 @@ import {
 } from "../../lib/sandbox-panel-context";
 import type { SkillEntry } from "../../lib/skills";
 import type { BudgetExceededInfo } from "../../lib/use-chat-stream";
+import { toPersistableParts } from "../../lib/use-chat-stream";
 import { cn } from "../../lib/utils";
 
 export const Route = createFileRoute("/chat/")({
@@ -320,7 +321,9 @@ function ChatPage() {
 					...(completedToolCalls.length > 0
 						? { toolCalls: completedToolCalls }
 						: {}),
-					...(cleanedParts.length > 0 ? { parts: cleanedParts } : {}),
+					...(cleanedParts.length > 0
+						? { parts: toPersistableParts(cleanedParts) }
+						: {}),
 					...(state.usage ? { usage: state.usage } : {}),
 					...(model ? { model } : {}),
 				});

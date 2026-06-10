@@ -28,6 +28,7 @@ import { useFileAttachments } from "../../hooks/use-file-attachments";
 import {
 	AGENT_MODES,
 	type AgentMode,
+	flattenConfigChoices,
 	getCachedAgentSessionId,
 	queueAgentPrompt,
 } from "../../lib/agent-mode";
@@ -47,6 +48,7 @@ import {
 import { buildMultimodalContent } from "../../lib/multimodal";
 import type { SkillEntry } from "../../lib/skills";
 import { useAgentCatalog } from "../../lib/use-agent-catalog";
+import { useAgentSessionConfig } from "../../lib/use-agent-session-config";
 import { cn } from "../../lib/utils";
 import { AgentPermissionCard } from "../agent-permission-card";
 import { AttachmentChip } from "../attachment-chip";
@@ -190,6 +192,10 @@ export function ChatInput({
 		for (const entry of agentCatalog ?? []) map.set(entry.id, entry.available);
 		return map;
 	}, [agentCatalog]);
+	// ACP session config options (model, mode, ...) for the active agent
+	// session — populated once the session exists (after the first send).
+	const { options: agentConfigOptions, setOption: setAgentOption } =
+		useAgentSessionConfig(conversationId, agentMode);
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
@@ -776,6 +782,72 @@ export function ChatInput({
 							</DropdownMenuContent>
 						</DropdownMenu>
 					)}
+					{activeHarness &&
+						agentMode !== "default" &&
+						agentConfigOptions.map((option) => {
+							const choices = flattenConfigChoices(option);
+							if (choices.length === 0) return null;
+							const current = choices.find(
+								(c) => c.value === option.currentValue,
+							);
+							return (
+								<DropdownMenu key={option.id}>
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<DropdownMenuTrigger asChild>
+												<button
+													type="button"
+													className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+												>
+													<span className="max-w-[110px] truncate">
+														{current?.name ??
+															option.currentValue ??
+															option.name}
+													</span>
+													<ChevronDown size={10} />
+												</button>
+											</DropdownMenuTrigger>
+										</TooltipTrigger>
+										<TooltipContent>
+											{option.name} (applies to this agent session)
+										</TooltipContent>
+									</Tooltip>
+									<DropdownMenuContent
+										align="end"
+										className="max-h-72 overflow-y-auto"
+									>
+										{choices.map((choice) => (
+											<DropdownMenuItem
+												key={choice.value}
+												onClick={() =>
+													setAgentOption.mutate(
+														{ configId: option.id, value: choice.value },
+														{
+															onError: (error) => toast.error(error.message),
+														},
+													)
+												}
+												className="flex items-center gap-2"
+											>
+												{choice.value === option.currentValue ? (
+													<Check size={12} className="shrink-0" />
+												) : (
+													<span className="w-3 shrink-0" />
+												)}
+												<div className="flex flex-col">
+													<span>{choice.name ?? choice.value}</span>
+													{choice.description && (
+														<span className="max-w-[220px] text-[10px] text-muted-foreground">
+															{choice.description}
+														</span>
+													)}
+												</div>
+											</DropdownMenuItem>
+										))}
+									</DropdownMenuContent>
+								</DropdownMenu>
+							);
+						})}
 					{activeHarness && agentMode === "default" && (
 						<DropdownMenu>
 							<Tooltip>

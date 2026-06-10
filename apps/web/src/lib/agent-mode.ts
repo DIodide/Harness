@@ -182,6 +182,85 @@ export async function ensureAgentSession(
 	return payload.session_id;
 }
 
+/** One selectable value of an ACP session config option. */
+export interface AgentConfigChoice {
+	value: string;
+	name?: string;
+	description?: string;
+}
+
+/**
+ * ACP session config option (session/new → configOptions). Generic across
+ * agents: Claude Code exposes "model"/"mode"/"effort", other agents expose
+ * their own. Choice lists may be grouped one level deep.
+ */
+export interface AgentConfigOption {
+	id: string;
+	name: string;
+	currentValue?: string | null;
+	options?: Array<
+		AgentConfigChoice | { name?: string; options: AgentConfigChoice[] }
+	>;
+}
+
+export function flattenConfigChoices(
+	option: AgentConfigOption,
+): AgentConfigChoice[] {
+	const out: AgentConfigChoice[] = [];
+	for (const entry of option.options ?? []) {
+		if ("options" in entry && Array.isArray(entry.options)) {
+			out.push(...entry.options);
+		} else {
+			out.push(entry as AgentConfigChoice);
+		}
+	}
+	return out;
+}
+
+export interface AgentSessionInfo {
+	session_id: string;
+	status: string;
+	prompt_queueing?: boolean;
+	config_options?: AgentConfigOption[];
+}
+
+/** Fetch live session info (status, config options). Null when gone. */
+export async function fetchAgentSession(
+	token: string | null,
+	sessionId: string,
+): Promise<AgentSessionInfo | null> {
+	const response = await api(token, `/sessions/${sessionId}`);
+	if (!response.ok) return null;
+	return (await response.json()) as AgentSessionInfo;
+}
+
+/** session/set_config_option — returns the updated option list. */
+export async function setAgentConfigOption(
+	token: string | null,
+	sessionId: string,
+	configId: string,
+	value: string,
+): Promise<AgentConfigOption[]> {
+	const response = await api(token, `/sessions/${sessionId}/config`, {
+		method: "POST",
+		body: JSON.stringify({ config_id: configId, value }),
+	});
+	if (!response.ok) {
+		const detail = await response.text();
+		let message = detail;
+		try {
+			message = (JSON.parse(detail) as { detail?: string }).detail ?? detail;
+		} catch {
+			// keep raw text
+		}
+		throw new Error(message || `Failed to set ${configId}`);
+	}
+	const payload = (await response.json()) as {
+		config_options: AgentConfigOption[];
+	};
+	return payload.config_options;
+}
+
 /** Session id from the cache without any network round trip. */
 export function getCachedAgentSessionId(
 	conversationId: string,
