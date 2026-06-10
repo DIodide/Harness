@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 VALID_KINDS: dict[str, set[str]] = {
     "codex": {"auth_json", "api_key"},
     "claude-code": {"oauth_token", "api_key"},
-    "cursor": {"api_key"},
+    "cursor": {"auth_json", "api_key"},
 }
 
 MAX_SECRET_LENGTH = 32_768
@@ -84,10 +84,15 @@ def validate_secret(agent_id: str, kind: str, value: str) -> str | None:
             parsed = json.loads(value)
         except json.JSONDecodeError:
             return "auth.json must be valid JSON (paste the full file contents)"
-        if not isinstance(parsed, dict) or not (
-            "tokens" in parsed or "OPENAI_API_KEY" in parsed
-        ):
+        if not isinstance(parsed, dict):
+            return "auth.json must be a JSON object"
+        if agent_id == "codex" and not ("tokens" in parsed or "OPENAI_API_KEY" in parsed):
             return "This does not look like a codex auth.json (run `codex login` locally first)"
+        if agent_id == "cursor" and "accessToken" not in parsed:
+            return (
+                "This does not look like a cursor auth.json "
+                "(expected accessToken/refreshToken from `cursor-agent login`)"
+            )
     return None
 
 
@@ -166,6 +171,12 @@ def _to_agent_credentials(agent_id: str, kind: str, value: str) -> AgentCredenti
             )
         return AgentCredentials(files=files, env={"ANTHROPIC_API_KEY": value.strip()})
     if agent_id == "cursor":
+        if kind == "auth_json":
+            # cursor-agent's file-based auth store on Linux
+            # ({accessToken, refreshToken} from `cursor-agent login`).
+            return AgentCredentials(
+                files={f"{SANDBOX_HOME}/.config/cursor/auth.json": value}
+            )
         return AgentCredentials(env={"CURSOR_API_KEY": value.strip()})
     raise AgentCredentialsError(f"Unknown agent '{agent_id}'")
 

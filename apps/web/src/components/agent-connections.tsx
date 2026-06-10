@@ -92,7 +92,7 @@ export function ConnectForm({
 				<Textarea
 					value={value}
 					onChange={(e) => setValue(e.target.value)}
-					placeholder='{"auth_mode": "chatgpt", "tokens": { ... }}'
+					placeholder='Paste the contents of your auth.json — {"...": "..."}'
 					rows={4}
 					// field-sizing-fixed: the default field-sizing-content makes the
 					// textarea grow to fit pasted auth.json and blow out the dialog.

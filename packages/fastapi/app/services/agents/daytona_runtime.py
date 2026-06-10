@@ -253,6 +253,42 @@ def _collect_agent_stderr(
     return "\n".join(lines) or "(none captured)"
 
 
+def write_cursor_mcp_config(
+    sandbox_id: str, shim_port: int, servers: list,
+) -> None:
+    """Write ~/.cursor/{mcp.json,permissions.json} for the cursor agent.
+
+    Unlike codex/claude, `cursor-agent acp` does not connect to the MCP
+    servers passed in `session/new` — it loads them from its config file.
+    We point each at the same local relay endpoint (index-aligned with
+    session.relay_targets) and allowlist them so they load headlessly.
+    """
+    mcp_servers = {
+        server.name: {"url": f"http://127.0.0.1:{shim_port}/mcp/{index}"}
+        for index, server in enumerate(servers)
+    }
+    allowlist = [f"{server.name}:*" for server in servers]
+    sandbox = get_daytona_service()._get_client().get(sandbox_id)
+    cursor_dir = f"{SANDBOX_HOME}/.cursor"
+    _with_retries(
+        lambda: sandbox.fs.create_folder(cursor_dir, "0755"), "create .cursor",
+    )
+    _with_retries(
+        lambda: sandbox.fs.upload_file(
+            json.dumps({"mcpServers": mcp_servers}).encode(),
+            f"{cursor_dir}/mcp.json",
+        ),
+        "write cursor mcp.json",
+    )
+    _with_retries(
+        lambda: sandbox.fs.upload_file(
+            json.dumps({"mcpAllowlist": allowlist}).encode(),
+            f"{cursor_dir}/permissions.json",
+        ),
+        "write cursor permissions.json",
+    )
+
+
 def teardown_sandbox(sandbox_id: str) -> None:
     """Delete an agent sandbox (best-effort)."""
     try:

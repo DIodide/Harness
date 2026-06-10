@@ -68,8 +68,10 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
         id="cursor",
         name="Cursor",
         # Installed by the snapshot via cursor.com/install; `acp` speaks
-        # ACP over stdio (same adapter Zed/T3 use).
-        command=["/usr/local/bin/cursor-agent", "acp"],
+        # ACP over stdio (same adapter Zed/T3 use). `--force` auto-approves
+        # MCP servers so file-configured servers load headlessly (Cursor
+        # otherwise marks them "needs approval").
+        command=["/usr/local/bin/cursor-agent", "--force", "acp"],
         env={},
     ),
 }

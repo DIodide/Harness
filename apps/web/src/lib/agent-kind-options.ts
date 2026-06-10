@@ -39,6 +39,12 @@ export const KIND_OPTIONS: Record<string, KindOption[]> = {
 	],
 	cursor: [
 		{
+			kind: "auth_json",
+			label: "Cursor login (auth.json)",
+			hint: "Run `cursor-agent login` locally, then paste the contents of ~/.config/cursor/auth.json.",
+			multiline: true,
+		},
+		{
 			kind: "api_key",
 			label: "Cursor API key",
 			hint: "Create one at cursor.com → Dashboard → API Keys. Billed to your Cursor account.",

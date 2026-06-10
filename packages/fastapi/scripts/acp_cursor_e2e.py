@@ -46,18 +46,26 @@ PROMPT = (
 
 
 async def main() -> None:
+    auth_json_path = os.environ.get("CURSOR_AUTH_JSON_PATH", "")
     api_key = os.environ.get("CURSOR_API_KEY", "")
-    plumbing_only = not api_key
-    if plumbing_only:
+    if auth_json_path:
+        with open(auth_json_path, encoding="utf-8") as f:
+            kind, value = "auth_json", f.read()
+        plumbing_only = False
+    elif api_key:
+        kind, value = "api_key", api_key
+        plumbing_only = False
+    else:
         print(
-            "CURSOR_API_KEY not set — plumbing mode (expect an auth error "
-            "from cursor, not a successful turn)."
+            "No CURSOR_AUTH_JSON_PATH / CURSOR_API_KEY — plumbing mode "
+            "(expect an auth error from cursor, not a successful turn)."
         )
-        api_key = "dummy-key-for-plumbing-verification"
+        kind, value = "api_key", "dummy-key-for-plumbing-verification"
+        plumbing_only = True
 
     async with httpx.AsyncClient() as http:
-        await store_user_credential(http, USER, "cursor", "api_key", api_key)
-    print("Seeded encrypted cursor credential.")
+        await store_user_credential(http, USER, "cursor", kind, value)
+    print(f"Seeded encrypted cursor credential (kind={kind}).")
 
     manager = get_session_manager()
     session = await manager.create(

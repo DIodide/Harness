@@ -29,6 +29,7 @@ from app.config import settings
 from app.models import HarnessConfig, McpServer
 from app.services.agents.acp_client import AcpConnection, AcpError, AcpTransportError
 from app.services.agents.daytona_runtime import (
+    write_cursor_mcp_config,
     ProvisionedRuntime,
     provision_agent_sandbox,
     teardown_sandbox,
@@ -370,6 +371,16 @@ class AgentSessionManager:
             }
             for index, server in enumerate(servers)
         ]
+        # Cursor ignores session/new mcpServers — it loads MCP from its
+        # config file. Write that file (relay URLs + allowlist) before
+        # opening the session so the servers are present from the start.
+        if session.agent_id == "cursor" and session.runtime is not None:
+            await asyncio.to_thread(
+                write_cursor_mcp_config,
+                session.runtime.sandbox_id,
+                settings.acp_shim_port,
+                servers,
+            )
         result = await session.connection.new_session(
             cwd=SANDBOX_WORKSPACE, mcp_servers=acp_servers,
         )
