@@ -313,6 +313,29 @@ class AgentSessionManager:
             session.agent_capabilities = init.get("agentCapabilities") or {}
             await self._open_acp_session(session, user_ctx)
 
+            # Register in the sandboxes table so the agent's sandbox shows up
+            # in Manage Sandboxes and the existing terminal/file tooling works
+            # against it. Best-effort: a cap or Convex hiccup must not block
+            # the agent session.
+            try:
+                from app.services.convex import create_sandbox_record
+
+                await create_sandbox_record(
+                    self._http_client(),
+                    session.user_id,
+                    None,  # never hijack the harness's own sandbox slot
+                    session.runtime.sandbox_id,
+                    f"{agent.name} · agent session",
+                    "python",
+                    False,
+                    {"cpu": 2, "memoryGB": 4, "diskGB": 10},
+                )
+            except Exception as e:
+                logger.warning(
+                    "Could not register agent sandbox '%s' in Convex: %s",
+                    session.runtime.sandbox_id, e,
+                )
+
             session.status = "ready"
             logger.info(
                 "ACP session '%s' ready (agent=%s, acp_session=%s)",
@@ -697,6 +720,15 @@ class AgentSessionManager:
             await session.connection.close()
         if session.runtime:
             await asyncio.to_thread(teardown_sandbox, session.runtime.sandbox_id)
+            # Drop the Manage Sandboxes record for the deleted sandbox.
+            from app.services.convex import ConvexMutationError, run_convex_mutation
+
+            with contextlib.suppress(ConvexMutationError):
+                await run_convex_mutation(
+                    self._http_client(),
+                    "sandboxes:removeByDaytonaId",
+                    {"daytonaSandboxId": session.runtime.sandbox_id},
+                )
 
     def _ensure_reaper(self) -> None:
         if self._reaper_task is None or self._reaper_task.done():

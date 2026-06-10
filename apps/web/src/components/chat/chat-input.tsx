@@ -8,9 +8,12 @@ import {
 	Bot,
 	Check,
 	ChevronDown,
+	Cpu,
+	Gauge,
 	Mic,
 	Paperclip,
 	RotateCcw,
+	Shield,
 	SlidersHorizontal,
 	Square,
 	X,
@@ -64,6 +67,22 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+
+/** Icon for an ACP config option chip, keyed by conventional option ids. */
+function agentOptionIcon(optionId: string) {
+	const className = "shrink-0";
+	switch (optionId) {
+		case "model":
+			return <Cpu size={11} className={className} />;
+		case "mode":
+			return <Shield size={11} className={className} />;
+		case "effort":
+		case "reasoning_effort":
+			return <Gauge size={11} className={className} />;
+		default:
+			return <SlidersHorizontal size={11} className={className} />;
+	}
+}
 
 export function ChatInput({
 	conversationId,
@@ -198,18 +217,6 @@ export function ChatInput({
 	// session — populated once the session exists (after the first send).
 	const { options: agentConfigOptions, setOption: setAgentOption } =
 		useAgentSessionConfig(conversationId, agentMode);
-	const agentOptionsSummary = useMemo(() => {
-		const model = agentConfigOptions.find((o) => o.id === "model");
-		if (model) {
-			const current = flattenConfigChoices(model).find(
-				(c) => c.value === model.currentValue,
-			);
-			return current?.name ?? model.currentValue ?? "Options";
-		}
-		const first = agentConfigOptions[0];
-		if (!first) return "Options";
-		return first.currentValue ?? first.name;
-	}, [agentConfigOptions]);
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
@@ -799,84 +806,80 @@ export function ChatInput({
 								</DropdownMenuContent>
 							</DropdownMenu>
 						)}
-						{/* Agent session options (model, mode, effort, ...) in one
-						    compact menu — the trigger shows the active model. */}
+						{/* Agent session options — one labeled selector per option
+					    (model, mode, effort, ...), straight from ACP configOptions. */}
 						{activeHarness &&
 							agentMode !== "default" &&
-							agentConfigOptions.length > 0 && (
-								<DropdownMenu>
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<DropdownMenuTrigger asChild>
-												<button
-													type="button"
-													className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+							agentConfigOptions.map((option) => {
+								const choices = flattenConfigChoices(option);
+								if (choices.length === 0) return null;
+								const current = choices.find(
+									(c) => c.value === option.currentValue,
+								);
+								return (
+									<DropdownMenu key={option.id}>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<DropdownMenuTrigger asChild>
+													<button
+														type="button"
+														className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+													>
+														{agentOptionIcon(option.id)}
+														<span className="max-w-[100px] truncate">
+															{current?.name ??
+																option.currentValue ??
+																option.name}
+														</span>
+														<ChevronDown size={10} />
+													</button>
+												</DropdownMenuTrigger>
+											</TooltipTrigger>
+											<TooltipContent>
+												{option.name} — applies to this agent session
+											</TooltipContent>
+										</Tooltip>
+										<DropdownMenuContent
+											align="end"
+											className="max-h-72 w-52 overflow-y-auto"
+										>
+											<DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+												{option.name}
+											</DropdownMenuLabel>
+											{choices.map((choice) => (
+												<DropdownMenuItem
+													key={choice.value}
+													onClick={() =>
+														setAgentOption.mutate(
+															{ configId: option.id, value: choice.value },
+															{
+																onError: (error) => toast.error(error.message),
+															},
+														)
+													}
+													className="flex items-center gap-2"
 												>
-													<SlidersHorizontal size={11} className="shrink-0" />
-													<span className="max-w-[110px] truncate">
-														{agentOptionsSummary}
-													</span>
-													<ChevronDown size={10} />
-												</button>
-											</DropdownMenuTrigger>
-										</TooltipTrigger>
-										<TooltipContent>
-											Agent session options (model, mode, effort)
-										</TooltipContent>
-									</Tooltip>
-									<DropdownMenuContent
-										align="end"
-										className="max-h-80 w-56 overflow-y-auto"
-									>
-										{agentConfigOptions.map((option, optionIdx) => {
-											const choices = flattenConfigChoices(option);
-											if (choices.length === 0) return null;
-											return (
-												<React.Fragment key={option.id}>
-													{optionIdx > 0 && <DropdownMenuSeparator />}
-													<DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-														{option.name}
-													</DropdownMenuLabel>
-													{choices.map((choice) => (
-														<DropdownMenuItem
-															key={`${option.id}-${choice.value}`}
-															onClick={() =>
-																setAgentOption.mutate(
-																	{
-																		configId: option.id,
-																		value: choice.value,
-																	},
-																	{
-																		onError: (error) =>
-																			toast.error(error.message),
-																	},
-																)
-															}
-															className="flex items-center gap-2"
-														>
-															{choice.value === option.currentValue ? (
-																<Check size={12} className="shrink-0" />
-															) : (
-																<span className="w-3 shrink-0" />
-															)}
-															<div className="flex min-w-0 flex-col">
-																<span className="truncate">
-																	{choice.name ?? choice.value}
-																</span>
-																{choice.description && (
-																	<span className="max-w-[200px] truncate text-[10px] text-muted-foreground">
-																		{choice.description}
-																	</span>
-																)}
-															</div>
-														</DropdownMenuItem>
-													))}
-												</React.Fragment>
-											);
-										})}
-									</DropdownMenuContent>
-								</DropdownMenu>
-							)}
+													{choice.value === option.currentValue ? (
+														<Check size={12} className="shrink-0" />
+													) : (
+														<span className="w-3 shrink-0" />
+													)}
+													<div className="flex min-w-0 flex-col">
+														<span className="truncate">
+															{choice.name ?? choice.value}
+														</span>
+														{choice.description && (
+															<span className="max-w-[200px] truncate text-[10px] text-muted-foreground">
+																{choice.description}
+															</span>
+														)}
+													</div>
+												</DropdownMenuItem>
+											))}
+										</DropdownMenuContent>
+									</DropdownMenu>
+								);
+							})}
 						{activeHarness && agentMode === "default" && (
 							<DropdownMenu>
 								<Tooltip>
