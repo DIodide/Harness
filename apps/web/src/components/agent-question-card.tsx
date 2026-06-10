@@ -1,4 +1,4 @@
-import { Check, MessageCircleQuestion } from "lucide-react";
+import { ArrowLeft, Check, MessageCircleQuestion } from "lucide-react";
 import { useMemo, useState } from "react";
 import type {
 	AgentQuestionAction,
@@ -11,53 +11,50 @@ import { Input } from "./ui/input";
 
 /**
  * First-class rendering for agent questions (Claude Code's AskUserQuestion,
- * MCP form elicitations). Single-question prompts answer on tap; multi-part
- * forms collect everything and submit together. "Skip" tells the agent the
- * user passed (the turn continues) — only Dismiss aborts the asking tool.
+ * MCP form elicitations), presented ONE QUESTION AT A TIME so a multi-part
+ * form never takes over the screen. Tapping a single-select option answers
+ * and advances; the last answer submits everything. "Skip" tells the agent
+ * the user passed (the turn continues) — only Dismiss aborts the tool.
  */
 
 type AnswerValue = string | string[] | boolean;
 
-function SelectField({
-	field,
-	value,
-	onChange,
-}: {
+interface Step {
 	field: AgentQuestionField;
-	value: AnswerValue | undefined;
-	onChange: (value: AnswerValue) => void;
+	/** boolean fields are presented as Yes/No selects */
+	options: Array<{ value: string; label: string }>;
+	multi: boolean;
+}
+
+function OptionButtons({
+	step,
+	selected,
+	onToggle,
+}: {
+	step: Step;
+	selected: Set<string>;
+	onToggle: (value: string) => void;
 }) {
-	const multi = field.kind === "multiselect";
-	const selected = new Set(
-		multi ? ((value as string[]) ?? []) : value ? [value as string] : [],
-	);
 	return (
-		<div className="flex flex-wrap gap-1.5">
-			{(field.options ?? []).map((option) => {
+		<div className="flex flex-col gap-1.5">
+			{step.options.map((option) => {
 				const isOn = selected.has(option.value);
 				return (
 					<button
 						key={option.value}
 						type="button"
-						onClick={() => {
-							if (multi) {
-								const next = new Set(selected);
-								if (isOn) next.delete(option.value);
-								else next.add(option.value);
-								onChange([...next]);
-							} else {
-								onChange(isOn ? "" : option.value);
-							}
-						}}
+						onClick={() => onToggle(option.value)}
 						className={cn(
-							"flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-left text-xs transition-colors",
+							"flex w-full items-start gap-1.5 rounded-md border px-2.5 py-1.5 text-left text-xs transition-colors",
 							isOn
 								? "border-foreground bg-foreground text-background"
 								: "border-border bg-background text-foreground hover:border-foreground/40",
 						)}
 					>
-						{isOn && <Check size={11} className="shrink-0" />}
-						<span className="max-w-[340px]">{option.label}</span>
+						<span className="mt-0.5 w-3 shrink-0">
+							{isOn && <Check size={11} />}
+						</span>
+						<span className="min-w-0">{option.label}</span>
 					</button>
 				);
 			})}
@@ -76,156 +73,209 @@ export function AgentQuestionCard({
 	) => void;
 }) {
 	const [answers, setAnswers] = useState<Record<string, AnswerValue>>({});
+	const [stepIndex, setStepIndex] = useState(0);
+	const [showOther, setShowOther] = useState(false);
+	const [otherText, setOtherText] = useState("");
 
-	const selectFields = useMemo(
+	// Choice questions become wizard steps; free-text fields (Claude's
+	// trailing "customAnswer") stay form-global behind the "Other…" toggle.
+	const steps = useMemo<Step[]>(
 		() =>
-			request.fields.filter(
-				(f) => f.kind === "select" || f.kind === "multiselect",
-			),
+			request.fields
+				.filter((f) => f.kind !== "text")
+				.map((field) => ({
+					field,
+					multi: field.kind === "multiselect",
+					options:
+						field.kind === "boolean"
+							? [
+									{ value: "true", label: "Yes" },
+									{ value: "false", label: "No" },
+								]
+							: (field.options ?? []),
+				})),
 		[request.fields],
 	);
 	const textFields = useMemo(
 		() => request.fields.filter((f) => f.kind === "text"),
 		[request.fields],
 	);
-	const booleanFields = useMemo(
-		() => request.fields.filter((f) => f.kind === "boolean"),
-		[request.fields],
-	);
+	const step = steps[stepIndex];
+	const isLastStep = stepIndex >= steps.length - 1;
 
-	// One single-select question and no typed text → answering on tap feels
-	// like the CLI; otherwise collect and submit.
-	const hasTypedText = textFields.some(
-		(f) =>
-			typeof answers[f.key] === "string" && (answers[f.key] as string).trim(),
-	);
-	const tapToAnswer =
-		selectFields.length === 1 &&
-		selectFields[0].kind === "select" &&
-		booleanFields.length === 0 &&
-		!hasTypedText;
-
-	const submit = (content: Record<string, AnswerValue>) => {
-		const clean: Record<string, AnswerValue> = {};
-		for (const [key, value] of Object.entries(content)) {
+	const buildContent = (
+		current: Record<string, AnswerValue>,
+	): Record<string, AnswerValue> => {
+		const content: Record<string, AnswerValue> = {};
+		for (const [key, value] of Object.entries(current)) {
 			if (typeof value === "string" && !value.trim()) continue;
 			if (Array.isArray(value) && value.length === 0) continue;
-			clean[key] = value;
+			content[key] = value;
 		}
-		onAnswer("accept", clean);
+		// Free text goes to the first text field (Claude has exactly one).
+		const textKey = textFields[0]?.key;
+		if (textKey && otherText.trim()) content[textKey] = otherText.trim();
+		return content;
 	};
 
-	const hasAnyAnswer = Object.entries(answers).some(([, value]) =>
-		typeof value === "string"
-			? value.trim() !== ""
-			: Array.isArray(value)
-				? value.length > 0
-				: true,
+	const submit = (current: Record<string, AnswerValue>) =>
+		onAnswer("accept", buildContent(current));
+
+	const answerStep = (value: AnswerValue) => {
+		if (!step) return;
+		const next = { ...answers, [step.field.key]: value };
+		setAnswers(next);
+		if (isLastStep) {
+			submit(next);
+		} else {
+			setStepIndex((i) => i + 1);
+			setShowOther(false);
+		}
+	};
+
+	const selectedInStep = new Set<string>(
+		step
+			? step.field.kind === "boolean"
+				? answers[step.field.key] === undefined
+					? []
+					: [String(answers[step.field.key])]
+				: step.multi
+					? ((answers[step.field.key] as string[]) ?? [])
+					: answers[step.field.key]
+						? [answers[step.field.key] as string]
+						: []
+			: [],
 	);
+
+	const multiSelections = (answers[step?.field.key ?? ""] as string[]) ?? [];
 
 	return (
 		<div className="mb-2 min-w-0 rounded-lg border border-border bg-muted/30 p-3">
 			<div className="flex items-center gap-2 text-xs font-medium text-foreground">
 				<MessageCircleQuestion size={14} className="shrink-0" />
-				<span>{request.message || "The agent has a question"}</span>
+				<span className="min-w-0 flex-1 truncate">
+					{request.message || "The agent has a question"}
+				</span>
+				{steps.length > 1 && (
+					<span className="shrink-0 text-[10px] text-muted-foreground">
+						{Math.min(stepIndex + 1, steps.length)} of {steps.length}
+					</span>
+				)}
 			</div>
 
-			<div className="mt-2 space-y-3">
-				{request.fields.map((field) => {
-					if (field.kind === "select" || field.kind === "multiselect") {
-						return (
-							<div key={field.key} className="min-w-0">
-								{(field.title || field.description) && (
-									<p className="mb-1.5 text-[11px] text-muted-foreground">
-										{field.title && (
-											<span className="font-medium text-foreground">
-												{field.title}
-											</span>
-										)}
-										{field.title && field.description && " — "}
-										{field.description}
-									</p>
+			<div className="mt-2 max-h-[40vh] min-w-0 space-y-2 overflow-y-auto">
+				{step ? (
+					<>
+						{(step.field.title || step.field.description) && (
+							<p className="text-[11px] text-muted-foreground">
+								{step.field.title && (
+									<span className="font-medium text-foreground">
+										{step.field.title}
+									</span>
 								)}
-								<SelectField
-									field={field}
-									value={answers[field.key]}
-									onChange={(value) => {
-										if (tapToAnswer && typeof value === "string" && value) {
-											submit({ ...answers, [field.key]: value });
-											return;
-										}
-										setAnswers((prev) => ({ ...prev, [field.key]: value }));
-									}}
-								/>
-							</div>
-						);
-					}
-					if (field.kind === "boolean") {
-						return (
-							<div key={field.key} className="min-w-0">
-								<p className="mb-1.5 text-[11px] font-medium text-foreground">
-									{field.title ?? field.key}
-								</p>
-								<SelectField
-									field={{
-										...field,
-										kind: "select",
-										options: [
-											{ value: "true", label: "Yes" },
-											{ value: "false", label: "No" },
-										],
-									}}
-									value={
-										answers[field.key] === undefined
-											? undefined
-											: String(answers[field.key])
-									}
-									onChange={(value) =>
-										setAnswers((prev) => ({
-											...prev,
-											[field.key]: value === "true",
-										}))
-									}
-								/>
-							</div>
-						);
-					}
-					return (
-						<div key={field.key} className="min-w-0">
-							<Input
-								value={(answers[field.key] as string) ?? ""}
-								onChange={(e) =>
+								{step.field.title && step.field.description && " — "}
+								{step.field.description}
+							</p>
+						)}
+						<OptionButtons
+							step={step}
+							selected={selectedInStep}
+							onToggle={(value) => {
+								if (step.field.kind === "boolean") {
+									answerStep(value === "true");
+								} else if (step.multi) {
+									const next = new Set(multiSelections);
+									if (next.has(value)) next.delete(value);
+									else next.add(value);
 									setAnswers((prev) => ({
 										...prev,
-										[field.key]: e.target.value,
-									}))
+										[step.field.key]: [...next],
+									}));
+								} else {
+									answerStep(value);
 								}
-								onKeyDown={(e) => {
-									if (e.key === "Enter" && hasAnyAnswer) submit(answers);
-								}}
-								placeholder={
-									field.title === "Other"
-										? "Or type your own answer…"
-										: (field.title ?? field.description ?? "Your answer…")
-								}
-								className="h-8 text-xs"
-							/>
-						</div>
-					);
-				})}
+							}}
+						/>
+					</>
+				) : (
+					// No choice questions (pure text elicitation).
+					textFields.length === 0 && (
+						<p className="text-[11px] text-muted-foreground">
+							No structured options — type an answer below.
+						</p>
+					)
+				)}
+
+				{(showOther || !step) && (
+					<Input
+						autoFocus={showOther}
+						value={otherText}
+						onChange={(e) => setOtherText(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter" && otherText.trim()) submit(answers);
+						}}
+						placeholder="Type your own answer…"
+						className="h-8 text-xs"
+					/>
+				)}
 			</div>
 
-			<div className="mt-3 flex flex-wrap items-center gap-2">
-				{!tapToAnswer && (
+			<div className="mt-2.5 flex flex-wrap items-center gap-2">
+				{stepIndex > 0 && (
+					<Button
+						size="sm"
+						variant="ghost"
+						className="h-7 px-2 text-xs text-muted-foreground"
+						onClick={() => {
+							setStepIndex((i) => Math.max(0, i - 1));
+							setShowOther(false);
+						}}
+					>
+						<ArrowLeft size={11} />
+						Back
+					</Button>
+				)}
+				{step?.multi && (
 					<Button
 						size="sm"
 						className="h-7 text-xs"
-						disabled={!hasAnyAnswer}
+						disabled={multiSelections.length === 0 && !otherText.trim()}
+						onClick={() => answerStep(multiSelections)}
+					>
+						{isLastStep ? "Submit" : "Next"}
+					</Button>
+				)}
+				{!step && (
+					<Button
+						size="sm"
+						className="h-7 text-xs"
+						disabled={!otherText.trim()}
 						onClick={() => submit(answers)}
 					>
 						Submit
 					</Button>
 				)}
+				{step && !showOther && textFields.length > 0 && (
+					<Button
+						size="sm"
+						variant="outline"
+						className="h-7 text-xs"
+						onClick={() => setShowOther(true)}
+					>
+						Other…
+					</Button>
+				)}
+				{step && showOther && (
+					<Button
+						size="sm"
+						className="h-7 text-xs"
+						disabled={!otherText.trim()}
+						onClick={() => submit(answers)}
+					>
+						Submit
+					</Button>
+				)}
+				<div className="flex-1" />
 				<Button
 					size="sm"
 					variant="outline"
