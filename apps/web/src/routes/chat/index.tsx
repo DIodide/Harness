@@ -40,6 +40,7 @@ import {
 } from "../../components/chat/chat-misc";
 import { SettingsDialog } from "../../components/chat/settings-dialog";
 import { useChatPaletteCommands } from "../../components/command-palette/commands/chat-commands";
+import { HarnessAgentBadge } from "../../components/harness-agent-badge";
 import { HarnessMark } from "../../components/harness-mark";
 import { HeaderSkillsMenu } from "../../components/header-skills-menu";
 import {
@@ -1079,17 +1080,17 @@ function ChatPage() {
 							parameters: JSON.parse(c?.parametersJson),
 						}))}
 						sessionModel={
-							userSettings?.modelSelectorMode === "harness"
+							(userSettings?.chatConfigScope ?? "harness") === "harness"
 								? null
 								: sessionModel
 						}
 						modelSelectorMode={
-							(userSettings?.modelSelectorMode as "session" | "harness") ??
-							"session"
+							(userSettings?.chatConfigScope as "session" | "harness") ??
+							"harness"
 						}
 						onSessionModelChange={(model) => {
 							if (
-								userSettings?.modelSelectorMode === "harness" &&
+								(userSettings?.chatConfigScope ?? "harness") === "harness" &&
 								model !== null &&
 								activeHarnessId &&
 								model !== activeHarness?.model
@@ -1542,6 +1543,8 @@ function ChatHeader({
 		name: string;
 		model: string;
 		status: string;
+		agent?: string;
+		agentCredentialId?: string;
 		mcpServers: Array<{
 			name: string;
 			url: string;
@@ -1609,6 +1612,12 @@ function ChatHeader({
 									<Cpu size={8} />
 									{harness.model}
 								</Badge>
+							)}
+							{harness && (
+								<HarnessAgentBadge
+									agent={harness.agent}
+									agentCredentialId={harness.agentCredentialId}
+								/>
 							)}
 							<ChevronDown size={12} className="text-muted-foreground" />
 						</Button>

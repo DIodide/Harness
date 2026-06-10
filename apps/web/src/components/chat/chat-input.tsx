@@ -129,6 +129,8 @@ export function ChatInput({
 		}>;
 		skills: SkillEntry[];
 		systemPrompt?: string;
+		agent?: string;
+		agentCredentialId?: string;
 		sandboxEnabled?: boolean;
 		daytonaSandboxId?: string;
 		sandboxConfig?: {
@@ -204,10 +206,41 @@ export function ChatInput({
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [isDragOver, setIsDragOver] = useState(false);
 
-	// ACP agent mode: route turns through an external agent (Codex CLI,
-	// Claude Code) instead of the Harness default loop. Usage is billed to
-	// the user's own agent account, so the budget gate doesn't apply.
-	const [agentMode, setAgentMode] = useState<AgentMode>("default");
+	// ACP agent mode: the agent loop is HARNESS configuration
+	// (activeHarness.agent). In-chat switches update the harness by default
+	// (chatConfigScope === "harness"); with the session-only setting they
+	// live in sessionAgent and reset when the harness changes. Usage is
+	// billed to the user's own agent account, so the budget gate doesn't
+	// apply in agent mode.
+	const [sessionAgent, setSessionAgent] = useState<AgentMode | null>(null);
+	const harnessAgent: AgentMode =
+		activeHarness?.agent && activeHarness.agent !== "default"
+			? (activeHarness.agent as AgentMode)
+			: "default";
+	const agentMode: AgentMode = sessionAgent ?? harnessAgent;
+	const updateHarnessAgentFn = useConvexMutation(api.harnesses.update);
+	const updateHarnessAgent = useMutation({
+		mutationFn: updateHarnessAgentFn,
+		onError: (error) =>
+			toast.error(
+				error instanceof Error ? error.message : "Could not update harness",
+			),
+	});
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset override when harness changes
+	useEffect(() => {
+		setSessionAgent(null);
+	}, [activeHarness?._id]);
+	const setAgentMode = (value: AgentMode) => {
+		if (modelSelectorMode === "harness" && activeHarness) {
+			updateHarnessAgent.mutate({
+				id: activeHarness._id,
+				agent: value,
+			});
+			setSessionAgent(null);
+		} else {
+			setSessionAgent(value);
+		}
+	};
 	const { getToken } = useAuth();
 	const { pendingPermissions, answerPermission } = useChatStreamContext();
 	const pendingPermission = conversationId
@@ -434,6 +467,14 @@ export function ChatInput({
 			name: activeHarness.name,
 			harness_id: activeHarness._id,
 			system_prompt: activeHarness.systemPrompt ?? undefined,
+			agent: agentMode !== "default" ? agentMode : undefined,
+			// Only pass the harness's credential when the active agent matches
+			// it — a session-level agent override falls back to the user's
+			// newest credential for that agent.
+			agent_credential_id:
+				agentMode !== "default" && agentMode === harnessAgent
+					? activeHarness.agentCredentialId
+					: undefined,
 			sandbox_enabled: Boolean(resolvedSandboxId),
 			sandbox_id: resolvedSandboxId,
 			sandbox_config: activeHarness.sandboxConfig
@@ -778,8 +819,12 @@ export function ChatInput({
 							}}
 							onKeyDown={handleKeyDown}
 							onPaste={handlePaste}
-							placeholder={placeholder}
-							disabled={disabled}
+							placeholder={
+								activeHarness
+									? placeholder
+									: "Select a harness to start chatting"
+							}
+							disabled={disabled || !activeHarness}
 							rows={1}
 							maxLength={CHAT_INPUT_MAX_LENGTH}
 							className="max-h-[200px] min-h-[24px] w-full resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
@@ -867,7 +912,7 @@ export function ChatInput({
 													<span>{agentOption.label}</span>
 													<span className="text-[10px] text-muted-foreground">
 														{unavailable
-															? "Connect in Settings → Agent Connections"
+															? "Add a credential first (harness settings or Settings → Agent Credentials)"
 															: agentOption.description}
 													</span>
 												</div>
@@ -920,14 +965,27 @@ export function ChatInput({
 											{choices.map((choice) => (
 												<DropdownMenuItem
 													key={choice.value}
-													onClick={() =>
+													onClick={() => {
 														setAgentOption.mutate(
 															{ configId: option.id, value: choice.value },
 															{
 																onError: (error) => toast.error(error.message),
 															},
-														)
-													}
+														);
+														// Harness-scope chat changes persist the model
+														// to the harness itself (session opt-out only).
+														if (
+															option.id === "model" &&
+															modelSelectorMode === "harness" &&
+															activeHarness &&
+															choice.value !== activeHarness.model
+														) {
+															updateHarnessAgent.mutate({
+																id: activeHarness._id,
+																model: choice.value,
+															});
+														}
+													}}
 													className="flex items-center gap-2"
 												>
 													{choice.value === option.currentValue ? (
@@ -1026,6 +1084,7 @@ export function ChatInput({
 									disabled={
 										!showStopButton &&
 										(disabled ||
+											!activeHarness ||
 											(budgetExceeded && agentMode === "default") ||
 											!text.trim() ||
 											hasUploading ||
