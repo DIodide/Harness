@@ -1,6 +1,7 @@
-import { SignUp } from "@clerk/tanstack-react-start";
-import { createFileRoute } from "@tanstack/react-router";
+import { SignUp, useAuth } from "@clerk/tanstack-react-start";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { motion } from "motion/react";
+import { useEffect } from "react";
 
 import { HarnessMark } from "../components/harness-mark";
 
@@ -9,6 +10,17 @@ export const Route = createFileRoute("/sign-up")({
 });
 
 function SignUpPage() {
+	// Already signed in (e.g. bounced here during the post-auth cookie
+	// race)? Go straight to the app instead of letting Clerk fall back
+	// to the landing page.
+	const { isLoaded, isSignedIn } = useAuth();
+	const navigate = useNavigate();
+	useEffect(() => {
+		if (isLoaded && isSignedIn) {
+			navigate({ to: "/app", replace: true });
+		}
+	}, [isLoaded, isSignedIn, navigate]);
+
 	return (
 		<div className="flex min-h-screen">
 			<div className="hidden flex-col justify-between bg-foreground p-12 text-background lg:flex lg:w-1/2">

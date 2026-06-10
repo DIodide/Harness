@@ -22,7 +22,8 @@ describe("userSettings.get", () => {
 			autoSwitchHarness: true,
 			displayMode: "standard",
 			modelSelectorMode: "session",
-			workspacesMode: "basic",
+			chatConfigScope: "harness",
+			workspacesMode: "workspaces",
 		});
 	});
 
@@ -46,6 +47,7 @@ describe("userSettings.get", () => {
 			autoSwitchHarness: false,
 			displayMode: "developer",
 			modelSelectorMode: "harness",
+			chatConfigScope: "harness",
 			workspacesMode: "workspaces",
 		});
 	});
@@ -86,5 +88,31 @@ describe("userSettings.update", () => {
 		await a.mutation(api.userSettings.update, {}); // no-op
 		const settings = await a.query(api.userSettings.get, {});
 		expect(settings.displayMode).toBe("zen");
+	});
+});
+
+describe("userSettings.chatConfigScope legacy fallback", () => {
+	it("keeps session scope for rows that predate chatConfigScope", async () => {
+		const { raw, asUser } = makeT();
+		// Legacy row: explicit modelSelectorMode, no chatConfigScope field.
+		await raw.run(async (ctx) => {
+			await ctx.db.insert("userSettings", {
+				userId: "legacy-user",
+				autoSwitchHarness: true,
+				modelSelectorMode: "session",
+			});
+		});
+		const settings = await asUser("legacy-user").query(api.userSettings.get, {});
+		expect(settings.chatConfigScope).toBe("session");
+	});
+
+	it("explicit chatConfigScope wins over the legacy field", async () => {
+		const a = makeT().asUser("user-x");
+		await a.mutation(api.userSettings.update, {
+			modelSelectorMode: "session",
+			chatConfigScope: "harness",
+		});
+		const settings = await a.query(api.userSettings.get, {});
+		expect(settings.chatConfigScope).toBe("harness");
 	});
 });

@@ -53,6 +53,8 @@ export const create = mutation({
 		mcpServers: v.array(mcpServerValidator),
 		skills: v.array(v.object({ name: v.string(), description: v.string() })),
 		systemPrompt: v.optional(v.string()),
+		agent: v.optional(v.string()),
+		agentCredentialId: v.optional(v.id("agentCredentials")),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxConfig: v.optional(
 			v.object({
@@ -98,6 +100,8 @@ export const update = mutation({
 		skills: v.optional(v.array(v.object({ name: v.string(), description: v.string() }))),
 		systemPrompt: v.optional(v.string()),
 		suggestedPrompts: v.optional(v.array(v.string())),
+		agent: v.optional(v.string()),
+		agentCredentialId: v.optional(v.id("agentCredentials")),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxId: v.optional(v.id("sandboxes")),
 		daytonaSandboxId: v.optional(v.string()),
@@ -129,6 +133,18 @@ export const update = mutation({
 		const filtered = Object.fromEntries(
 			Object.entries(updates).filter(([, v]) => v !== undefined),
 		);
+		// Credentials are agent-specific: switching the agent without
+		// explicitly linking a new credential must unlink the old agent's
+		// (FastAPI rejects mismatched links; with none it falls back to the
+		// user's newest credential for the new agent).
+		if (
+			args.agent !== undefined &&
+			args.agent !== harness.agent &&
+			args.agentCredentialId === undefined
+		) {
+			await ctx.db.patch(id, { ...filtered, agentCredentialId: undefined });
+			return;
+		}
 		await ctx.db.patch(id, filtered);
 	},
 });
@@ -149,6 +165,12 @@ export const duplicate = mutation({
 			mcpServers: harness.mcpServers,
 			skills: harness.skills,
 			systemPrompt: harness.systemPrompt,
+			// The agent loop and its credential are part of what the user
+			// is duplicating — dropping them silently turned the copy into
+			// a default-loop harness with an agent-only model id.
+			agent: harness.agent,
+			agentCredentialId: harness.agentCredentialId,
+			suggestedPrompts: harness.suggestedPrompts,
 			userId: identity.subject,
 			lastUsedAt: Date.now(),
 		});

@@ -74,7 +74,12 @@ export function modelSupportsAudio(model: string | undefined): boolean {
 
 // ── MIME mappings ────────────────────────────────────────────────────
 
-const IMAGE_MIMES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+export const IMAGE_MIMES = [
+	"image/png",
+	"image/jpeg",
+	"image/gif",
+	"image/webp",
+];
 const PDF_MIMES = ["application/pdf"];
 const AUDIO_MIMES = [
 	"audio/wav",

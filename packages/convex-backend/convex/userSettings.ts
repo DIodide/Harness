@@ -5,7 +5,8 @@ const DEFAULTS = {
 	autoSwitchHarness: true,
 	displayMode: "standard" as const,
 	modelSelectorMode: "session" as const,
-	workspacesMode: "basic" as const,
+	chatConfigScope: "harness" as const,
+	workspacesMode: "workspaces" as const,
 } as const;
 
 export const get = query({
@@ -24,7 +25,16 @@ export const get = query({
 			autoSwitchHarness: settings.autoSwitchHarness,
 			displayMode: settings.displayMode ?? "standard",
 			modelSelectorMode: settings.modelSelectorMode ?? "session",
-			workspacesMode: settings.workspacesMode ?? "basic"
+			// In-chat config changes (model/agent/modes) default to updating
+			// the harness; "session" keeps them ephemeral. chatConfigScope
+			// replaced modelSelectorMode (whose default was "session") — a
+			// user who explicitly chose session-scoped switching under the
+			// old setting keeps that behavior instead of silently having
+			// every in-chat switch rewrite their harness.
+			chatConfigScope:
+				settings.chatConfigScope ??
+				(settings.modelSelectorMode === "session" ? "session" : "harness"),
+			workspacesMode: settings.workspacesMode ?? "workspaces"
 		};
 	},
 });
@@ -41,6 +51,9 @@ export const update = mutation({
 		),
 		modelSelectorMode: v.optional(
 			v.union(v.literal("session"), v.literal("harness")),
+		),
+		chatConfigScope: v.optional(
+			v.union(v.literal("harness"), v.literal("session")),
 		),
 		workspacesMode: v.optional(
 			v.union(v.literal("basic"), v.literal("workspaces")),

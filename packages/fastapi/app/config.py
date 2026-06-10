@@ -31,6 +31,27 @@ class Settings(BaseSettings):
     # Clerk JWT verification — pinned issuer prevents attacker-controlled JWKS.
     clerk_issuer: str = ""
 
+    # ── ACP agent gateway (external agents in Daytona sandboxes) ──
+    # Daytona snapshot with node + codex-acp + claude-agent-acp preinstalled.
+    # Built by packages/fastapi/scripts/create_acp_snapshot.py.
+    acp_snapshot_name: str = "harness-acp-v2"
+    acp_shim_port: int = 8787
+    # Idle ACP sessions are PARKED (runtime kept warm for the user's next
+    # conversation) after this many minutes; parked runtimes are destroyed
+    # after acp_parked_ttl_minutes more.
+    acp_parked_ttl_minutes: int = 60
+    # Idle ACP sessions are parked after this many minutes.
+    acp_session_idle_minutes: int = 60
+    # Encrypts per-user agent credentials (AES-256-GCM; key derived via
+    # SHA-256). Required for users to connect their own agent accounts —
+    # there is no server-level credential fallback.
+    agent_credentials_key: str = ""
+    # Claude Code model allowlist written to the sandbox's
+    # ~/.claude/settings.json (availableModels). Entries surface in the ACP
+    # config options and pass through to setModel verbatim, exposing models
+    # the headless SDK doesn't list on its own (e.g. Fable).
+    claude_available_models: str = "claude-fable-5,opus,sonnet,haiku"
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     def validate_startup(self) -> None:

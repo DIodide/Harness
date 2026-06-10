@@ -14,18 +14,25 @@ import {
 	Copy,
 	Cpu,
 	Edit,
-	Layers,
+	MessageSquare,
 	MoreHorizontal,
 	Play,
 	Plus,
 	Sparkles,
 	Square,
+	Terminal,
 	Trash2,
 	Zap,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { useState } from "react";
 import toast from "react-hot-toast";
+import {
+	ClaudeLogo,
+	CursorLogo,
+	OpenAILogo,
+} from "../../components/agent-logos";
+import { credentialDisplayName } from "../../components/agent-loop-picker";
 import { HarnessCreationAssistant } from "../../components/harness-creation-assistant";
 import { HarnessMark } from "../../components/harness-mark";
 import { Badge } from "../../components/ui/badge";
@@ -48,6 +55,12 @@ import {
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { Skeleton } from "../../components/ui/skeleton";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "../../components/ui/tooltip";
+import { useAgentCatalog } from "../../lib/use-agent-catalog";
 
 export const Route = createFileRoute("/harnesses/")({
 	beforeLoad: ({ context }) => {
@@ -258,6 +271,50 @@ function HarnessesPage() {
 	);
 }
 
+type HarnessRow = {
+	_id: Id<"harnesses">;
+	name: string;
+	model: string;
+	status: "started" | "stopped" | "draft";
+	agent?: string;
+	agentCredentialId?: string;
+	mcpServers: Array<{
+		name: string;
+		url: string;
+		authType: "none" | "bearer" | "oauth" | "tiger_junction";
+		authToken?: string;
+	}>;
+	skills: { name: string; description: string }[];
+	systemPrompt?: string;
+	sandboxEnabled?: boolean;
+	lastUsedAt?: number;
+};
+
+const AGENT_BRAND: Record<
+	string,
+	{
+		name: string;
+		Logo: (props: { size?: number; className?: string }) => React.ReactNode;
+	}
+> = {
+	"claude-code": { name: "Claude Code", Logo: ClaudeLogo },
+	codex: { name: "Codex CLI", Logo: OpenAILogo },
+	cursor: { name: "Cursor", Logo: CursorLogo },
+};
+
+function relativeTime(ts?: number): string | null {
+	if (!ts) return null;
+	const delta = Date.now() - ts;
+	const minutes = Math.floor(delta / 60_000);
+	if (minutes < 1) return "just now";
+	if (minutes < 60) return `${minutes}m ago`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h ago`;
+	const days = Math.floor(hours / 24);
+	if (days < 30) return `${days}d ago`;
+	return new Date(ts).toLocaleDateString();
+}
+
 function HarnessGroup({
 	title,
 	harnesses,
@@ -267,19 +324,7 @@ function HarnessGroup({
 	onEdit,
 }: {
 	title: string;
-	harnesses: Array<{
-		_id: Id<"harnesses">;
-		name: string;
-		model: string;
-		status: "started" | "stopped" | "draft";
-		mcpServers: Array<{
-			name: string;
-			url: string;
-			authType: "none" | "bearer" | "oauth" | "tiger_junction";
-			authToken?: string;
-		}>;
-		skills: { name: string; description: string }[];
-	}>;
+	harnesses: HarnessRow[];
 	onToggle: (
 		id: Id<"harnesses">,
 		status: "started" | "stopped" | "draft",
@@ -292,14 +337,17 @@ function HarnessGroup({
 		<div>
 			<h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
 				{title}
+				<span className="ml-1.5 normal-case tracking-normal text-muted-foreground/60">
+					{harnesses.length}
+				</span>
 			</h2>
-			<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+			<div className="grid gap-3 sm:grid-cols-2">
 				{harnesses.map((h, i) => (
 					<motion.div
 						key={h._id}
 						initial={{ opacity: 0, y: 8 }}
 						animate={{ opacity: 1, y: 0 }}
-						transition={{ delay: i * 0.05 }}
+						transition={{ delay: i * 0.04 }}
 					>
 						<HarnessCard
 							harness={h}
@@ -322,19 +370,7 @@ function HarnessCard({
 	onDuplicate,
 	onEdit,
 }: {
-	harness: {
-		_id: Id<"harnesses">;
-		name: string;
-		model: string;
-		status: "started" | "stopped" | "draft";
-		mcpServers: Array<{
-			name: string;
-			url: string;
-			authType: "none" | "bearer" | "oauth" | "tiger_junction";
-			authToken?: string;
-		}>;
-		skills: { name: string; description: string }[];
-	};
+	harness: HarnessRow;
 	onToggle: (
 		id: Id<"harnesses">,
 		status: "started" | "stopped" | "draft",
@@ -343,17 +379,33 @@ function HarnessCard({
 	onDuplicate: (id: Id<"harnesses">) => void;
 	onEdit: (id: Id<"harnesses">) => void;
 }) {
+	const navigate = useNavigate();
+	const { data: catalog } = useAgentCatalog();
 	const isDraft = harness.status === "draft";
+	const agentId =
+		harness.agent && harness.agent !== "default" ? harness.agent : null;
+	const brand = agentId ? AGENT_BRAND[agentId] : null;
+	const credential = agentId
+		? (catalog
+				?.find((e) => e.id === agentId)
+				?.credentials.find(
+					(c) => c.credential_id === harness.agentCredentialId,
+				) ?? null)
+		: null;
+	const lastUsed = relativeTime(harness.lastUsedAt);
+	const mcpNames = harness.mcpServers.map((s) => s.name);
+	const shownMcps = mcpNames.slice(0, 3);
 
 	return (
 		<Card
 			className={`gap-0 py-0 ${isDraft ? "border-dashed border-border" : "ring-foreground/10"}`}
 		>
 			<CardContent className="p-4">
-				<div className="mb-3 flex items-start justify-between">
-					<div className="flex items-center gap-2">
+				{/* Header: status + name + menu */}
+				<div className="mb-2.5 flex items-start justify-between gap-2">
+					<div className="flex min-w-0 items-center gap-2">
 						<div
-							className={`h-2 w-2 ${
+							className={`h-2 w-2 shrink-0 ${
 								harness.status === "started"
 									? "bg-emerald-500"
 									: harness.status === "stopped"
@@ -361,7 +413,7 @@ function HarnessCard({
 										: "bg-amber-400"
 							}`}
 						/>
-						<h3 className="text-sm font-medium text-foreground">
+						<h3 className="truncate text-sm font-medium text-foreground">
 							{harness.name}
 						</h3>
 					</div>
@@ -409,22 +461,89 @@ function HarnessCard({
 					</DropdownMenu>
 				</div>
 
-				<div className="flex items-center gap-2">
+				{/* Agent loop + credential + model */}
+				<div className="flex flex-wrap items-center gap-1.5">
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Badge variant="secondary" className="text-[10px]">
+								{brand ? <brand.Logo size={9} /> : <HarnessMark size={9} />}
+								{brand?.name ?? "Harness"}
+							</Badge>
+						</TooltipTrigger>
+						<TooltipContent>
+							{brand
+								? credential
+									? `Your account — ${credentialDisplayName(credential)}`
+									: "No credential linked — edit this harness to add one"
+								: "Harness-provided models via OpenRouter"}
+						</TooltipContent>
+					</Tooltip>
 					<Badge variant="secondary" className="text-[10px]">
 						<Cpu size={10} />
 						{harness.model}
 					</Badge>
+					{brand && !credential && (
+						<Badge
+							variant="outline"
+							className="border-amber-400/60 text-[10px] text-amber-600"
+						>
+							<AlertCircle size={9} />
+							No credential
+						</Badge>
+					)}
 				</div>
 
-				<div className="mt-3 flex items-center gap-3 text-[10px] text-muted-foreground">
-					<span className="flex items-center gap-1">
-						<Layers size={10} />
-						{harness.mcpServers.length} MCPs
-					</span>
+				{/* MCP servers by name */}
+				<div className="mt-2.5 flex min-h-[22px] flex-wrap items-center gap-1.5">
+					{shownMcps.length > 0 ? (
+						<>
+							{shownMcps.map((name) => (
+								<span
+									key={name}
+									className="border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] text-foreground/80"
+								>
+									{name}
+								</span>
+							))}
+							{mcpNames.length > shownMcps.length && (
+								<span className="text-[10px] text-muted-foreground">
+									+{mcpNames.length - shownMcps.length} more
+								</span>
+							)}
+						</>
+					) : (
+						<span className="text-[10px] text-muted-foreground/70">
+							No MCP servers
+						</span>
+					)}
+				</div>
+
+				{/* Meta + open action */}
+				<div className="mt-3 flex items-center gap-3 border-t border-border/60 pt-2.5 text-[10px] text-muted-foreground">
 					<span className="flex items-center gap-1">
 						<Zap size={10} />
-						{harness.skills.length} Skills
+						{harness.skills.length} skills
 					</span>
+					{harness.sandboxEnabled && (
+						<span className="flex items-center gap-1">
+							<Terminal size={10} />
+							sandbox
+						</span>
+					)}
+					{lastUsed && <span>Used {lastUsed}</span>}
+					{!isDraft && (
+						<Button
+							size="sm"
+							variant="outline"
+							className="ml-auto h-6 px-2 text-[11px]"
+							onClick={() =>
+								navigate({ to: "/chat", search: { harnessId: harness._id } })
+							}
+						>
+							<MessageSquare size={11} />
+							Open in chat
+						</Button>
+					)}
 				</div>
 			</CardContent>
 		</Card>

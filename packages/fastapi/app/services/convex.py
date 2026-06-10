@@ -38,6 +38,42 @@ async def query_convex(
         return None
 
 
+class ConvexMutationError(Exception):
+    """Convex mutation failed or Convex is not configured."""
+
+
+async def run_convex_mutation(
+    http_client: httpx.AsyncClient,
+    path: str,
+    args: dict[str, Any],
+) -> Any:
+    """Execute a Convex mutation via the HTTP API using the deploy key.
+
+    Returns the mutation's value (which may legitimately be None for
+    mutations that return nothing). Raises ConvexMutationError on failure —
+    callers that want fail-soft behavior should catch it.
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        raise ConvexMutationError("Convex not configured")
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/mutation",
+            headers={"Authorization": f"Convex {settings.convex_deploy_key}"},
+            json={"path": path, "args": args, "format": "json"},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        logger.exception("Failed to run Convex mutation '%s'", path)
+        raise ConvexMutationError(f"Convex mutation '{path}' failed: {e}") from e
+    if data.get("status") == "error":
+        message = data.get("errorMessage") or "unknown error"
+        logger.error("Convex mutation '%s' failed: %s", path, message)
+        raise ConvexMutationError(f"Convex mutation '{path}' failed: {message}")
+    return data.get("value")
+
+
 async def save_assistant_message(
     http_client: httpx.AsyncClient,
     conversation_id: str,
@@ -199,6 +235,35 @@ async def verify_sandbox_owner(
             "Failed to verify sandbox ownership for '%s'", daytona_sandbox_id
         )
         return False
+
+
+async def count_user_sandboxes(
+    http_client: httpx.AsyncClient, user_id: str,
+) -> int | None:
+    """Number of sandbox records for a user, or None when unknowable.
+
+    None (Convex unconfigured or unreachable) means "don't enforce" — the
+    Convex-side cap in sandboxes:createInternal remains the backstop.
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        return None
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/query",
+            headers={"Authorization": f"Convex {settings.convex_deploy_key}"},
+            json={
+                "path": "sandboxes:countForUser",
+                "args": {"userId": user_id},
+                "format": "json",
+            },
+            timeout=5.0,
+        )
+        resp.raise_for_status()
+        value = resp.json().get("value")
+        return int(value) if value is not None else None
+    except Exception:
+        logger.exception("Failed to count sandboxes for user '%s'", user_id)
+        return None
 
 
 class SandboxRecordError(Exception):

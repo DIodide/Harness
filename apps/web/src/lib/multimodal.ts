@@ -4,7 +4,7 @@ type ContentPart = Record<string, unknown>;
 export type MessageContent = string | ContentPart[];
 
 /** Read a Blob into a raw base64 string (no data-URL prefix). */
-function blobToBase64(blob: Blob): Promise<string> {
+export function blobToBase64(blob: Blob): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
 		reader.onloadend = () => {
@@ -64,4 +64,42 @@ export async function buildMultimodalContent(
 	}
 
 	return parts;
+}
+
+/** ACP image content block (session/prompt). */
+export interface AcpImageBlock {
+	type: "image";
+	data: string; // raw base64
+	mimeType: string;
+}
+
+/**
+ * Convert an OpenRouter-shaped multimodal content array into ACP image
+ * blocks by fetching each image URL and base64-encoding it. Non-image
+ * parts are ignored (ACP agents advertise image support only).
+ */
+export async function buildAcpImageBlocks(
+	content: MessageContent,
+): Promise<AcpImageBlock[]> {
+	if (typeof content === "string") return [];
+	const blocks: AcpImageBlock[] = [];
+	for (const part of content) {
+		if (part.type !== "image_url") continue;
+		const url = (part.image_url as { url?: string } | undefined)?.url;
+		if (!url) continue;
+		try {
+			const res = await fetch(url);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const blob = await res.blob();
+			blocks.push({
+				type: "image",
+				data: await blobToBase64(blob),
+				mimeType: blob.type || "image/png",
+			});
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : "unknown error";
+			throw new Error(`Failed to load attached image: ${msg}`);
+		}
+	}
+	return blocks;
 }

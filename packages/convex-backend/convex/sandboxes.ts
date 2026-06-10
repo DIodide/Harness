@@ -234,6 +234,42 @@ export const createInternal = internalMutation({
  * Uses deploy key auth — not callable from the frontend.
  */
 /**
+ * Internal mutation: remove the record for a deleted Daytona sandbox.
+ * Used by the ACP agent gateway when it tears down an agent session.
+ */
+export const removeByDaytonaId = internalMutation({
+	args: { daytonaSandboxId: v.string() },
+	handler: async (ctx, args) => {
+		// collect(), not unique(): the index is non-unique and siblings
+		// (getOwnerByDaytonaId, updateStatus) tolerate duplicate rows —
+		// unique() would throw and strand the records forever.
+		const rows = await ctx.db
+			.query("sandboxes")
+			.withIndex("by_daytona_id", (q) =>
+				q.eq("daytonaSandboxId", args.daytonaSandboxId),
+			)
+			.collect();
+		for (const row of rows) {
+			await ctx.db.delete(row._id);
+		}
+		return { removed: rows.length > 0 };
+	},
+});
+
+/** Per-user sandbox count — lets FastAPI enforce the cap BEFORE creating a
+ *  Daytona sandbox (createInternal's check fires only at registration). */
+export const countForUser = internalQuery({
+	args: { userId: v.string() },
+	handler: async (ctx, args) => {
+		const rows = await ctx.db
+			.query("sandboxes")
+			.withIndex("by_user", (q) => q.eq("userId", args.userId))
+			.collect();
+		return rows.length;
+	},
+});
+
+/**
  * Internal query used by FastAPI to verify sandbox ownership.
  * Returns the userId of the sandbox owner, or null if not found.
  */

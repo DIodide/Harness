@@ -1,3 +1,5 @@
+import { useAuth } from "@clerk/tanstack-react-start";
+import { useQueryClient } from "@tanstack/react-query";
 import {
 	createContext,
 	type ReactNode,
@@ -9,6 +11,15 @@ import {
 	useRef,
 	useState,
 } from "react";
+import toast from "react-hot-toast";
+import {
+	type AgentPermissionRequest,
+	type AgentQuestionAction,
+	type AgentQuestionRequest,
+	agentStatusLabel,
+	answerAgentPermission,
+	answerAgentQuestion,
+} from "./agent-mode";
 import {
 	type BudgetExceededInfo,
 	type ChatStreamRequest,
@@ -27,6 +38,9 @@ export const EMPTY_STREAM_STATE: ConvoStreamState = {
 	pendingDoneContent: null,
 	usage: null,
 	model: null,
+	agentStatus: null,
+	plan: null,
+	agentUsage: null,
 };
 
 interface ChatStreamSideEffects {
@@ -49,6 +63,16 @@ interface ChatStreamSideEffects {
 	) => void;
 }
 
+export interface PendingAgentPermission {
+	sessionId: string;
+	request: AgentPermissionRequest;
+}
+
+export interface PendingAgentQuestion {
+	sessionId: string;
+	request: AgentQuestionRequest;
+}
+
 interface ChatStreamContextValue {
 	streamStates: Record<string, ConvoStreamState>;
 	streamStatesRef: React.MutableRefObject<Record<string, ConvoStreamState>>;
@@ -60,6 +84,21 @@ interface ChatStreamContextValue {
 		conversationId: string,
 		updater: (state: ConvoStreamState) => ConvoStreamState,
 	) => void;
+	/** ACP agent mode: pending tool-approvals per conversation (FIFO —
+	 * agents can issue parallel tool calls, each awaiting its own answer;
+	 * a single slot would clobber all but the latest). */
+	pendingPermissions: Record<string, PendingAgentPermission[]>;
+	answerPermission: (
+		conversationId: string,
+		optionId: string | null,
+	) => Promise<void>;
+	/** ACP agent mode: pending agent questions per conversation (FIFO). */
+	pendingQuestions: Record<string, PendingAgentQuestion[]>;
+	answerQuestion: (
+		conversationId: string,
+		action: AgentQuestionAction,
+		content?: Record<string, string | string[] | boolean>,
+	) => Promise<void>;
 }
 
 const ChatStreamContext = createContext<ChatStreamContextValue | null>(null);
@@ -80,6 +119,14 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 	streamStatesRef.current = streamStates;
 
 	const sideEffectsRegistryRef = useRef<SideEffectsRegistry>(new Map());
+	const { getToken } = useAuth();
+	const queryClient = useQueryClient();
+	const [pendingPermissions, setPendingPermissions] = useState<
+		Record<string, PendingAgentPermission[]>
+	>({});
+	const [pendingQuestions, setPendingQuestions] = useState<
+		Record<string, PendingAgentQuestion[]>
+	>({});
 
 	const dispatchSideEffect = useCallback(
 		<K extends keyof ChatStreamSideEffects>(
@@ -95,18 +142,28 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 	);
 
 	const chatStream = useChatStream({
-		onToken: (convoId, content) => {
+		onToken: (convoId, content, meta) => {
 			setStreamStates((prev) => {
 				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
 				const parts = [...state.parts];
 				const last = parts[parts.length - 1];
-				if (last?.type === "text") {
+				// Distinct ACP messageIds (e.g. before/after a background task
+				// completes) become distinct parts instead of one merged blob.
+				const sameMessage =
+					last?.type === "text" &&
+					(last.messageId ?? null) === (meta?.messageId ?? null);
+				if (sameMessage && last) {
 					parts[parts.length - 1] = {
 						...last,
 						content: (last.content ?? "") + content,
 					};
 				} else {
-					parts.push({ type: "text", content } as StreamPart);
+					parts.push({
+						type: "text",
+						content,
+						messageId: meta?.messageId ?? null,
+						parentId: meta?.parentId ?? null,
+					} as StreamPart);
 				}
 				return {
 					...prev,
@@ -114,22 +171,31 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 						...state,
 						content: (state.content ?? "") + content,
 						parts,
+						agentStatus: null,
 					},
 				};
 			});
 		},
-		onThinking: (convoId, content) => {
+		onThinking: (convoId, content, meta) => {
 			setStreamStates((prev) => {
 				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
 				const parts = [...state.parts];
 				const last = parts[parts.length - 1];
-				if (last?.type === "reasoning") {
+				const sameMessage =
+					last?.type === "reasoning" &&
+					(last.messageId ?? null) === (meta?.messageId ?? null);
+				if (sameMessage && last) {
 					parts[parts.length - 1] = {
 						...last,
 						content: (last.content ?? "") + content,
 					};
 				} else {
-					parts.push({ type: "reasoning", content } as StreamPart);
+					parts.push({
+						type: "reasoning",
+						content,
+						messageId: meta?.messageId ?? null,
+						parentId: meta?.parentId ?? null,
+					} as StreamPart);
 				}
 				return {
 					...prev,
@@ -156,13 +222,24 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 								tool: event.tool,
 								arguments: event.arguments,
 								call_id: event.call_id,
+								kind: event.kind,
+								locations: event.locations,
+								parentId: event.parentId ?? null,
 							},
 						],
+						agentStatus: null,
 					},
 				};
 			});
 		},
 		onToolResult: (convoId, event) => {
+			// Status-only progress updates (in_progress, no content) must not
+			// blank a result an earlier update already delivered — and a
+			// truthy result is what marks the call finished in the UI.
+			const overwrite =
+				Boolean(event.result) ||
+				event.status === "completed" ||
+				event.status === "failed";
 			setStreamStates((prev) => {
 				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
 				return {
@@ -170,13 +247,17 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 					[convoId]: {
 						...state,
 						toolCalls: state.toolCalls.map((tc) =>
-							tc.call_id === event.call_id
+							tc.call_id === event.call_id && overwrite
 								? { ...tc, result: event.result }
 								: tc,
 						),
 						parts: state.parts.map((p) =>
 							p.type === "tool_call" && p.call_id === event.call_id
-								? { ...p, result: event.result }
+								? {
+										...p,
+										...(overwrite ? { result: event.result } : {}),
+										diff: event.diff ?? p.diff,
+									}
 								: p,
 						),
 					},
@@ -200,6 +281,9 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 					pendingDoneContent: fullContent,
 					usage: usage ?? prev[convoId]?.usage ?? null,
 					model: model ?? prev[convoId]?.model ?? null,
+					agentStatus: null,
+					plan: null,
+					agentUsage: prev[convoId]?.agentUsage ?? null,
 				},
 			}));
 			dispatchSideEffect("onDone", (h) =>
@@ -220,7 +304,159 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 		onAbort: (convoId) => {
 			dispatchSideEffect("onAbort", (h) => h(convoId));
 		},
+		onPermissionRequest: (convoId, sessionId, request) => {
+			setPendingPermissions((prev) => ({
+				...prev,
+				[convoId]: [
+					...(prev[convoId] ?? []).filter(
+						(p) => p.request.request_id !== request.request_id,
+					),
+					{ sessionId, request },
+				],
+			}));
+		},
+		onPermissionResolved: (convoId, requestId) => {
+			setPendingPermissions((prev) => {
+				const queue = prev[convoId];
+				if (!queue?.some((p) => p.request.request_id === requestId)) {
+					return prev;
+				}
+				const remaining = queue.filter(
+					(p) => p.request.request_id !== requestId,
+				);
+				const next = { ...prev };
+				if (remaining.length > 0) next[convoId] = remaining;
+				else delete next[convoId];
+				return next;
+			});
+		},
+		onAgentStatus: (convoId, data) => {
+			setStreamStates((prev) => ({
+				...prev,
+				[convoId]: {
+					...(prev[convoId] ?? EMPTY_STREAM_STATE),
+					agentStatus: agentStatusLabel(data),
+				},
+			}));
+		},
+		onPlan: (convoId, entries) => {
+			setStreamStates((prev) => ({
+				...prev,
+				[convoId]: {
+					...(prev[convoId] ?? EMPTY_STREAM_STATE),
+					plan: entries,
+				},
+			}));
+		},
+		onAgentUsage: (convoId, usage) => {
+			setStreamStates((prev) => ({
+				...prev,
+				[convoId]: {
+					...(prev[convoId] ?? EMPTY_STREAM_STATE),
+					agentUsage: usage,
+				},
+			}));
+		},
+		onQuestionRequest: (convoId, sessionId, request) => {
+			setPendingQuestions((prev) => ({
+				...prev,
+				[convoId]: [
+					...(prev[convoId] ?? []).filter(
+						(q) => q.request.request_id !== request.request_id,
+					),
+					{ sessionId, request },
+				],
+			}));
+		},
+		onQuestionResolved: (convoId, requestId) => {
+			setPendingQuestions((prev) => {
+				const queue = prev[convoId];
+				if (!queue?.some((q) => q.request.request_id === requestId)) {
+					return prev;
+				}
+				const remaining = queue.filter(
+					(q) => q.request.request_id !== requestId,
+				);
+				const next = { ...prev };
+				if (remaining.length > 0) next[convoId] = remaining;
+				else delete next[convoId];
+				return next;
+			});
+		},
+		onAgentSessionChanged: (convoId) => {
+			// The agent changed its own session state (mode flip from an
+			// "always allow" approval, plan-mode exit, new slash commands).
+			// Refresh the composer's selectors/menu from the session endpoint.
+			queryClient.invalidateQueries({
+				queryKey: ["agent-session-config", convoId],
+			});
+		},
 	});
+
+	const answerQuestion = useCallback(
+		async (
+			conversationId: string,
+			action: AgentQuestionAction,
+			content?: Record<string, string | string[] | boolean>,
+		) => {
+			const pending = pendingQuestions[conversationId]?.[0];
+			if (!pending) return;
+			setPendingQuestions((prev) => {
+				const remaining = (prev[conversationId] ?? []).filter(
+					(q) => q.request.request_id !== pending.request.request_id,
+				);
+				const next = { ...prev };
+				if (remaining.length > 0) next[conversationId] = remaining;
+				else delete next[conversationId];
+				return next;
+			});
+			try {
+				const token = await getToken({ template: "convex" });
+				await answerAgentQuestion(
+					token,
+					pending.sessionId,
+					pending.request.request_id,
+					action,
+					content,
+				);
+			} catch (err) {
+				toast.error(
+					err instanceof Error ? err.message : "Failed to send answer",
+				);
+			}
+		},
+		[pendingQuestions, getToken],
+	);
+
+	const answerPermission = useCallback(
+		async (conversationId: string, optionId: string | null) => {
+			const pending = pendingPermissions[conversationId]?.[0];
+			if (!pending) return;
+			setPendingPermissions((prev) => {
+				const remaining = (prev[conversationId] ?? []).filter(
+					(p) => p.request.request_id !== pending.request.request_id,
+				);
+				const next = { ...prev };
+				if (remaining.length > 0) next[conversationId] = remaining;
+				else delete next[conversationId];
+				return next;
+			});
+			try {
+				const token = await getToken({ template: "convex" });
+				await answerAgentPermission(
+					token,
+					pending.sessionId,
+					pending.request.request_id,
+					optionId,
+				);
+			} catch (err) {
+				toast.error(
+					err instanceof Error ? err.message : "Failed to send approval",
+				);
+			}
+		},
+		[pendingPermissions, getToken],
+	);
 
 	const clearStreamState = useCallback((convoId: string) => {
 		setStreamStates((prev) => {
@@ -252,6 +488,10 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 			cancel: chatStream.cancel,
 			clearStreamState,
 			setStreamState,
+			pendingPermissions,
+			answerPermission,
+			pendingQuestions,
+			answerQuestion,
 		}),
 		[
 			streamStates,
@@ -260,6 +500,10 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 			chatStream.cancel,
 			clearStreamState,
 			setStreamState,
+			pendingPermissions,
+			answerPermission,
+			pendingQuestions,
+			answerQuestion,
 		],
 	);
 
