@@ -133,6 +133,7 @@ export type AgentHarnessConfig = Record<string, unknown> & {
 interface AgentSessionEntry {
 	sessionId: string;
 	harnessKey: string;
+	identityKey: string;
 }
 
 // One live agent session per (conversation, agent). Module-level so the
@@ -160,6 +161,18 @@ function harnessKey(harness: AgentHarnessConfig): string {
 		servers
 			.map((s) => [s.url, s.name, s.auth_type ?? "none", s.auth_token ?? ""])
 			.sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+	]);
+}
+
+function identityKey(harness: AgentHarnessConfig): string {
+	// Credentials are baked into the agent process's environment at spawn —
+	// no /harness switch can apply a different credential. An identity
+	// change must close the session and provision a fresh runtime (the
+	// backend refuses to adopt parked runtimes launched with other
+	// credentials).
+	return JSON.stringify([
+		(harness.agent as string | undefined) ?? null,
+		(harness.agent_credential_id as string | undefined) ?? null,
 	]);
 }
 
@@ -192,13 +205,20 @@ export async function ensureAgentSession(
 ): Promise<string> {
 	const key = cacheKey(conversationId, agent);
 	const wantedHarness = harnessKey(harness);
+	const wantedIdentity = identityKey(harness);
 	const cached = sessionCache.get(key);
 
 	if (cached) {
 		// Verify the session is still alive server-side (reaper, restarts).
 		const status = await api(token, `/sessions/${cached.sessionId}`);
 		if (status.ok) {
-			if (cached.harnessKey !== wantedHarness) {
+			if (cached.identityKey !== wantedIdentity) {
+				// Credential (or agent) changed: a switch can't re-inject
+				// secrets into the running process — close and recreate.
+				await api(token, `/sessions/${cached.sessionId}`, {
+					method: "DELETE",
+				});
+			} else if (cached.harnessKey !== wantedHarness) {
 				const switched = await api(
 					token,
 					`/sessions/${cached.sessionId}/harness`,
@@ -208,6 +228,7 @@ export async function ensureAgentSession(
 					sessionCache.set(key, {
 						sessionId: cached.sessionId,
 						harnessKey: wantedHarness,
+						identityKey: wantedIdentity,
 					});
 					return cached.sessionId;
 				}
@@ -235,6 +256,7 @@ export async function ensureAgentSession(
 	sessionCache.set(key, {
 		sessionId: payload.session_id,
 		harnessKey: wantedHarness,
+		identityKey: wantedIdentity,
 	});
 	return payload.session_id;
 }

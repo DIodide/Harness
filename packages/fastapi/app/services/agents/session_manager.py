@@ -358,6 +358,10 @@ class ParkedRuntime:
     user_id: str
     agent_capabilities: dict
     msg_id_floor: int
+    # Credential link the runtime's agent process was LAUNCHED with (env
+    # vars are baked in at spawn) — a session wanting different credentials
+    # must never adopt this runtime.
+    credential_id: str | None = None
     parked_at: float = field(default_factory=time.monotonic)
 
 
@@ -464,13 +468,26 @@ class AgentSessionManager:
         key = self._runtime_key(session.user_id, session.agent_id, attach_sandbox_id)
         parked = self._parked.pop(key, None)
         if parked is not None:
-            return parked
+            if parked.credential_id == session.harness.agent_credential_id:
+                return parked
+            # The runtime's agent was launched with DIFFERENT credentials
+            # (env vars are fixed at spawn) — adopting it would keep e.g. a
+            # rotated-away token alive. Destroy it and provision fresh.
+            logger.info(
+                "Discarding parked %s runtime (sandbox=%s): credential link "
+                "changed", parked.agent_id, parked.runtime.sandbox_id,
+            )
+            destroy = asyncio.create_task(
+                self._destroy_runtime(parked.runtime, parked.agent_id)
+            )
+            destroy.add_done_callback(_log_background_error)
         victims = [
             s
             for s in self._sessions.values()
             if s.id != session.id
             and s.user_id == session.user_id
             and s.agent_id == session.agent_id
+            and s.harness.agent_credential_id == session.harness.agent_credential_id
             and s.status == "ready"
             and not s.lock.locked()
             and s.turn_guard == 0
@@ -652,7 +669,16 @@ class AgentSessionManager:
             }
         )
         await self._teardown(holder, park=True)
-        return self._parked.pop(key, None)
+        parked = self._parked.pop(key, None)
+        if (
+            parked is not None
+            and parked.credential_id != session.harness.agent_credential_id
+        ):
+            # Launched with different credentials — provision fresh into the
+            # sandbox instead (the launcher replaces the shim anyway).
+            await self._destroy_runtime(parked.runtime, parked.agent_id)
+            return None
+        return parked
 
     async def _check_sandbox_cap(self, user_id: str) -> None:
         """Refuse to create an owned agent sandbox past the per-user cap."""
@@ -1431,6 +1457,7 @@ class AgentSessionManager:
             user_id=session.user_id,
             agent_capabilities=session.agent_capabilities,
             msg_id_floor=session.msg_id_floor + 1_000_000,
+            credential_id=session.harness.agent_credential_id,
         )
         logger.info(
             "Parked %s runtime (sandbox=%s) for user '%s'",

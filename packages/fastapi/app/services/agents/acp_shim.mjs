@@ -186,9 +186,11 @@ const server = http.createServer((req, res) => {
 		const since = Number.parseInt(url.searchParams.get("since") || "0", 10);
 		if (since < evictedThrough) {
 			// Events the client never saw were evicted — it must resync
-			// (revive) rather than silently miss JSON-RPC responses.
+			// (revive) rather than silently miss JSON-RPC responses. The
+			// event id advances the client's cursor past the eviction
+			// boundary so a reconnect doesn't re-trigger the gap forever.
 			writeEvent(res, {
-				id: since,
+				id: evictedThrough,
 				event: "gap",
 				data: JSON.stringify({ evictedThrough }),
 			});
