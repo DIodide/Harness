@@ -39,15 +39,9 @@ class Settings(BaseSettings):
     # Idle ACP sessions are torn down (sandbox deleted) after this many minutes.
     acp_session_idle_minutes: int = 60
     # Encrypts per-user agent credentials (AES-256-GCM; key derived via
-    # SHA-256). Required for users to connect their own agent accounts.
+    # SHA-256). Required for users to connect their own agent accounts —
+    # there is no server-level credential fallback.
     agent_credentials_key: str = ""
-    # Dev/server-level agent credentials — fallback when a user has not
-    # connected their own (see services/agents/credentials.py).
-    codex_auth_json: str = ""  # raw contents of a codex auth.json
-    codex_auth_json_path: str = ""  # or a path to one on the API host
-    openai_api_key_for_codex: str = ""
-    claude_code_oauth_token: str = ""
-    anthropic_api_key: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

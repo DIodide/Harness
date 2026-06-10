@@ -32,6 +32,9 @@ PROMPT = (
 
 
 async def main() -> None:
+    from acp_e2e import seed_codex_credential
+
+    await seed_codex_credential("debug-user")
     manager = get_session_manager()
     session = await manager.create(
         user_id="debug-user", agent_id="codex", harness=HARNESS,

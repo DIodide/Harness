@@ -10,13 +10,29 @@ Usage (from packages/fastapi):
 """
 
 import asyncio
+import os
 import sys
 from pathlib import Path
+
+import httpx
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.models import HarnessConfig, McpServer
+from app.services.agents.credentials import store_user_credential
 from app.services.agents.session_manager import get_session_manager
+
+
+async def seed_codex_credential(user_id: str) -> None:
+    """Store the local codex auth.json through the real encrypted path."""
+    auth_path = os.environ.get(
+        "CODEX_AUTH_JSON_PATH", os.path.expanduser("~/.codex/auth.json")
+    )
+    with open(auth_path, encoding="utf-8") as f:
+        auth_json = f.read()
+    async with httpx.AsyncClient() as http:
+        await store_user_credential(http, user_id, "codex", "auth_json", auth_json)
+    print(f"Seeded encrypted codex credential for '{user_id}'")
 
 HARNESS_A = HarnessConfig(
     model="acp",
@@ -73,6 +89,7 @@ async def run_turn(manager, session_id: str, prompt: str) -> None:
 
 
 async def main() -> None:
+    await seed_codex_credential("e2e-test-user")
     manager = get_session_manager()
     print("Creating codex session (provisioning Daytona sandbox)...")
     session = await manager.create(

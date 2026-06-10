@@ -1653,7 +1653,7 @@ function SettingsDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-sm">
+			<DialogContent className="max-h-[85vh] overflow-x-hidden overflow-y-auto sm:max-w-sm [&>*]:min-w-0">
 				<DialogHeader>
 					<DialogTitle className="text-sm">Settings</DialogTitle>
 					<DialogDescription>Manage your preferences.</DialogDescription>

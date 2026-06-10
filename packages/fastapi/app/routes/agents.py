@@ -106,7 +106,10 @@ async def delete_credential(
 ):
     if agent_id not in AGENT_REGISTRY:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_id}'")
-    await delete_user_credential(http_client, user["sub"], agent_id)
+    try:
+        await delete_user_credential(http_client, user["sub"], agent_id)
+    except AgentCredentialsError as e:
+        raise HTTPException(status_code=502, detail=str(e))
     return {"ok": True}
 
 

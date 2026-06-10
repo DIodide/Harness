@@ -34,7 +34,7 @@ export function AgentPermissionCard({
 				</code>
 			</div>
 			{rawInput && (
-				<pre className="mt-2 max-h-32 overflow-auto rounded bg-background/60 p-2 text-[10px] text-muted-foreground">
+				<pre className="mt-2 max-h-32 overflow-auto rounded bg-background/60 p-2 text-[10px] whitespace-pre-wrap break-all text-muted-foreground">
 					{rawInput}
 				</pre>
 			)}

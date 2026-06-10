@@ -109,7 +109,7 @@ function ConnectForm({
 	};
 
 	return (
-		<div className="mt-2 space-y-2 rounded-md border border-border bg-background/40 p-2">
+		<div className="mt-2 min-w-0 space-y-2 rounded-md border border-border bg-background/40 p-2">
 			<Select
 				value={kind}
 				onValueChange={(v) => setKind(v as AgentCredentialKind)}
@@ -130,8 +130,10 @@ function ConnectForm({
 					value={value}
 					onChange={(e) => setValue(e.target.value)}
 					placeholder='{"auth_mode": "chatgpt", "tokens": { ... }}'
-					rows={3}
-					className="font-mono text-[11px]"
+					rows={4}
+					// field-sizing-fixed: the default field-sizing-content makes the
+					// textarea grow to fit pasted auth.json and blow out the dialog.
+					className="field-sizing-fixed max-h-32 min-w-0 resize-none overflow-auto font-mono text-[11px] break-all"
 				/>
 			) : (
 				<Input
@@ -178,8 +180,8 @@ function AgentRow({ entry }: { entry: AgentCatalogEntry }) {
 	const { disconnect } = useAgentCredentialMutations();
 
 	return (
-		<div className="py-1.5">
-			<div className="flex items-center justify-between gap-2">
+		<div className="min-w-0 py-1.5">
+			<div className="flex flex-wrap items-center justify-between gap-2">
 				<div className="flex min-w-0 items-center gap-2">
 					<Bot size={13} className="shrink-0 text-muted-foreground" />
 					<div className="min-w-0">
@@ -248,7 +250,7 @@ export function AgentConnections() {
 		);
 	}
 	return (
-		<div>
+		<div className="min-w-0">
 			{agents.map((entry) => (
 				<AgentRow key={entry.id} entry={entry} />
 			))}

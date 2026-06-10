@@ -38,6 +38,10 @@ async def query_convex(
         return None
 
 
+class ConvexMutationError(Exception):
+    """Convex mutation failed or Convex is not configured."""
+
+
 async def run_convex_mutation(
     http_client: httpx.AsyncClient,
     path: str,
@@ -45,12 +49,12 @@ async def run_convex_mutation(
 ) -> Any:
     """Execute a Convex mutation via the HTTP API using the deploy key.
 
-    Returns the mutation's value, or None when Convex is unconfigured or the
-    call fails (mirrors query_convex's fail-soft behavior).
+    Returns the mutation's value (which may legitimately be None for
+    mutations that return nothing). Raises ConvexMutationError on failure —
+    callers that want fail-soft behavior should catch it.
     """
     if not settings.convex_url or not settings.convex_deploy_key:
-        logger.warning("Convex not configured — skipping mutation '%s'", path)
-        return None
+        raise ConvexMutationError("Convex not configured")
     try:
         resp = await http_client.post(
             f"{settings.convex_url}/api/mutation",
@@ -60,15 +64,14 @@ async def run_convex_mutation(
         )
         resp.raise_for_status()
         data = resp.json()
-        if data.get("status") == "error":
-            logger.error(
-                "Convex mutation '%s' failed: %s", path, data.get("errorMessage"),
-            )
-            return None
-        return data.get("value")
-    except Exception:
+    except Exception as e:
         logger.exception("Failed to run Convex mutation '%s'", path)
-        return None
+        raise ConvexMutationError(f"Convex mutation '{path}' failed: {e}") from e
+    if data.get("status") == "error":
+        message = data.get("errorMessage") or "unknown error"
+        logger.error("Convex mutation '%s' failed: %s", path, message)
+        raise ConvexMutationError(f"Convex mutation '{path}' failed: {message}")
+    return data.get("value")
 
 
 async def save_assistant_message(

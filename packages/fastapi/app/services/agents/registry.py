@@ -15,8 +15,6 @@ this registry — it stays on /api/chat/stream.
 
 from dataclasses import dataclass, field
 
-from app.config import settings
-
 # Versions pinned from the ACP registry; bump together with the snapshot.
 CODEX_ACP_VERSION = "0.16.0"
 CLAUDE_AGENT_ACP_VERSION = "0.44.0"
@@ -69,51 +67,6 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
 
 class AgentCredentialsError(Exception):
     """Raised when no usable credentials exist for an agent."""
-
-
-def resolve_credentials(agent_id: str, user_id: str) -> AgentCredentials:
-    """Resolve credentials to inject for an agent run.
-
-    MVP: server-level dev credentials from settings/env. Per-user encrypted
-    credentials (Convex `agentCredentials` table) replace this lookup later;
-    the call site already passes user_id so only this function changes.
-    """
-    if agent_id == "codex":
-        auth_json = settings.codex_auth_json
-        if not auth_json and settings.codex_auth_json_path:
-            try:
-                with open(settings.codex_auth_json_path, encoding="utf-8") as f:
-                    auth_json = f.read()
-            except OSError as e:
-                raise AgentCredentialsError(
-                    f"CODEX_AUTH_JSON_PATH unreadable: {e}"
-                ) from e
-        if auth_json:
-            return AgentCredentials(
-                files={f"{SANDBOX_HOME}/.codex/auth.json": auth_json}
-            )
-        if settings.openai_api_key_for_codex:
-            return AgentCredentials(
-                env={"OPENAI_API_KEY": settings.openai_api_key_for_codex}
-            )
-        raise AgentCredentialsError(
-            "No Codex credentials configured. Set CODEX_AUTH_JSON, "
-            "CODEX_AUTH_JSON_PATH, or OPENAI_API_KEY_FOR_CODEX."
-        )
-
-    if agent_id == "claude-code":
-        if settings.claude_code_oauth_token:
-            return AgentCredentials(
-                env={"CLAUDE_CODE_OAUTH_TOKEN": settings.claude_code_oauth_token}
-            )
-        if settings.anthropic_api_key:
-            return AgentCredentials(env={"ANTHROPIC_API_KEY": settings.anthropic_api_key})
-        raise AgentCredentialsError(
-            "No Claude Code credentials configured. Set CLAUDE_CODE_OAUTH_TOKEN "
-            "or ANTHROPIC_API_KEY."
-        )
-
-    raise AgentCredentialsError(f"Unknown agent '{agent_id}'")
 
 
 def get_agent(agent_id: str) -> AgentDefinition:

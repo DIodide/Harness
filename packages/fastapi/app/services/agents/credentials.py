@@ -20,9 +20,8 @@ from app.services.agents.registry import (
     SANDBOX_HOME,
     AgentCredentials,
     AgentCredentialsError,
-    resolve_credentials as resolve_server_credentials,
 )
-from app.services.convex import query_convex, run_convex_mutation
+from app.services.convex import ConvexMutationError, query_convex, run_convex_mutation
 
 logger = logging.getLogger(__name__)
 
@@ -100,32 +99,33 @@ async def store_user_credential(
     label: str | None = None,
 ) -> None:
     ciphertext = encrypt_secret(value)
-    result = await run_convex_mutation(
-        http_client,
-        "agentCredentials:store",
-        {
-            "userId": user_id,
-            "agent": agent_id,
-            "kind": kind,
-            "ciphertext": ciphertext,
-            **({"label": label} if label else {}),
-        },
-    )
-    if result is None:
-        # run_convex_mutation is fail-soft; storing a secret must not be.
-        raise AgentCredentialsError(
-            "Could not save the credential (Convex unavailable)"
+    try:
+        await run_convex_mutation(
+            http_client,
+            "agentCredentials:store",
+            {
+                "userId": user_id,
+                "agent": agent_id,
+                "kind": kind,
+                "ciphertext": ciphertext,
+                **({"label": label} if label else {}),
+            },
         )
+    except ConvexMutationError as e:
+        raise AgentCredentialsError(f"Could not save the credential: {e}") from e
 
 
 async def delete_user_credential(
     http_client: httpx.AsyncClient, user_id: str, agent_id: str,
 ) -> None:
-    await run_convex_mutation(
-        http_client,
-        "agentCredentials:remove",
-        {"userId": user_id, "agent": agent_id},
-    )
+    try:
+        await run_convex_mutation(
+            http_client,
+            "agentCredentials:remove",
+            {"userId": user_id, "agent": agent_id},
+        )
+    except ConvexMutationError as e:
+        raise AgentCredentialsError(f"Could not remove the credential: {e}") from e
 
 
 async def list_user_credentials(
@@ -155,30 +155,40 @@ def _to_agent_credentials(agent_id: str, kind: str, value: str) -> AgentCredenti
 async def resolve_agent_credentials(
     http_client: httpx.AsyncClient, agent_id: str, user_id: str,
 ) -> AgentCredentials:
-    """Per-user credential first; server-level dev credential as fallback."""
+    """Resolve the user's stored credential. No server-level fallback —
+    the web app is the only place credentials come from."""
     row = await query_convex(
         http_client,
         "agentCredentials:getForAgent",
         {"userId": user_id, "agent": agent_id},
     )
-    if row and row.get("ciphertext"):
-        try:
-            value = decrypt_secret(row["ciphertext"])
-            creds = _to_agent_credentials(agent_id, row.get("kind", ""), value)
-            await run_convex_mutation(
-                http_client,
-                "agentCredentials:touch",
-                {"userId": user_id, "agent": agent_id},
-            )
-            return creds
-        except CredentialCryptoError as e:
-            # Key rotated or corrupt row — fall back rather than hard-fail,
-            # but make the cause visible.
-            logger.error(
-                "Stored credential for user '%s' agent '%s' is unreadable: %s",
-                user_id, agent_id, e,
-            )
-    return resolve_server_credentials(agent_id, user_id)
+    if not row or not row.get("ciphertext"):
+        raise AgentCredentialsError(
+            "No credentials connected for this agent — add them in "
+            "Settings → Agent Connections."
+        )
+    try:
+        value = decrypt_secret(row["ciphertext"])
+    except CredentialCryptoError as e:
+        logger.error(
+            "Stored credential for user '%s' agent '%s' is unreadable: %s",
+            user_id, agent_id, e,
+        )
+        raise AgentCredentialsError(
+            "Your stored credential could not be decrypted (the server key "
+            "may have rotated). Reconnect it in Settings → Agent Connections."
+        ) from e
+    creds = _to_agent_credentials(agent_id, row.get("kind", ""), value)
+    # lastUsedAt bookkeeping is best-effort.
+    import contextlib
+
+    with contextlib.suppress(ConvexMutationError):
+        await run_convex_mutation(
+            http_client,
+            "agentCredentials:touch",
+            {"userId": user_id, "agent": agent_id},
+        )
+    return creds
 
 
 async def credential_sources(
@@ -199,22 +209,14 @@ async def credential_sources(
                 "available": True,
                 "unavailable_reason": None,
             }
-            continue
-        try:
-            resolve_server_credentials(agent_id, user_id)
-            out[agent_id] = {
-                "source": "server",
-                "kind": None,
-                "connected_at": None,
-                "available": True,
-                "unavailable_reason": None,
-            }
-        except AgentCredentialsError as e:
+        else:
             out[agent_id] = {
                 "source": None,
                 "kind": None,
                 "connected_at": None,
                 "available": False,
-                "unavailable_reason": str(e),
+                "unavailable_reason": (
+                    "Not connected — add credentials in Settings → Agent Connections."
+                ),
             }
     return out
