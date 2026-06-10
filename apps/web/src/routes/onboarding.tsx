@@ -37,6 +37,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
+import { AgentLoopPicker } from "../components/agent-loop-picker";
 import { HarnessCreationAssistant } from "../components/harness-creation-assistant";
 import { HarnessMark } from "../components/harness-mark";
 import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
@@ -60,6 +61,7 @@ import {
 } from "../components/ui/select";
 import { Textarea } from "../components/ui/textarea";
 import { env } from "../env";
+import type { AgentMode } from "../lib/agent-mode";
 import type { McpServerEntry } from "../lib/mcp";
 import {
 	fetchCommandsFromApi,
@@ -134,6 +136,12 @@ function OnboardingPage() {
 
 	const [name, setName] = useState(_prefill?.name ?? "");
 	const [model, setModel] = useState(_prefill?.model ?? "");
+	// Agent loop + its credential are harness configuration (one credential
+	// per harness; credentials are reusable across harnesses).
+	const [agent, setAgent] = useState<AgentMode>("default");
+	const [agentCredentialId, setAgentCredentialId] = useState<string | null>(
+		null,
+	);
 	const [systemPrompt, setSystemPrompt] = useState("");
 	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>(
 		[],
@@ -246,6 +254,8 @@ function OnboardingPage() {
 			mcpServers: HarnessMcpServerInput[];
 			skills: SkillEntry[];
 			systemPrompt?: string;
+			agent?: string;
+			agentCredentialId?: Id<"agentCredentials">;
 			sandboxEnabled?: boolean;
 			sandboxConfig?: SandboxConfig;
 			defaultSandbox?: {
@@ -414,7 +424,11 @@ function OnboardingPage() {
 
 	const canProceed = () => {
 		if (currentStep === "name")
-			return name.trim().length > 0 && model.length > 0;
+			return (
+				name.trim().length > 0 &&
+				model.length > 0 &&
+				(agent === "default" || agentCredentialId !== null)
+			);
 		if (currentStep === "sandbox" && sandboxEnabled) {
 			if (sandboxMode === "existing") return !!selectedSandbox;
 			return newSandboxName.trim().length > 0;
@@ -480,6 +494,11 @@ function OnboardingPage() {
 				mcpServers: mcpServersForMutation,
 				skills: selectedSkills,
 				systemPrompt: systemPrompt.trim() || undefined,
+				agent: agent !== "default" ? agent : undefined,
+				agentCredentialId:
+					agent !== "default" && agentCredentialId
+						? (agentCredentialId as Id<"agentCredentials">)
+						: undefined,
 				sandboxEnabled: sandboxEnabled || undefined,
 				sandboxConfig: sandboxEnabled ? defaultSandbox?.config : undefined,
 				defaultSandbox: sandboxEnabled ? defaultSandbox : undefined,
@@ -694,6 +713,10 @@ function OnboardingPage() {
 									setName={setName}
 									model={model}
 									setModel={setModel}
+									agent={agent}
+									setAgent={setAgent}
+									agentCredentialId={agentCredentialId}
+									setAgentCredentialId={setAgentCredentialId}
 									systemPrompt={systemPrompt}
 									setSystemPrompt={setSystemPrompt}
 								/>
@@ -805,6 +828,10 @@ function StepNameModel({
 	setName,
 	model,
 	setModel,
+	agent,
+	setAgent,
+	agentCredentialId,
+	setAgentCredentialId,
 	systemPrompt,
 	setSystemPrompt,
 }: {
@@ -812,13 +839,17 @@ function StepNameModel({
 	setName: (v: string) => void;
 	model: string;
 	setModel: (v: string) => void;
+	agent: AgentMode;
+	setAgent: (v: AgentMode) => void;
+	agentCredentialId: string | null;
+	setAgentCredentialId: (v: string | null) => void;
 	systemPrompt: string;
 	setSystemPrompt: (v: string) => void;
 }) {
 	return (
 		<div className="space-y-6">
 			<p className="text-xs text-muted-foreground">
-				Give your harness a name and select a model to get started.
+				Name your harness, pick the agent loop that runs it, and choose a model.
 			</p>
 			<div>
 				<label
@@ -838,29 +869,14 @@ function StepNameModel({
 					Give your harness a descriptive name.
 				</p>
 			</div>
-			<div>
-				<label
-					htmlFor="model-select"
-					className="mb-2 block text-xs font-medium text-foreground"
-				>
-					Model
-				</label>
-				<Select value={model} onValueChange={setModel}>
-					<SelectTrigger id="model-select" className="h-9">
-						<SelectValue placeholder="Select a model" />
-					</SelectTrigger>
-					<SelectContent>
-						{MODELS.map((m) => (
-							<SelectItem key={m.value} value={m.value}>
-								{m.label}
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
-				<p className="mt-1.5 text-xs text-muted-foreground">
-					Choose the LLM that powers this harness.
-				</p>
-			</div>
+			<AgentLoopPicker
+				agent={agent}
+				onAgentChange={setAgent}
+				credentialId={agentCredentialId}
+				onCredentialChange={setAgentCredentialId}
+				model={model}
+				onModelChange={setModel}
+			/>
 			<div>
 				<label
 					htmlFor="system-prompt"

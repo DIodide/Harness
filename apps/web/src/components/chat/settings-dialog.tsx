@@ -118,18 +118,18 @@ export function SettingsDialog({
 						<div className="flex items-center justify-between gap-3 py-1.5">
 							<div>
 								<p className="text-xs font-medium text-foreground">
-									Model selector
+									Chat changes
 								</p>
 								<p className="text-[11px] text-muted-foreground">
-									Whether switching models in chat updates the session or the
-									harness.
+									Switching the model, agent, or modes in chat updates the
+									harness itself, or only the current session.
 								</p>
 							</div>
 							<Select
-								value={(userSettings?.modelSelectorMode as string) ?? "session"}
+								value={(userSettings?.chatConfigScope as string) ?? "harness"}
 								onValueChange={(value) => {
 									updateSettings.mutate({
-										modelSelectorMode: value as "session" | "harness",
+										chatConfigScope: value as "harness" | "session",
 									});
 								}}
 							>
@@ -137,8 +137,8 @@ export function SettingsDialog({
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="session">Session</SelectItem>
 									<SelectItem value="harness">Harness</SelectItem>
+									<SelectItem value="session">Session</SelectItem>
 								</SelectContent>
 							</Select>
 						</div>
@@ -183,7 +183,7 @@ export function SettingsDialog({
 
 					<div>
 						<p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-							Agent Connections
+							Agent Credentials
 						</p>
 						<AgentConnections />
 					</div>

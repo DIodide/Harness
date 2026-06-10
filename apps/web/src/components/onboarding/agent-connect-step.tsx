@@ -5,7 +5,6 @@ import {
 	type AgentCatalogEntry,
 	useAgentCatalog,
 } from "../../lib/use-agent-catalog";
-import { ConnectForm } from "../agent-connections";
 import {
 	ClaudeLogo,
 	CursorLogo,
@@ -13,6 +12,7 @@ import {
 	OpenAILogo,
 	OpenCodeLogo,
 } from "../agent-logos";
+import { NewCredentialForm } from "../agent-loop-picker";
 
 /**
  * Onboarding step: bring your own coding agent. Connectable agents come
@@ -161,13 +161,14 @@ export function AgentConnectStep() {
 								<selectedDef.logo size={14} className="text-foreground" />
 								<p className="text-xs font-medium text-foreground">
 									{selectedEntry.source === "user"
-										? `Replace ${selectedDef.name} credentials`
+										? `Add another ${selectedDef.name} credential`
 										: `Connect ${selectedDef.name}`}
 								</p>
 							</div>
-							<ConnectForm
-								entry={selectedEntry}
-								onDone={() => setSelectedId(null)}
+							<NewCredentialForm
+								agent={selectedEntry.id}
+								onCreated={() => setSelectedId(null)}
+								onCancel={() => setSelectedId(null)}
 							/>
 						</div>
 					</motion.div>
