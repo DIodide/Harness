@@ -10,6 +10,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import toast from "react-hot-toast";
 import {
 	type AgentPermissionRequest,
 	agentStatusLabel,
@@ -292,13 +293,19 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 				delete next[conversationId];
 				return next;
 			});
-			const token = await getToken({ template: "convex" });
-			await answerAgentPermission(
-				token,
-				pending.sessionId,
-				pending.request.request_id,
-				optionId,
-			);
+			try {
+				const token = await getToken({ template: "convex" });
+				await answerAgentPermission(
+					token,
+					pending.sessionId,
+					pending.request.request_id,
+					optionId,
+				);
+			} catch (err) {
+				toast.error(
+					err instanceof Error ? err.message : "Failed to send approval",
+				);
+			}
 		},
 		[pendingPermissions, getToken],
 	);

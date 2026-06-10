@@ -240,7 +240,9 @@ async function runAgentStream(
 		throw new Error((await response.text()) || `HTTP ${response.status}`);
 	}
 
+	let finished = false;
 	await consumeSse(response, (event, data) => {
+		if (event === "done" || event === "error") finished = true;
 		switch (event) {
 			case "token":
 				cb.onToken(convoId, data.content as string);
@@ -294,6 +296,16 @@ async function runAgentStream(
 			// "commands_update", "mode_update": not yet rendered
 		}
 	});
+
+	// The connection closed without the turn concluding (server restart,
+	// proxy drop, network blip). Say so instead of silently stopping.
+	if (!finished) {
+		cb.onError(
+			convoId,
+			"The connection to the agent dropped mid-turn. The agent may still " +
+				"be working in its sandbox — send another message to reattach.",
+		);
+	}
 }
 
 export function useChatStream(callbacks: UseChatStreamCallbacks) {

@@ -488,12 +488,17 @@ class AgentSessionManager:
                         yield event
                         session.last_activity = time.monotonic()
                         continue
-                    # Turn finished — flush anything already queued.
+                    # Turn finished — flush anything already queued. The
+                    # cancelled get() may have already consumed an item;
+                    # recover it instead of dropping it.
                     queue_get.cancel()
+                    leftover = None
                     with contextlib.suppress(asyncio.CancelledError):
-                        await queue_get
+                        leftover = await queue_get
+                    pending_events = [leftover] if leftover is not None else []
                     while not session.event_queue.empty():
-                        event = session.event_queue.get_nowait()
+                        pending_events.append(session.event_queue.get_nowait())
+                    for event in pending_events:
                         if event["event"] == "token":
                             text_parts.append(event["data"]["content"])
                         yield event
@@ -512,6 +517,19 @@ class AgentSessionManager:
             except (AcpError, AcpTransportError) as e:
                 logger.warning("Prompt turn failed on session '%s': %s", session.id, e)
                 yield {"event": "error", "data": {"message": str(e)}}
+            except GeneratorExit:
+                # SSE client disconnected mid-turn (tab closed, dev-server
+                # reload, proxy drop). The agent keeps running server-side.
+                logger.warning(
+                    "SSE consumer disconnected mid-turn on session '%s' "
+                    "(turn still running: %s)", session.id, not turn.done(),
+                )
+                raise
+            except Exception as e:
+                # A bug here must surface as an error event, never as a
+                # silently truncated stream.
+                logger.exception("Unexpected error in prompt turn on session '%s'", session.id)
+                yield {"event": "error", "data": {"message": f"internal error: {e}"}}
             finally:
                 if not turn.done():
                     turn.cancel()

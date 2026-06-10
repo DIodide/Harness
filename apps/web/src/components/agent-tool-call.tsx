@@ -65,7 +65,7 @@ function firstString(...values: unknown[]): string | null {
 	return null;
 }
 
-function kindIcon(kind: string, className: string) {
+export function kindIcon(kind: string, className: string) {
 	switch (kind) {
 		case "execute":
 			return <SquareTerminal size={10} className={className} />;

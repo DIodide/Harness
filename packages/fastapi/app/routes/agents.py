@@ -174,6 +174,7 @@ async def prompt(
     async def event_stream():
         content = ""
         parts: list[dict] = []
+        terminal_event = None  # "done" | "error" once the turn concluded
         try:
             async for event in manager.prompt(
                 session_id,
@@ -182,6 +183,8 @@ async def prompt(
                 user_ctx,
                 history=[m.model_dump() for m in body.history or []],
             ):
+                if event["event"] in ("done", "error"):
+                    terminal_event = event["event"]
                 if event["event"] == "done":
                     content = event["data"]["content"]
                 elif event["event"] == "token":
@@ -220,6 +223,14 @@ async def prompt(
                             break
                 yield {"event": event["event"], "data": json.dumps(event["data"])}
         finally:
+            if terminal_event is None:
+                # Stream ended without done/error: client disconnect, server
+                # reload, or proxy drop — the #1 cause of "it just stopped".
+                logger.warning(
+                    "Agent prompt stream for session '%s' (convo '%s') ended "
+                    "without a terminal event — SSE consumer disconnected?",
+                    session_id, session.conversation_id,
+                )
             if content or parts:
                 await save_assistant_message(
                     http_client,

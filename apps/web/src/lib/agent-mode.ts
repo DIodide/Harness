@@ -189,7 +189,7 @@ export async function answerAgentPermission(
 	requestId: string,
 	optionId: string | null,
 ): Promise<void> {
-	await api(token, `/sessions/${sessionId}/permission`, {
+	const response = await api(token, `/sessions/${sessionId}/permission`, {
 		method: "POST",
 		body: JSON.stringify({
 			request_id: requestId,
@@ -197,6 +197,16 @@ export async function answerAgentPermission(
 			cancelled: optionId === null,
 		}),
 	});
+	if (!response.ok) {
+		// 404 here usually means the gateway restarted (in-memory session
+		// gone) or the request already timed out — the agent never got the
+		// answer, so the user must know.
+		throw new Error(
+			response.status === 404
+				? "This approval is no longer pending (the agent session may have restarted)."
+				: `Failed to send approval (HTTP ${response.status})`,
+		);
+	}
 }
 
 export async function cancelAgentTurn(
