@@ -68,6 +68,11 @@ export const updateSecret = internalMutation({
 	args: {
 		credentialId: v.id("agentCredentials"),
 		userId: v.string(),
+		// `kind` is validated against the REQUEST's agent upstream, so a
+		// rotation aimed at the wrong row would otherwise write a kind that
+		// is invalid for the row's actual agent (corrupting it). Optional
+		// only for deploy-window compatibility — FastAPI always sends it.
+		agent: v.optional(v.string()),
 		kind: KIND,
 		ciphertext: v.string(),
 		label: v.optional(v.string()),
@@ -76,6 +81,11 @@ export const updateSecret = internalMutation({
 		const row = await ctx.db.get(args.credentialId);
 		if (!row || row.userId !== args.userId) {
 			throw new Error("Credential not found");
+		}
+		if (args.agent !== undefined && row.agent !== args.agent) {
+			throw new Error(
+				`Credential belongs to '${row.agent}', not '${args.agent}'`,
+			);
 		}
 		await ctx.db.patch(args.credentialId, {
 			kind: args.kind,

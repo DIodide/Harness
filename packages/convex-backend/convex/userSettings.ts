@@ -26,8 +26,14 @@ export const get = query({
 			displayMode: settings.displayMode ?? "standard",
 			modelSelectorMode: settings.modelSelectorMode ?? "session",
 			// In-chat config changes (model/agent/modes) default to updating
-			// the harness; "session" keeps them ephemeral.
-			chatConfigScope: settings.chatConfigScope ?? "harness",
+			// the harness; "session" keeps them ephemeral. chatConfigScope
+			// replaced modelSelectorMode (whose default was "session") — a
+			// user who explicitly chose session-scoped switching under the
+			// old setting keeps that behavior instead of silently having
+			// every in-chat switch rewrite their harness.
+			chatConfigScope:
+				settings.chatConfigScope ??
+				(settings.modelSelectorMode === "session" ? "session" : "harness"),
 			workspacesMode: settings.workspacesMode ?? "workspaces"
 		};
 	},

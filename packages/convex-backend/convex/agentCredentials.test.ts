@@ -168,3 +168,39 @@ describe("agentCredentials.remove", () => {
 		).rejects.toThrow();
 	});
 });
+
+describe("agentCredentials.updateSecret agent check", () => {
+	it("rejects rotation aimed at a different agent's credential", async () => {
+		const { raw } = makeT();
+		const id = await raw.mutation(internal.agentCredentials.create, CRED);
+		// A codex rotation (kind auth_json is valid for codex) must not be
+		// able to rewrite a claude-code row's kind.
+		await expect(
+			raw.mutation(internal.agentCredentials.updateSecret, {
+				credentialId: id,
+				userId: "u-a",
+				agent: "codex",
+				kind: "auth_json" as const,
+				ciphertext: "codex-blob",
+			}),
+		).rejects.toThrow(/belongs to 'claude-code'/);
+	});
+
+	it("accepts rotation with the matching agent", async () => {
+		const { raw } = makeT();
+		const id = await raw.mutation(internal.agentCredentials.create, CRED);
+		await raw.mutation(internal.agentCredentials.updateSecret, {
+			credentialId: id,
+			userId: "u-a",
+			agent: "claude-code",
+			kind: "api_key" as const,
+			ciphertext: "rotated",
+		});
+		const row = await raw.query(internal.agentCredentials.getById, {
+			credentialId: id,
+			userId: "u-a",
+		});
+		expect(row?.kind).toBe("api_key");
+		expect(row?.ciphertext).toBe("rotated");
+	});
+});
