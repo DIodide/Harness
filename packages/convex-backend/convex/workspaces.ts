@@ -42,6 +42,44 @@ export const get = query({
 	},
 });
 
+/**
+ * Every user gets a "Default" workspace so conversations always have a
+ * home. Idempotent: returns the user's most recently used workspace when
+ * one exists, otherwise creates the Default (optionally linking the
+ * harness that onboarding just created).
+ */
+export const ensureDefault = mutation({
+	args: { harnessId: v.optional(v.id("harnesses")) },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+
+		const existing = await ctx.db
+			.query("workspaces")
+			.withIndex("by_user_last_used", (q) => q.eq("userId", identity.subject))
+			.order("desc")
+			.first();
+		if (existing) return existing._id;
+
+		let harnessId = args.harnessId;
+		if (harnessId) {
+			const harness = await ctx.db.get(harnessId);
+			if (!harness || harness.userId !== identity.subject) {
+				harnessId = undefined;
+			}
+		}
+
+		const now = Date.now();
+		return await ctx.db.insert("workspaces", {
+			userId: identity.subject,
+			name: "Default",
+			...(harnessId ? { harnessId } : {}),
+			createdAt: now,
+			lastUsedAt: now,
+		});
+	},
+});
+
 export const create = mutation({
 	args: {
 		name: v.optional(v.string()),

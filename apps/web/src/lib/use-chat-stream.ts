@@ -1,7 +1,16 @@
 import { useAuth, useUser } from "@clerk/tanstack-react-start";
 import { useCallback, useRef, useState } from "react";
 import { env } from "../env";
+import {
+	type AgentMode,
+	type AgentPermissionRequest,
+	type AgentPlanEntry,
+	type AgentQuestionRequest,
+	ensureAgentSession,
+	forgetAgentSession,
+} from "./agent-mode";
 import { checkChatRateLimit } from "./chat-ratelimit";
+import { buildAcpImageBlocks } from "./multimodal";
 
 const FASTAPI_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
@@ -10,6 +19,31 @@ export interface ToolCallEvent {
 	arguments: Record<string, unknown>;
 	call_id: string;
 	result?: string;
+	/** ACP tool kind (execute|read|edit|...) for agent built-ins. */
+	kind?: string;
+	locations?: Array<{ path?: string }>;
+	/** Set when a background/sub agent made this call (nest under parent). */
+	parentId?: string | null;
+}
+
+/** Message-boundary metadata on agent text/thought chunks. */
+export interface ChunkMeta {
+	messageId?: string | null;
+	parentId?: string | null;
+}
+
+/** Live context/cost usage from the user's own agent account. */
+export interface AgentUsage {
+	used: number | null;
+	size: number | null;
+	cost: number | null;
+	currency: string;
+}
+
+export interface ToolDiff {
+	path?: string | null;
+	oldText?: string | null;
+	newText?: string | null;
 }
 
 export interface UsageData {
@@ -26,6 +60,11 @@ export interface StreamPart {
 	arguments?: Record<string, unknown>;
 	call_id?: string;
 	result?: string;
+	kind?: string;
+	locations?: Array<{ path?: string }>;
+	diff?: ToolDiff | null;
+	messageId?: string | null;
+	parentId?: string | null;
 }
 
 export interface ConvoStreamState {
@@ -36,6 +75,12 @@ export interface ConvoStreamState {
 	pendingDoneContent: string | null;
 	usage: UsageData | null;
 	model: string | null;
+	/** ACP agent mode: friendly gateway status ("Starting Codex sandbox…"). */
+	agentStatus: string | null;
+	/** ACP agent mode: latest plan snapshot from the agent. */
+	plan: AgentPlanEntry[] | null;
+	/** ACP agent mode: live context/cost usage (user's own account). */
+	agentUsage: AgentUsage | null;
 }
 
 export interface BudgetExceededInfo {
@@ -46,12 +91,16 @@ export interface BudgetExceededInfo {
 }
 
 interface UseChatStreamCallbacks {
-	onToken: (conversationId: string, content: string) => void;
-	onThinking: (conversationId: string, content: string) => void;
+	onToken: (conversationId: string, content: string, meta?: ChunkMeta) => void;
+	onThinking: (
+		conversationId: string,
+		content: string,
+		meta?: ChunkMeta,
+	) => void;
 	onToolCall: (conversationId: string, event: ToolCallEvent) => void;
 	onToolResult: (
 		conversationId: string,
-		event: { call_id: string; result: string },
+		event: { call_id: string; result: string; diff?: ToolDiff | null },
 	) => void;
 	onDone: (
 		conversationId: string,
@@ -70,6 +119,33 @@ interface UseChatStreamCallbacks {
 	onError: (conversationId: string, error: string) => void;
 	onBudgetExceeded?: (conversationId: string, info: BudgetExceededInfo) => void;
 	onAbort?: (conversationId: string) => void;
+	/** ACP agent mode: the agent is waiting for a tool-use approval. */
+	onPermissionRequest?: (
+		conversationId: string,
+		sessionId: string,
+		request: AgentPermissionRequest,
+	) => void;
+	/** ACP agent mode: a pending permission request was resolved. */
+	onPermissionResolved?: (conversationId: string, requestId: string) => void;
+	/** ACP agent mode: gateway status (provisioning, ready, ...). */
+	onAgentStatus?: (
+		conversationId: string,
+		data: { state?: string; agent?: string },
+	) => void;
+	/** ACP agent mode: agent plan snapshot. */
+	onPlan?: (conversationId: string, entries: AgentPlanEntry[]) => void;
+	/** ACP agent mode: context window + cost from the user's own account. */
+	onAgentUsage?: (conversationId: string, usage: AgentUsage) => void;
+	/** ACP agent mode: session config/commands/mode changed server-side. */
+	onAgentSessionChanged?: (conversationId: string) => void;
+	/** ACP agent mode: the agent asked the user a structured question. */
+	onQuestionRequest?: (
+		conversationId: string,
+		sessionId: string,
+		request: AgentQuestionRequest,
+	) => void;
+	/** ACP agent mode: a pending question was answered or timed out. */
+	onQuestionResolved?: (conversationId: string, requestId: string) => void;
 }
 
 export type MessageContent = string | Array<Record<string, unknown>>;
@@ -99,6 +175,263 @@ export interface ChatStreamRequest {
 	};
 	conversation_id: string;
 	forced_tool?: string;
+	/**
+	 * External ACP agent ("codex", "claude-code"). Omitted or "default" uses
+	 * the Harness-provided OpenRouter loop. In agent mode, usage is billed to
+	 * the user's own agent account — no OpenRouter usage tracking applies.
+	 */
+	agent?: AgentMode;
+}
+
+/**
+ * Strip stream-only fields (messageId, locations, diff) and map camelCase
+ * parentId to the persisted parent_id before writing parts to Convex —
+ * the message validators reject unknown fields.
+ */
+export function toPersistableParts(parts: StreamPart[]): Array<{
+	type: "text" | "reasoning" | "tool_call";
+	content?: string;
+	tool?: string;
+	arguments?: Record<string, unknown>;
+	call_id?: string;
+	result?: string;
+	kind?: string;
+	parent_id?: string;
+}> {
+	return parts.map((part) => ({
+		type: part.type,
+		...(part.content !== undefined ? { content: part.content } : {}),
+		...(part.tool !== undefined ? { tool: part.tool } : {}),
+		...(part.arguments !== undefined ? { arguments: part.arguments } : {}),
+		...(part.call_id !== undefined ? { call_id: part.call_id } : {}),
+		...(part.result !== undefined ? { result: part.result } : {}),
+		...(part.kind !== undefined ? { kind: part.kind } : {}),
+		...(part.parentId ? { parent_id: part.parentId } : {}),
+	}));
+}
+
+function extractText(content: MessageContent): string {
+	if (typeof content === "string") return content;
+	return content
+		.filter((part) => part.type === "text" && typeof part.text === "string")
+		.map((part) => part.text as string)
+		.join("\n");
+}
+
+/** Minimal SSE reader shared by the agent-mode stream. */
+async function consumeSse(
+	response: Response,
+	onEvent: (event: string, data: Record<string, unknown>) => void,
+): Promise<void> {
+	if (!response.body) throw new Error("Response body is null");
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let currentEvent = "message";
+
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		buffer += decoder.decode(value, { stream: true });
+		const lines = buffer.split("\n");
+		buffer = lines.pop() ?? "";
+		for (const line of lines) {
+			if (line.startsWith("event: ")) {
+				currentEvent = line.slice(7).trim();
+				continue;
+			}
+			if (line.startsWith("data: ")) {
+				try {
+					onEvent(currentEvent, JSON.parse(line.slice(6)));
+				} catch {
+					// Skip malformed JSON lines
+				}
+				currentEvent = "message";
+			}
+		}
+	}
+}
+
+/** One prompt turn against the ACP agent gateway (/api/agents). */
+async function runAgentStream(
+	body: ChatStreamRequest,
+	token: string | null,
+	controller: AbortController,
+	cbRef: { current: UseChatStreamCallbacks },
+): Promise<void> {
+	const cb = new Proxy({} as UseChatStreamCallbacks, {
+		get: (_target, prop) => cbRef.current[prop as keyof UseChatStreamCallbacks],
+	});
+	const convoId = body.conversation_id;
+	const agent = body.agent as AgentMode;
+	const messages = body.messages;
+	const last = messages[messages.length - 1];
+	const message = last ? extractText(last.content) : "";
+	// Image attachments become ACP image blocks (base64); the gateway drops
+	// them for agents without promptCapabilities.image.
+	const blocks = last ? await buildAcpImageBlocks(last.content) : [];
+	const history = messages.slice(0, -1).map((m) => ({
+		role: m.role,
+		content: extractText(m.content),
+	}));
+
+	const prompt = async (sessionId: string) =>
+		fetch(`${FASTAPI_URL}/api/agents/sessions/${sessionId}/prompt`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...(token ? { Authorization: `Bearer ${token}` } : {}),
+			},
+			body: JSON.stringify({
+				message,
+				history,
+				...(blocks.length > 0 ? { blocks } : {}),
+			}),
+			signal: controller.signal,
+		});
+
+	let sessionId = await ensureAgentSession(
+		token,
+		agent,
+		body.harness as never,
+		convoId,
+	);
+	let response = await prompt(sessionId);
+	if (response.status === 404) {
+		// Session was reaped or the gateway restarted — recreate once.
+		forgetAgentSession(convoId, agent);
+		sessionId = await ensureAgentSession(
+			token,
+			agent,
+			body.harness as never,
+			convoId,
+		);
+		response = await prompt(sessionId);
+	}
+	if (!response.ok) {
+		throw new Error((await response.text()) || `HTTP ${response.status}`);
+	}
+
+	let finished = false;
+	await consumeSse(response, (event, data) => {
+		if (event === "done" || event === "error") finished = true;
+		switch (event) {
+			case "token":
+				cb.onToken(convoId, data.content as string, {
+					messageId: (data.message_id ?? null) as string | null,
+					parentId: (data.parent_id ?? null) as string | null,
+				});
+				break;
+			case "thinking":
+				cb.onThinking(convoId, data.content as string, {
+					messageId: (data.message_id ?? null) as string | null,
+					parentId: (data.parent_id ?? null) as string | null,
+				});
+				break;
+			case "tool_call":
+				cb.onToolCall(convoId, {
+					tool: data.tool as string,
+					arguments: (data.arguments ?? {}) as Record<string, unknown>,
+					call_id: data.call_id as string,
+					kind: (data.kind ?? "other") as string,
+					locations: (data.locations ?? []) as Array<{ path?: string }>,
+					parentId: (data.parent_id ?? null) as string | null,
+				});
+				break;
+			case "tool_result":
+				cb.onToolResult(convoId, {
+					call_id: data.call_id as string,
+					result: (data.result ?? "") as string,
+					diff: (data.diff ?? null) as ToolDiff | null,
+				});
+				break;
+			case "permission_request":
+				cb.onPermissionRequest?.(
+					convoId,
+					sessionId,
+					data as unknown as AgentPermissionRequest,
+				);
+				break;
+			case "permission_resolved":
+				cb.onPermissionResolved?.(convoId, data.request_id as string);
+				break;
+			case "question_request":
+				cb.onQuestionRequest?.(
+					convoId,
+					sessionId,
+					data as unknown as AgentQuestionRequest,
+				);
+				break;
+			case "question_resolved":
+				cb.onQuestionResolved?.(convoId, data.request_id as string);
+				break;
+			case "question_answered": {
+				// Surface the Q→A exchange as a transcript part (same shape the
+				// backend persists), via the existing tool-call plumbing.
+				const callId = data.call_id as string;
+				const qa = (data.qa ?? []) as Array<{ q: string; a: string }>;
+				cb.onToolCall(convoId, {
+					tool: (data.message ?? "Question") as string,
+					arguments: { qa, action: data.action },
+					call_id: callId,
+					kind: "ask_user",
+				});
+				cb.onToolResult(convoId, {
+					call_id: callId,
+					result: qa.length
+						? qa.map((e) => `${e.q} → ${e.a}`).join("\n")
+						: data.action !== "cancel"
+							? "Skipped"
+							: "Dismissed",
+					diff: null,
+				});
+				break;
+			}
+			case "status":
+				cb.onAgentStatus?.(convoId, data as { state?: string; agent?: string });
+				break;
+			case "plan":
+				cb.onPlan?.(convoId, (data.entries ?? []) as AgentPlanEntry[]);
+				break;
+			case "agent_usage":
+				cb.onAgentUsage?.(convoId, {
+					used: (data.used ?? null) as number | null,
+					size: (data.size ?? null) as number | null,
+					cost: (data.cost ?? null) as number | null,
+					currency: (data.currency ?? "USD") as string,
+				});
+				break;
+			case "done":
+				cb.onDone(
+					convoId,
+					data.content as string,
+					undefined, // usage is user-side in agent mode
+					data.model as string,
+				);
+				break;
+			case "error":
+				cb.onError(convoId, data.message as string);
+				break;
+			case "config_update":
+			case "commands_update":
+			case "mode_update":
+				// Session-level state changed (agent switched mode itself, new
+				// slash commands, ...) — composer selectors refresh from the
+				// session endpoint.
+				cb.onAgentSessionChanged?.(convoId);
+				break;
+		}
+	});
+
+	// The connection closed without the turn concluding (server restart,
+	// proxy drop, network blip). Say so instead of silently stopping.
+	if (!finished) {
+		cb.onError(
+			convoId,
+			"The connection to the agent dropped mid-turn. The agent may still " +
+				"be working in its sandbox — send another message to reattach.",
+		);
+	}
 }
 
 export function useChatStream(callbacks: UseChatStreamCallbacks) {
@@ -143,6 +476,13 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 				}
 
 				const token = await getToken({ template: "convex" });
+
+				// External ACP agent path (Codex CLI, Claude Code, ...).
+				if (body.agent && body.agent !== "default") {
+					await runAgentStream(body, token, controller, cbRef);
+					return;
+				}
+
 				const response = await fetch(`${FASTAPI_URL}/api/chat/stream`, {
 					method: "POST",
 					headers: {

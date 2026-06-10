@@ -24,6 +24,13 @@ export default defineSchema({
 		suggestedPrompts: v.optional(v.array(v.string())),
 		userId: v.string(),
 		lastUsedAt: v.optional(v.number()),
+		// Agent loop this harness runs on: "default" (Harness via OpenRouter)
+		// or an ACP agent id ("claude-code" | "codex" | "cursor"). Absent =
+		// default.
+		agent: v.optional(v.string()),
+		// The stored credential this harness uses for its ACP agent (one
+		// credential per harness; credentials are reusable across harnesses).
+		agentCredentialId: v.optional(v.id("agentCredentials")),
 		// Daytona sandbox configuration
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxId: v.optional(v.id("sandboxes")),
@@ -147,6 +154,10 @@ export default defineSchema({
 					arguments: v.optional(v.any()),
 					call_id: v.optional(v.string()),
 					result: v.optional(v.string()),
+					// ACP tool kind (execute|read|edit|...) for agent built-ins;
+					// absent for MCP/default-agent tool calls.
+					kind: v.optional(v.string()),
+					parent_id: v.optional(v.string()),
 				}),
 			),
 		),
@@ -178,6 +189,25 @@ export default defineSchema({
 			filterFields: ["conversationId", "userId", "workspaceId"]
 		}),
 
+
+	// Per-user credentials for external ACP agents (Codex CLI, Claude Code).
+	// Values are AES-256-GCM ciphertext produced by the FastAPI backend —
+	// Convex and the browser never see plaintext.
+	agentCredentials: defineTable({
+		userId: v.string(),
+		agent: v.string(), // "codex" | "claude-code"
+		kind: v.union(
+			v.literal("auth_json"),
+			v.literal("api_key"),
+			v.literal("oauth_token"),
+		),
+		ciphertext: v.string(),
+		label: v.optional(v.string()),
+		createdAt: v.number(),
+		lastUsedAt: v.optional(v.number()),
+	})
+		.index("by_user", ["userId"])
+		.index("by_user_agent", ["userId", "agent"]),
 
 	mcpOAuthTokens: defineTable({
 		userId: v.string(),
@@ -229,6 +259,11 @@ export default defineSchema({
 		),
 		// Controls whether the in-chat model selector changes only the current
 		// session ("session") or persists the change to the harness ("harness").
+		// Whether in-chat config changes (model, agent, modes) update the
+		// harness itself (default) or only the current session.
+		chatConfigScope: v.optional(
+			v.union(v.literal("harness"), v.literal("session")),
+		),
 		modelSelectorMode: v.optional(
 			v.union(v.literal("session"), v.literal("harness")),
 		),

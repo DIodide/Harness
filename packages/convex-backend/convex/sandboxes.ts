@@ -234,6 +234,24 @@ export const createInternal = internalMutation({
  * Uses deploy key auth — not callable from the frontend.
  */
 /**
+ * Internal mutation: remove the record for a deleted Daytona sandbox.
+ * Used by the ACP agent gateway when it tears down an agent session.
+ */
+export const removeByDaytonaId = internalMutation({
+	args: { daytonaSandboxId: v.string() },
+	handler: async (ctx, args) => {
+		const row = await ctx.db
+			.query("sandboxes")
+			.withIndex("by_daytona_id", (q) =>
+				q.eq("daytonaSandboxId", args.daytonaSandboxId),
+			)
+			.unique();
+		if (row) await ctx.db.delete(row._id);
+		return { removed: row !== null };
+	},
+});
+
+/**
  * Internal query used by FastAPI to verify sandbox ownership.
  * Returns the userId of the sandbox owner, or null if not found.
  */

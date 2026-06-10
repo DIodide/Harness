@@ -3,16 +3,17 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import {
 	ArrowRight,
 	Check,
-	FolderTree,
-	GitBranch,
-	Layers,
+	FileDiff,
+	Lock,
 	Menu,
+	MessagesSquare,
 	Plug,
-	Plus,
+	Repeat,
 	Server,
+	ShieldCheck,
 	Sparkles,
-	TerminalSquare,
-	Wallet,
+	SquareTerminal,
+	Workflow,
 	X,
 } from "lucide-react";
 import {
@@ -24,6 +25,13 @@ import {
 } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import {
+	ClaudeLogo,
+	CursorLogo,
+	GeminiLogo,
+	OpenAILogo,
+	OpenCodeLogo,
+} from "../components/agent-logos";
 import { HarnessMark } from "../components/harness-mark";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -36,11 +44,11 @@ export const Route = createFileRoute("/")({
 	component: LandingPage,
 	head: () => ({
 		meta: [
-			{ title: "Harness — One chat, every tool your agent needs" },
+			{ title: "Harness — Every coding agent. One chat. Every tool." },
 			{
 				name: "description",
 				content:
-					"Bundle your model, MCP servers, skills, and a live sandbox into a harness. Switch from coding to research to ops in one click.",
+					"Connect Claude Code, Codex, or Cursor. Harness equips them with MCP servers and skills, and lets you swap their entire toolset mid-conversation — in one click.",
 			},
 		],
 	}),
@@ -48,73 +56,101 @@ export const Route = createFileRoute("/")({
 
 /* ─────────────────────── Constants ─────────────────────── */
 
-const rotatingWords = [
+const AGENTS = [
+	{
+		name: "Claude Code",
+		blurb: "Anthropic's coding agent",
+		logo: ClaudeLogo,
+		live: true,
+	},
+	{
+		name: "Codex CLI",
+		blurb: "OpenAI's coding agent",
+		logo: OpenAILogo,
+		live: true,
+	},
+	{ name: "Cursor", blurb: "Cursor's CLI agent", logo: CursorLogo, live: true },
+	{
+		name: "OpenCode",
+		blurb: "Open-source agent",
+		logo: OpenCodeLogo,
+		live: false,
+	},
+	{
+		name: "Gemini CLI",
+		blurb: "Google's coding agent",
+		logo: GeminiLogo,
+		live: false,
+	},
+];
+
+const rotatingContexts = [
 	"code review",
-	"issue triage",
 	"deep research",
-	"weekly notes",
+	"issue triage",
+	"on-call ops",
 ];
 
 const primaryFeatures = [
 	{
-		icon: Layers,
-		title: "One agent, many contexts",
-		description:
-			"A harness saves your model, system prompt, MCPs, skills, and sandbox. Switch from a coding agent to a research agent in one click.",
-	},
-	{
 		icon: Plug,
-		title: "Plug in any tool",
+		title: "Bring your own credentials",
 		description:
-			"A growing catalog — GitHub, Notion, Linear, Exa, Context7, and more. OAuth handled. Custom MCP URLs welcome.",
+			"Connect Claude Code, Codex, or Cursor with your own login or API key. Each runs in an isolated cloud sandbox — Harness never sees your model bill.",
 	},
 	{
-		icon: TerminalSquare,
-		title: "Real code, not just chat",
+		icon: Repeat,
+		title: "Rapid MCP context switching",
 		description:
-			"Each harness can attach a Daytona-backed sandbox: file explorer, terminal, git. Your agent edits, runs, and ships — you watch it land.",
+			"Swap your agent's entire toolset mid-conversation. Go from a research stack to a GitHub-ops stack in one click — the context carries over, the tools change instantly.",
+	},
+	{
+		icon: MessagesSquare,
+		title: "One chat for all of them",
+		description:
+			"The same polished UI for every agent: streaming reasoning, terminal output, file diffs, and inline approvals. No editor, no per-agent setup.",
 	},
 ];
 
 const secondaryFeatures = [
 	{
+		icon: Server,
+		title: "A catalog of MCP servers",
+		description:
+			"GitHub, Notion, Linear, DeepWiki, Context7, and any custom URL. OAuth handled and refreshed — credentials brokered server-side, never in the sandbox.",
+	},
+	{
 		icon: Sparkles,
 		title: "Skills from skills.sh",
 		description:
-			"Pull battle-tested instructions for code review, debugging, web search, PDFs. Your agent learns your team's playbook on import.",
+			"Bundle battle-tested playbooks — code review, debugging, web search — into a harness. Your agent imports your team's conventions on connect.",
 	},
 	{
-		icon: Server,
-		title: "Slash commands & rich attachments",
+		icon: ShieldCheck,
+		title: "Sandboxed & approvals-first",
 		description:
-			"Every MCP tool becomes a / command. Drop in images, PDFs, audio. Streaming reasoning across Claude, GPT, and Gemini.",
-	},
-	{
-		icon: Wallet,
-		title: "Transparent budgets",
-		description:
-			"Daily and weekly cost caps with per-model and per-harness breakdowns. No surprise bills at the end of the month.",
+			"Agents execute in isolated Daytona sandboxes with a real terminal and git. Sensitive commands surface an inline approval card before they run.",
 	},
 ];
 
 const steps = [
 	{
 		num: "01",
-		title: "Configure",
+		title: "Connect an agent",
 		description:
-			"Name a harness. Pick a model — Claude, GPT, or Gemini. Attach the MCPs and skills your agent needs. Optionally add a Daytona sandbox.",
+			"Bring Claude Code, Codex, or Cursor — or start with Harness's built-in models, no setup. Credentials are encrypted and write-only.",
 	},
 	{
 		num: "02",
-		title: "Connect",
+		title: "Equip a harness",
 		description:
-			"OAuth into GitHub, Notion, Linear, or any provider in one popup. Tokens are stored encrypted and refreshed on demand — no manual key wrangling.",
+			"Bundle the MCP servers and skills your agent needs. OAuth into GitHub, Notion, or Linear in one popup. Save it as a reusable harness.",
 	},
 	{
 		num: "03",
-		title: "Chat",
+		title: "Chat & switch",
 		description:
-			"Streaming reasoning, slash commands, tool calls, attachments, and live sandbox output — all in one conversation.",
+			"Send a message and watch tool calls, diffs, and terminal output stream in. Swap harnesses any time — the conversation keeps going.",
 	},
 ];
 
@@ -149,7 +185,7 @@ function RotatingWord() {
 
 	useEffect(() => {
 		const timer = setInterval(
-			() => setIndex((i) => (i + 1) % rotatingWords.length),
+			() => setIndex((i) => (i + 1) % rotatingContexts.length),
 			2400,
 		);
 		return () => clearInterval(timer);
@@ -159,14 +195,14 @@ function RotatingWord() {
 		<span className="relative inline-flex h-[1.12em] overflow-hidden align-bottom">
 			<AnimatePresence mode="wait">
 				<motion.span
-					key={rotatingWords[index]}
+					key={rotatingContexts[index]}
 					className="inline-block"
 					initial={{ y: "100%", opacity: 0 }}
 					animate={{ y: "0%", opacity: 1 }}
 					exit={{ y: "-110%", opacity: 0 }}
 					transition={{ duration: 0.4, ease }}
 				>
-					{rotatingWords[index]}
+					{rotatingContexts[index]}
 				</motion.span>
 			</AnimatePresence>
 		</span>
@@ -232,19 +268,20 @@ function FloatingDots() {
 	);
 }
 
-/* ─────────────────────── Product Mocks ─────────────────────── */
+/* ─────────────────────── Hero Product Mock ─────────────────────── */
 
 /**
- * MockChatPanel — visual stand-in for the real chat surface, used in the hero.
- * Not interactive. Shows a generic issue-triage agent example wired to GitHub
- * + Linear MCPs to highlight the agent → tool-call → answer loop.
+ * MockAgentChat — visual stand-in for the agent chat surface. Shows an
+ * external coding agent (Codex) running a real task with the first-class
+ * tool rendering Harness ships: a plan checklist, a terminal command, and
+ * a file diff. Not interactive.
  */
-function MockChatPanel() {
+function MockAgentChat() {
 	const ref = useRef<HTMLDivElement>(null);
 	const isInView = useInView(ref, { once: true, margin: "-60px" });
 
 	return (
-		<div ref={ref} className="relative w-full max-w-[460px]">
+		<div ref={ref} className="relative w-full max-w-[470px]">
 			<div className="absolute -inset-6 -z-10 bg-black/[0.015] blur-3xl" />
 			<motion.div
 				initial={{ opacity: 0, y: 20 }}
@@ -252,19 +289,22 @@ function MockChatPanel() {
 				transition={{ duration: 0.6, ease }}
 				className="border border-black/[0.08] bg-white shadow-[0_24px_64px_-32px_rgba(0,0,0,0.18)]"
 			>
-				{/* Header */}
+				{/* Header — agent identity + active harness */}
 				<div className="flex items-center gap-2 border-b border-black/[0.06] px-4 py-2.5">
 					<div className="flex h-6 w-6 items-center justify-center bg-black">
-						<HarnessMark size={12} className="text-white" />
+						<OpenAILogo size={13} className="text-white" />
 					</div>
 					<div className="flex min-w-0 flex-1 items-center gap-2 text-[11px]">
-						<span className="font-medium">Issue triage agent</span>
+						<span className="font-medium">Codex CLI</span>
 						<span className="text-black/30">·</span>
-						<span className="text-black/50">claude-sonnet-4.6</span>
+						<span className="flex items-center gap-1 bg-black/[0.05] px-1.5 py-0.5 text-[10px] text-black/65">
+							<Workflow size={9} />
+							Backend Ops
+						</span>
 					</div>
 					<div className="flex items-center gap-1 text-[10px] text-black/40">
 						<div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-						<span>3 MCPs</span>
+						<span>sandbox</span>
 					</div>
 				</div>
 
@@ -273,55 +313,42 @@ function MockChatPanel() {
 					<motion.div
 						initial={{ opacity: 0, y: 6 }}
 						animate={isInView ? { opacity: 1, y: 0 } : {}}
-						transition={{ duration: 0.4, delay: 0.4, ease }}
+						transition={{ duration: 0.4, delay: 0.35, ease }}
 						className="ml-auto max-w-[85%] bg-[#fafafa] px-3 py-2 text-black/80"
 					>
-						Pull this week's open auth-related bug reports and file the
-						highest-signal ones in Linear.
+						The auth test is failing in CI. Find it and fix it.
 					</motion.div>
 
 					<motion.div
 						initial={{ opacity: 0, y: 6 }}
 						animate={isInView ? { opacity: 1, y: 0 } : {}}
-						transition={{ duration: 0.4, delay: 0.9, ease }}
+						transition={{ duration: 0.4, delay: 0.8, ease }}
 						className="space-y-2"
 					>
-						<MockToolCall
-							server="github"
-							tool="search_issues"
-							arg="auth is:open"
-							ms={142}
-						/>
-						<MockToolCall
-							server="linear"
-							tool="create_issue"
-							arg="Auth: SSO token refresh"
-							ms={268}
-						/>
+						<MockPlan />
+						<MockTerminal />
+						<MockDiff />
 
 						<div className="text-black/85">
-							Found 7 open issues mentioning auth. The top theme — SSO token
-							refresh failing — appears in{" "}
-							<span className="font-medium">4 reports</span>. Filed{" "}
-							<span className="bg-emerald-500/10 px-1 text-emerald-700">
-								LIN-481
-							</span>{" "}
-							and grouped the long tail under{" "}
-							<span className="font-medium">LIN-482</span>.
+							Fixed — the token refresh compared timestamps without the
+							clock-skew window. Tests pass.
 						</div>
-
 						<MockStreamingDot />
 					</motion.div>
 				</div>
 
-				{/* Composer with slash hint */}
+				{/* Composer with harness switcher hint */}
 				<div className="border-t border-black/[0.06] px-3 py-2">
-					<div className="flex items-center gap-2 border border-black/[0.08] bg-white px-2.5 py-1.5">
-						<span className="font-mono text-[11px] text-emerald-600">/</span>
-						<span className="font-mono text-[11px] text-black/45">
-							linear_create_issue
+					<div className="flex items-center gap-2 text-[10px] text-black/40">
+						<span className="flex items-center gap-1 border border-black/[0.08] px-2 py-1">
+							<OpenAILogo size={10} />
+							Codex
 						</span>
-						<span className="ml-auto text-[10px] text-black/30">↵ run</span>
+						<span className="flex items-center gap-1 border border-black/[0.08] px-2 py-1">
+							<Workflow size={9} />
+							Backend Ops
+						</span>
+						<span className="ml-auto">⌘K to switch</span>
 					</div>
 				</div>
 			</motion.div>
@@ -329,25 +356,78 @@ function MockChatPanel() {
 	);
 }
 
-function MockToolCall({
-	server,
-	tool,
-	arg,
-	ms,
-}: {
-	server: string;
-	tool: string;
-	arg: string;
-	ms: number;
-}) {
+function MockPlan() {
+	const items = [
+		{ label: "Locate the failing auth test", done: true },
+		{ label: "Reproduce in the sandbox", done: true },
+		{ label: "Patch the token refresh", active: true },
+	];
 	return (
-		<div className="flex items-center gap-2 border border-black/[0.06] bg-[#fafafa] px-2 py-1.5 font-mono text-[10.5px]">
-			<Check size={10} className="shrink-0 text-emerald-600" />
-			<span className="text-black/55">{server}</span>
-			<span className="text-black/30">·</span>
-			<span className="text-black/80">{tool}</span>
-			<span className="truncate text-black/40">("{arg}")</span>
-			<span className="ml-auto shrink-0 text-black/35">{ms}ms</span>
+		<div className="border border-black/[0.06] bg-[#fafafa] px-2.5 py-2">
+			<div className="mb-1 flex items-center gap-1 text-[9px] font-medium uppercase tracking-wider text-black/45">
+				<Workflow size={9} />
+				Plan
+				<span className="ml-auto tracking-normal">2/3</span>
+			</div>
+			<div className="space-y-0.5">
+				{items.map((it) => (
+					<div
+						key={it.label}
+						className="flex items-center gap-1.5 text-[10.5px]"
+					>
+						{it.done ? (
+							<Check size={9} className="shrink-0 text-emerald-600" />
+						) : (
+							<span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-black/40" />
+						)}
+						<span
+							className={
+								it.done ? "text-black/40 line-through" : "text-black/80"
+							}
+						>
+							{it.label}
+						</span>
+					</div>
+				))}
+			</div>
+		</div>
+	);
+}
+
+function MockTerminal() {
+	return (
+		<div className="overflow-hidden bg-[#0a0a0a] font-mono text-[10px]">
+			<div className="flex items-center gap-1.5 border-b border-white/[0.06] px-2.5 py-1 text-white/80">
+				<SquareTerminal size={10} className="text-emerald-400" />
+				<span className="text-white/40">$</span>
+				<span>pytest tests/auth -x</span>
+			</div>
+			<div className="space-y-0.5 px-2.5 py-1.5 text-white/55">
+				<div>
+					tests/auth/test_refresh.py::test_skew{" "}
+					<span className="text-red-400">FAILED</span>
+				</div>
+				<div className="text-white/35">AssertionError: token expired early</div>
+			</div>
+		</div>
+	);
+}
+
+function MockDiff() {
+	return (
+		<div className="overflow-hidden border border-black/[0.08] font-mono text-[10px]">
+			<div className="flex items-center gap-1.5 bg-[#fafafa] px-2.5 py-1 text-black/55">
+				<FileDiff size={10} />
+				app/auth/refresh.py
+			</div>
+			<div>
+				<div className="bg-red-500/10 px-2.5 text-red-600">
+					- if now &gt; token.expires_at:
+				</div>
+				<div className="bg-emerald-500/10 px-2.5 text-emerald-700">
+					+ if now &gt; token.expires_at + SKEW:
+				</div>
+			</div>
 		</div>
 	);
 }
@@ -372,196 +452,115 @@ function MockStreamingDot() {
 	);
 }
 
-/**
- * MockMcpPopover — visual stand-in for the new inline MCP add popover.
- * Mirrors the real component (mcp-server-status.tsx) at a glance.
- */
-function MockMcpPopover() {
-	return (
-		<div className="border border-black/[0.08] bg-white shadow-[0_16px_48px_-20px_rgba(0,0,0,0.18)]">
-			<div className="flex items-center gap-2 border-b border-black/[0.06] px-3 py-2">
-				<span className="flex-1 text-[10px] font-medium uppercase tracking-wider text-black/50">
-					MCP Servers
-				</span>
-				<div className="flex h-4 w-4 items-center justify-center text-black/50">
-					<Plus size={11} />
-				</div>
-			</div>
-			<div className="py-1">
-				{[
-					{ name: "GitHub", status: "Connected", badge: "OAuth", oauth: true },
-					{
-						name: "Linear",
-						status: "Connected",
-						badge: "OAuth",
-						oauth: true,
-					},
-					{
-						name: "Context7",
-						status: "Connected",
-						badge: "Public",
-					},
-					{ name: "Notion", status: "Token expired", warn: true },
-				].map((s) => (
-					<div
-						key={s.name}
-						className="flex items-center gap-2 px-3 py-1.5 text-[11px]"
-					>
-						<div
-							className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-								s.warn ? "bg-amber-400" : "bg-emerald-500"
-							}`}
-						/>
-						<div className="min-w-0 flex-1">
-							<div className="truncate font-medium text-black/85">{s.name}</div>
-							<div className="text-[10px] text-black/45">{s.status}</div>
-						</div>
-						{s.badge && (
-							<span className="flex shrink-0 items-center gap-0.5 bg-black/[0.05] px-1.5 py-0.5 text-[9px] text-black/65">
-								{s.oauth && (
-									<span className="h-1 w-1 rounded-full bg-emerald-500" />
-								)}
-								{s.badge}
-							</span>
-						)}
-					</div>
-				))}
-			</div>
-		</div>
-	);
-}
+/* ─────────── Context-switch mock (the bread & butter) ─────────── */
+
+const HARNESS_CONFIGS = [
+	{
+		name: "Research",
+		tools: ["DeepWiki", "Exa", "Context7"],
+	},
+	{
+		name: "GitHub Ops",
+		tools: ["GitHub", "Linear", "Notion"],
+	},
+] as const;
 
 /**
- * MockSlashPalette — visual stand-in for the / command palette.
+ * MockContextSwitch — animates the harness switcher cycling between two MCP
+ * configurations on the same live agent, illustrating that the toolset
+ * swaps instantly while the conversation continues.
  */
-function MockSlashPalette() {
-	const commands = [
-		{ name: "github_search_repositories", desc: "Search public + your repos" },
-		{ name: "notion_create_page", desc: "Create a page in a database" },
-		{ name: "linear_create_issue", desc: "Open an issue in your team" },
-		{
-			name: "context7_fetch_docs",
-			desc: "Pull up-to-date library docs",
-		},
-		{ name: "exa_search", desc: "Semantic web search" },
-	];
-	return (
-		<div className="border border-black/[0.08] bg-white shadow-[0_16px_48px_-20px_rgba(0,0,0,0.18)]">
-			<div className="flex items-center gap-2 border-b border-black/[0.06] px-3 py-2 font-mono text-[11px]">
-				<span className="text-emerald-600">/</span>
-				<span className="text-black/85">github</span>
-				<span className="ml-auto text-[9px] uppercase tracking-wider text-black/35">
-					commands
-				</span>
-			</div>
-			<div className="py-1">
-				{commands.map((c, i) => (
-					<div
-						key={c.name}
-						className={`flex items-center gap-2 px-3 py-1.5 ${
-							i === 0 ? "bg-black/[0.03]" : ""
-						}`}
-					>
-						<span
-							className={`shrink-0 font-mono text-[11px] ${
-								i === 0 ? "text-emerald-600" : "text-black/35"
-							}`}
-						>
-							/
-						</span>
-						<div className="min-w-0 flex-1">
-							<div className="truncate font-mono text-[11px] text-black/85">
-								{c.name}
-							</div>
-							<div className="truncate text-[10px] text-black/45">{c.desc}</div>
-						</div>
-						{i === 0 && (
-							<span className="shrink-0 text-[9px] text-black/40">↵</span>
-						)}
-					</div>
-				))}
-			</div>
-		</div>
-	);
-}
-
-/**
- * MockSandboxTabs — visual stand-in for the Daytona sandbox panel.
- */
-function MockSandboxTabs() {
+function MockContextSwitch() {
 	const ref = useRef<HTMLDivElement>(null);
-	const isInView = useInView(ref, { once: true, margin: "-60px" });
-	const lines = [
-		{ t: "$", c: "npm test", color: "text-emerald-400" },
-		{ t: "→", c: "Test Suites: 12 passed, 12 total", color: "text-white/60" },
-		{ t: "→", c: "Tests:       148 passed, 148 total", color: "text-white/60" },
-		{ t: "✓", c: "All green. Committing.", color: "text-emerald-400" },
-		{
-			t: "$",
-			c: "git commit -m 'feat: streaming retries'",
-			color: "text-emerald-400",
-		},
-		{
-			t: "→",
-			c: "[main 2f1e9a0] feat: streaming retries",
-			color: "text-white/60",
-		},
-	];
+	const isInView = useInView(ref, { margin: "-80px" });
+	const [active, setActive] = useState(0);
+
+	useEffect(() => {
+		if (!isInView) return;
+		const timer = setInterval(
+			() => setActive((a) => (a + 1) % HARNESS_CONFIGS.length),
+			2600,
+		);
+		return () => clearInterval(timer);
+	}, [isInView]);
+
+	const config = HARNESS_CONFIGS[active];
 
 	return (
 		<div
 			ref={ref}
-			className="border border-black/[0.08] bg-[#0a0a0a] shadow-[0_24px_64px_-28px_rgba(0,0,0,0.45)]"
+			className="border border-black/[0.08] bg-white shadow-[0_24px_64px_-32px_rgba(0,0,0,0.18)]"
 		>
-			{/* Tab strip */}
-			<div className="flex items-center border-b border-white/[0.06] px-1 py-1">
-				{[
-					{ icon: FolderTree, label: "Files" },
-					{ icon: TerminalSquare, label: "Terminal", active: true },
-					{ icon: GitBranch, label: "Git" },
-				].map((tab) => (
-					<div
-						key={tab.label}
-						className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] ${
-							tab.active ? "bg-white/[0.06] text-white" : "text-white/40"
-						}`}
-					>
-						<tab.icon size={11} />
-						{tab.label}
-					</div>
-				))}
-				<span className="ml-auto px-2 text-[10px] text-white/30">
-					sandbox · running
+			{/* Header with the live harness switcher */}
+			<div className="flex items-center gap-2 border-b border-black/[0.06] px-4 py-2.5 text-[11px]">
+				<div className="flex h-6 w-6 items-center justify-center bg-black">
+					<ClaudeLogo size={13} className="text-white" />
+				</div>
+				<span className="font-medium">Claude Code</span>
+				<span className="text-black/30">·</span>
+				<div className="relative flex items-center gap-1 bg-black/[0.05] px-2 py-0.5">
+					<Workflow size={10} className="text-black/50" />
+					<AnimatePresence mode="wait">
+						<motion.span
+							key={config.name}
+							initial={{ y: 6, opacity: 0 }}
+							animate={{ y: 0, opacity: 1 }}
+							exit={{ y: -6, opacity: 0 }}
+							transition={{ duration: 0.25, ease }}
+							className="font-medium text-black/80"
+						>
+							{config.name}
+						</motion.span>
+					</AnimatePresence>
+					<Repeat size={9} className="ml-0.5 text-black/40" />
+				</div>
+				<span className="ml-auto flex items-center gap-1 text-[10px] text-emerald-600">
+					<span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+					context kept
 				</span>
 			</div>
 
-			{/* Terminal body */}
-			<div className="space-y-1 px-4 py-3 font-mono text-[11px] leading-relaxed">
-				{lines.map((line, i) => (
-					<motion.div
-						key={`${line.t}-${line.c}`}
-						initial={{ opacity: 0, x: -8 }}
-						animate={isInView ? { opacity: 1, x: 0 } : {}}
-						transition={{ duration: 0.35, delay: 0.2 + i * 0.18, ease }}
-					>
-						<span className="mr-2 text-white/25">{line.t}</span>
-						<span className={line.color}>{line.c}</span>
-					</motion.div>
-				))}
-				<motion.div
-					initial={{ opacity: 0 }}
-					animate={isInView ? { opacity: 1 } : {}}
-					transition={{ delay: lines.length * 0.18 + 0.3 }}
-				>
-					<span className="mr-2 text-white/25">$</span>
-					<span className="inline-block h-3 w-[6px] translate-y-[2px] animate-pulse bg-emerald-400/80" />
-				</motion.div>
+			{/* Tool chips that morph when the harness switches */}
+			<div className="px-4 py-4">
+				<p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-black/40">
+					Tools available right now
+				</p>
+				<div className="flex min-h-[58px] flex-wrap gap-2">
+					<AnimatePresence mode="popLayout">
+						{config.tools.map((tool) => (
+							<motion.span
+								key={tool}
+								layout
+								initial={{ scale: 0.85, opacity: 0 }}
+								animate={{ scale: 1, opacity: 1 }}
+								exit={{ scale: 0.85, opacity: 0 }}
+								transition={{ duration: 0.25, ease }}
+								className="flex h-fit items-center gap-1.5 border border-black/[0.08] bg-[#fafafa] px-2.5 py-1.5 text-[11px] text-black/75"
+							>
+								<span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+								{tool}
+							</motion.span>
+						))}
+					</AnimatePresence>
+				</div>
+
+				<div className="mt-3 flex items-center gap-1.5 border-t border-black/[0.06] pt-3 text-[10.5px] text-black/45">
+					<MessagesSquare size={11} />
+					Same conversation — the agent just picked up a new toolset.
+				</div>
 			</div>
 		</div>
 	);
 }
 
 /* ─────────────────────── Nav ─────────────────────── */
+
+const NAV_LINKS = [
+	["Agents", "agents"],
+	["Switching", "switching"],
+	["Features", "features"],
+	["How It Works", "how-it-works"],
+] as const;
 
 function LandingNav() {
 	const { isSignedIn } = useAuth();
@@ -593,24 +592,15 @@ function LandingNav() {
 				</Link>
 
 				<nav className="hidden items-center gap-7 lg:flex">
-					<a
-						href="#features"
-						className="text-[15px] font-medium text-black/70 transition-colors hover:text-black"
-					>
-						Features
-					</a>
-					<a
-						href="#product"
-						className="text-[15px] font-medium text-black/70 transition-colors hover:text-black"
-					>
-						Product
-					</a>
-					<a
-						href="#how-it-works"
-						className="text-[15px] font-medium text-black/70 transition-colors hover:text-black"
-					>
-						How It Works
-					</a>
+					{NAV_LINKS.map(([label, id]) => (
+						<a
+							key={id}
+							href={`#${id}`}
+							className="text-[15px] font-medium text-black/70 transition-colors hover:text-black"
+						>
+							{label}
+						</a>
+					))}
 				</nav>
 
 				<div className="hidden items-center gap-3 lg:flex">
@@ -656,11 +646,7 @@ function LandingNav() {
 						className="overflow-hidden border-t border-black/5 bg-white lg:hidden"
 					>
 						<nav className="flex flex-col gap-1 px-6 py-4">
-							{[
-								["Features", "features"],
-								["Product", "product"],
-								["How It Works", "how-it-works"],
-							].map(([label, id]) => (
+							{NAV_LINKS.map(([label, id]) => (
 								<button
 									key={id}
 									type="button"
@@ -714,11 +700,11 @@ function HeroSection() {
 	const { isSignedIn } = useAuth();
 
 	return (
-		<section className="relative overflow-hidden bg-white pb-16 pt-20 text-black md:pb-24 md:pt-28 lg:pb-32 lg:pt-36">
+		<section className="relative overflow-hidden bg-white pb-16 pt-20 text-black md:pb-24 md:pt-28 lg:pb-28 lg:pt-32">
 			<FloatingDots />
 
 			<div className="relative mx-auto max-w-[76rem] px-6 lg:px-12">
-				<div className="grid items-center gap-12 lg:grid-cols-[1.1fr_1fr] lg:gap-16">
+				<div className="grid items-center gap-12 lg:grid-cols-[1.05fr_1fr] lg:gap-16">
 					<div>
 						<motion.div
 							initial={{ opacity: 0, y: 16 }}
@@ -726,7 +712,7 @@ function HeroSection() {
 							transition={{ duration: 0.5, ease }}
 						>
 							<Badge variant="secondary" className="mb-6 font-medium">
-								AI toolkit, not a platform
+								Bring your own coding agent
 							</Badge>
 						</motion.div>
 
@@ -734,21 +720,21 @@ function HeroSection() {
 							initial={{ opacity: 0, y: 20 }}
 							animate={{ opacity: 1, y: 0 }}
 							transition={{ duration: 0.6, delay: 0.08, ease }}
-							className="mb-6 text-[clamp(2.25rem,5vw,4.5rem)] font-medium leading-[1.05] tracking-tight"
+							className="mb-6 text-[clamp(2.25rem,5vw,4.25rem)] font-medium leading-[1.05] tracking-tight"
 							style={{ textWrap: "balance" }}
 						>
-							Equip your AI agent for <RotatingWord />.
+							Every coding agent. One chat. Every tool.
 						</motion.h1>
 
 						<motion.p
 							initial={{ opacity: 0, y: 20 }}
 							animate={{ opacity: 1, y: 0 }}
 							transition={{ duration: 0.6, delay: 0.16, ease }}
-							className="mb-10 max-w-[32rem] text-[clamp(1rem,1.8vw,1.125rem)] leading-[1.6] text-black/55"
+							className="mb-8 max-w-[33rem] text-[clamp(1rem,1.8vw,1.125rem)] leading-[1.6] text-black/55"
 						>
-							A harness bundles your model, MCP servers, skills, and a live
-							sandbox. Switch contexts in one click — your agent gets a
-							different brain for every job.
+							Connect Claude Code, Codex, or Cursor. Harness equips them with
+							MCP servers and skills — and lets you swap their entire toolset
+							mid-conversation, in one click.
 						</motion.p>
 
 						<motion.div
@@ -764,31 +750,37 @@ function HeroSection() {
 								</Link>
 							</Button>
 							<Button variant="ghost" size="lg" asChild>
-								<a href="#product">
-									See it in action
+								<a href="#agents">
+									See supported agents
 									<ArrowRight size={14} />
 								</a>
 							</Button>
 						</motion.div>
 
+						{/* "Works with" agent logo strip */}
 						<motion.div
 							initial={{ opacity: 0 }}
 							animate={{ opacity: 1 }}
 							transition={{ duration: 0.6, delay: 0.4, ease }}
-							className="mt-10 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[12px] text-black/45"
+							className="mt-10"
 						>
-							<span className="flex items-center gap-1.5">
-								<Check size={12} className="text-emerald-600" />
-								Bring your own MCPs
-							</span>
-							<span className="flex items-center gap-1.5">
-								<Check size={12} className="text-emerald-600" />
-								Daily + weekly cost caps
-							</span>
-							<span className="flex items-center gap-1.5">
-								<Check size={12} className="text-emerald-600" />
-								Live sandbox built in
-							</span>
+							<p className="mb-3 text-[11px] font-medium uppercase tracking-[0.16em] text-black/35">
+								Works with
+							</p>
+							<div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+								{AGENTS.filter((a) => a.live).map((a) => (
+									<span
+										key={a.name}
+										className="flex items-center gap-2 text-[13px] font-medium text-black/70"
+									>
+										<a.logo size={16} className="text-black" />
+										{a.name}
+									</span>
+								))}
+								<span className="text-[12px] text-black/35">
+									+ OpenCode, Gemini soon
+								</span>
+							</div>
 						</motion.div>
 					</div>
 
@@ -798,8 +790,189 @@ function HeroSection() {
 						transition={{ duration: 0.8, delay: 0.3, ease }}
 						className="hidden justify-self-center lg:flex"
 					>
-						<MockChatPanel />
+						<MockAgentChat />
 					</motion.div>
+				</div>
+			</div>
+		</section>
+	);
+}
+
+/* ─────────────────────── Agents Section ─────────────────────── */
+
+function AgentsSection() {
+	return (
+		<section
+			id="agents"
+			className="bg-[#fafafa] pb-20 pt-20 text-black md:pb-28 md:pt-28 lg:pb-32 lg:pt-32"
+		>
+			<div className="mx-auto max-w-[76rem] px-6 lg:px-12">
+				<FadeIn>
+					<Badge variant="outline" className="mb-5">
+						Supported Agents
+					</Badge>
+					<h2
+						className="mb-4 max-w-[34rem] text-[clamp(1.75rem,4vw,3rem)] font-medium leading-[1.1] tracking-tight"
+						style={{ textWrap: "balance" }}
+					>
+						Use the agent you already pay for.
+					</h2>
+					<p className="mb-12 max-w-[34rem] text-[15px] leading-[1.6] text-black/55 md:mb-16">
+						No lock-in, no markup. Connect with your own credentials — a login
+						or an API key — and the agent runs in an isolated cloud sandbox,
+						billed to your account. Switch agents whenever you like.
+					</p>
+				</FadeIn>
+
+				<div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+					{AGENTS.map((agent, i) => (
+						<FadeIn key={agent.name} delay={0.06 * i}>
+							<motion.div
+								whileHover={agent.live ? { y: -4 } : undefined}
+								transition={{ duration: 0.2 }}
+								className={cn(
+									"relative h-full border bg-white p-5",
+									agent.live
+										? "border-black/[0.08] hover:shadow-lg hover:shadow-black/[0.04]"
+										: "border-black/[0.05] opacity-60",
+								)}
+							>
+								<span
+									className={cn(
+										"absolute right-3 top-3 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider",
+										agent.live
+											? "text-emerald-600"
+											: "border border-black/[0.08] text-black/40",
+									)}
+								>
+									{agent.live ? "Live" : "Soon"}
+								</span>
+								<agent.logo size={26} className="mb-4 text-black" />
+								<h3 className="text-[15px] font-medium">{agent.name}</h3>
+								<p className="mt-0.5 text-[12px] leading-snug text-black/50">
+									{agent.blurb}
+								</p>
+							</motion.div>
+						</FadeIn>
+					))}
+				</div>
+
+				<FadeIn delay={0.2}>
+					<div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-2 text-[12px] text-black/45">
+						<span className="flex items-center gap-1.5">
+							<Lock size={12} className="text-emerald-600" />
+							Encrypted, write-only credentials
+						</span>
+						<span className="flex items-center gap-1.5">
+							<ShieldCheck size={12} className="text-emerald-600" />
+							Runs in an isolated sandbox
+						</span>
+						<span className="flex items-center gap-1.5">
+							<Check size={12} className="text-emerald-600" />
+							Or use Harness's built-in models
+						</span>
+					</div>
+				</FadeIn>
+
+				{/* ACP compliance — the registry is the real breadth story */}
+				<FadeIn delay={0.25}>
+					<div className="mt-10 flex flex-col gap-4 border border-black/[0.08] bg-white p-6 sm:flex-row sm:items-center sm:gap-6">
+						<div className="flex h-11 w-11 shrink-0 items-center justify-center border border-black/[0.06] bg-[#fafafa]">
+							<Workflow size={20} strokeWidth={1.5} />
+						</div>
+						<div className="min-w-0 flex-1">
+							<h3 className="text-[15px] font-medium">
+								Built on the Agent Client Protocol
+							</h3>
+							<p className="mt-1 text-[13px] leading-[1.55] text-black/55">
+								Harness speaks ACP, so it works with any agent on the{" "}
+								<a
+									href="https://agentclientprotocol.com/get-started/registry"
+									target="_blank"
+									rel="noreferrer"
+									className="text-black underline decoration-black/20 underline-offset-2 transition-colors hover:decoration-black"
+								>
+									ACP registry
+								</a>{" "}
+								— not just the ones above. New compliant agents drop in as they
+								ship.
+							</p>
+						</div>
+						<a
+							href="https://agentclientprotocol.com/get-started/registry"
+							target="_blank"
+							rel="noreferrer"
+							className="flex shrink-0 items-center gap-1 text-[13px] font-medium text-black transition-colors hover:text-black/60"
+						>
+							Browse the registry
+							<ArrowRight size={13} />
+						</a>
+					</div>
+				</FadeIn>
+			</div>
+		</section>
+	);
+}
+
+/* ─────────────────── Context Switching Section ─────────────────── */
+
+function ContextSwitchSection() {
+	return (
+		<section
+			id="switching"
+			className="relative overflow-hidden bg-white pb-20 pt-20 text-black md:pb-28 md:pt-28 lg:pb-32 lg:pt-32"
+		>
+			<GradientOrb
+				className="right-[6%] top-[12%] h-80 w-80 bg-black/[0.02]"
+				delay={0}
+			/>
+
+			<div className="relative mx-auto max-w-[76rem] px-6 lg:px-12">
+				<div className="grid items-center gap-12 lg:grid-cols-2 lg:gap-16">
+					<FadeIn>
+						<div>
+							<Badge variant="outline" className="mb-5">
+								The bread & butter
+							</Badge>
+							<h2
+								className="mb-4 text-[clamp(1.75rem,4vw,3rem)] font-medium leading-[1.1] tracking-tight"
+								style={{ textWrap: "balance" }}
+							>
+								Switch contexts for{" "}
+								<span className="text-black/40">
+									<RotatingWord />
+								</span>{" "}
+								without losing your place.
+							</h2>
+							<p className="mb-6 max-w-[34rem] text-[15px] leading-[1.6] text-black/55">
+								A harness bundles a set of MCP servers and skills. Swap from one
+								to another mid-conversation and your agent's entire toolset
+								changes in a click — the chat keeps going, context intact.
+							</p>
+							<ul className="space-y-3">
+								{[
+									"One agent, many tool configurations",
+									"Credentials brokered server-side — never in the sandbox",
+									"No restart, no re-explaining — the transcript carries over",
+								].map((line) => (
+									<li
+										key={line}
+										className="flex items-start gap-2.5 text-[14px] text-black/70"
+									>
+										<Check
+											size={15}
+											className="mt-0.5 shrink-0 text-emerald-600"
+										/>
+										{line}
+									</li>
+								))}
+							</ul>
+						</div>
+					</FadeIn>
+
+					<FadeIn delay={0.15}>
+						<MockContextSwitch />
+					</FadeIn>
 				</div>
 			</div>
 		</section>
@@ -812,7 +985,7 @@ function FeaturesSection() {
 	return (
 		<section
 			id="features"
-			className="bg-[#fafafa] pb-20 pt-20 text-black md:pb-28 md:pt-28 lg:pb-36 lg:pt-36"
+			className="bg-[#fafafa] pb-20 pt-20 text-black md:pb-28 md:pt-28 lg:pb-32 lg:pt-32"
 		>
 			<div className="mx-auto max-w-[76rem] px-6 lg:px-12">
 				<FadeIn>
@@ -823,10 +996,8 @@ function FeaturesSection() {
 						className="mb-16 max-w-[34rem] text-[clamp(1.75rem,4vw,3rem)] font-medium leading-[1.1] tracking-tight md:mb-20"
 						style={{ textWrap: "balance" }}
 					>
-						Built for the agent you actually use.{" "}
-						<span className="text-black/40">
-							Not the demo your boss saw on Twitter.
-						</span>
+						The control plane for your agents.{" "}
+						<span className="text-black/40">Not another model wrapper.</span>
 					</h2>
 				</FadeIn>
 
@@ -884,104 +1055,6 @@ function FeaturesSection() {
 	);
 }
 
-/* ─────────────────────── Product Mocks Section ─────────────────────── */
-
-function ProductSection() {
-	return (
-		<section
-			id="product"
-			className="relative overflow-hidden bg-white pb-20 pt-20 text-black md:pb-28 md:pt-28 lg:pb-36 lg:pt-36"
-		>
-			<GradientOrb
-				className="left-[5%] top-[10%] h-80 w-80 bg-black/[0.02]"
-				delay={0}
-			/>
-			<GradientOrb
-				className="right-[5%] bottom-[10%] h-64 w-64 bg-black/[0.015]"
-				delay={4}
-			/>
-
-			<div className="relative mx-auto max-w-[76rem] px-6 lg:px-12">
-				<FadeIn>
-					<Badge variant="outline" className="mb-5">
-						The Product
-					</Badge>
-					<h2
-						className="mb-4 max-w-[36rem] text-[clamp(1.75rem,4vw,3rem)] font-medium leading-[1.1] tracking-tight"
-						style={{ textWrap: "balance" }}
-					>
-						Three real surfaces.{" "}
-						<span className="text-black/40">No mockups.</span>
-					</h2>
-					<p className="mb-16 max-w-[36rem] text-[15px] leading-[1.6] text-black/55 md:mb-20">
-						This is what you'll see five minutes after signup — the same UI we
-						use every day.
-					</p>
-				</FadeIn>
-
-				<div className="grid gap-12 lg:grid-cols-2 lg:gap-16">
-					<FadeIn delay={0.05}>
-						<div>
-							<p className="mb-3 text-[11px] font-medium uppercase tracking-[0.16em] text-black/40">
-								MCP Status & Add
-							</p>
-							<h3 className="mb-3 text-xl font-medium tracking-tight">
-								Add servers without leaving the chat.
-							</h3>
-							<p className="mb-6 max-w-md text-[14px] leading-[1.6] text-black/55">
-								Click the MCP indicator in the header. Pick from the catalog or
-								paste a custom URL. OAuth pops automatically. Status badges
-								update live.
-							</p>
-							<div className="max-w-[300px]">
-								<MockMcpPopover />
-							</div>
-						</div>
-					</FadeIn>
-
-					<FadeIn delay={0.15}>
-						<div>
-							<p className="mb-3 text-[11px] font-medium uppercase tracking-[0.16em] text-black/40">
-								Slash Command Palette
-							</p>
-							<h3 className="mb-3 text-xl font-medium tracking-tight">
-								Every MCP tool. One keystroke away.
-							</h3>
-							<p className="mb-6 max-w-md text-[14px] leading-[1.6] text-black/55">
-								Type <span className="font-mono text-black/80">/</span> to
-								filter across every connected server's tools. Keyboard-first,
-								typo-forgiving, scoped to the active harness.
-							</p>
-							<div className="max-w-[380px]">
-								<MockSlashPalette />
-							</div>
-						</div>
-					</FadeIn>
-
-					<FadeIn delay={0.2} className="lg:col-span-2">
-						<div className="grid gap-8 lg:grid-cols-[1fr_1.1fr] lg:gap-12 lg:items-center">
-							<div>
-								<p className="mb-3 text-[11px] font-medium uppercase tracking-[0.16em] text-black/40">
-									Live Sandbox
-								</p>
-								<h3 className="mb-3 text-xl font-medium tracking-tight">
-									A real dev environment, attached to the chat.
-								</h3>
-								<p className="max-w-md text-[14px] leading-[1.6] text-black/55">
-									Daytona-backed sandboxes give your agent file editing, a real
-									terminal, and git — persistent across sessions. Watch tests
-									pass before the agent commits.
-								</p>
-							</div>
-							<MockSandboxTabs />
-						</div>
-					</FadeIn>
-				</div>
-			</div>
-		</section>
-	);
-}
-
 /* ─────────────────────── How It Works Section ─────────────────────── */
 
 function HowItWorksSection() {
@@ -996,7 +1069,7 @@ function HowItWorksSection() {
 		<section
 			ref={sectionRef}
 			id="how-it-works"
-			className="bg-black pb-20 pt-20 text-white md:pb-28 md:pt-28 lg:pb-36 lg:pt-36"
+			className="bg-black pb-20 pt-20 text-white md:pb-28 md:pt-28 lg:pb-32 lg:pt-32"
 		>
 			<div className="mx-auto max-w-[76rem] px-6 lg:px-12">
 				<FadeIn>
@@ -1010,8 +1083,8 @@ function HowItWorksSection() {
 						className="mb-16 text-[clamp(1.75rem,4vw,3rem)] font-medium leading-[1.1] tracking-tight md:mb-20"
 						style={{ textWrap: "balance" }}
 					>
-						Three minutes from signup to first answer.{" "}
-						<span className="text-white/40">No SDK to install.</span>
+						From your agent to your tools in three steps.{" "}
+						<span className="text-white/40">No SDK, no editor.</span>
 					</h2>
 				</FadeIn>
 
@@ -1102,11 +1175,11 @@ function CTASection() {
 							className="mb-6 text-[clamp(1.75rem,4vw,3.5rem)] font-medium leading-[1.1] tracking-tight"
 							style={{ textWrap: "balance" }}
 						>
-							Build your first harness.
+							Connect your first agent.
 						</h2>
 						<p className="mx-auto mb-10 max-w-md text-[15px] leading-[1.6] text-black/55">
-							Free to try. Bring your own MCPs and your own model preferences.
-							Three minutes to your first answer.
+							Bring Claude Code, Codex, or Cursor — or start with Harness's
+							built-in models. Equip it with tools in minutes.
 						</p>
 						<div className="flex flex-wrap items-center justify-center gap-4">
 							<Button size="lg" asChild>
@@ -1116,7 +1189,7 @@ function CTASection() {
 								</Link>
 							</Button>
 							<Button size="lg" variant="outline" asChild>
-								<a href="#features">See features</a>
+								<a href="#agents">See supported agents</a>
 							</Button>
 						</div>
 					</FadeIn>
@@ -1138,39 +1211,26 @@ function LandingFooter() {
 							<HarnessMark size={20} />
 							Harness
 						</span>
-						<p className="mt-2 max-w-[18rem] text-sm leading-relaxed text-black/45">
-							The toolkit for AI agents. Bundle your model, MCPs, skills, and a
-							live sandbox into one chat.
+						<p className="mt-2 max-w-[20rem] text-sm leading-relaxed text-black/45">
+							The chat and tool control plane for coding agents. Bring Claude
+							Code, Codex, or Cursor — equip them with MCP servers and switch
+							contexts in one click.
 						</p>
 					</div>
 					<div className="grid grid-cols-2 gap-8 sm:col-span-7 sm:grid-cols-2">
 						<div>
 							<h3 className="mb-4 text-sm font-medium">Product</h3>
 							<ul className="space-y-3">
-								<li>
-									<a
-										href="#features"
-										className="text-sm text-black/50 transition-colors hover:text-black"
-									>
-										Features
-									</a>
-								</li>
-								<li>
-									<a
-										href="#product"
-										className="text-sm text-black/50 transition-colors hover:text-black"
-									>
-										Product
-									</a>
-								</li>
-								<li>
-									<a
-										href="#how-it-works"
-										className="text-sm text-black/50 transition-colors hover:text-black"
-									>
-										How it works
-									</a>
-								</li>
+								{NAV_LINKS.map(([label, id]) => (
+									<li key={id}>
+										<a
+											href={`#${id}`}
+											className="text-sm text-black/50 transition-colors hover:text-black"
+										>
+											{label}
+										</a>
+									</li>
+								))}
 							</ul>
 						</div>
 						<div>
@@ -1213,8 +1273,9 @@ function LandingPage() {
 			<LandingNav />
 			<main>
 				<HeroSection />
+				<AgentsSection />
+				<ContextSwitchSection />
 				<FeaturesSection />
-				<ProductSection />
 				<HowItWorksSection />
 				<CTASection />
 			</main>

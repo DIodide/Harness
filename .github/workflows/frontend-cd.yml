@@ -2,7 +2,7 @@ name: Deploy Frontend
 
 on:
   push:
-    branches: [staging]
+    branches: [staging, main]
     paths:
       - "apps/web/**"
       - "packages/convex-backend/**"
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: staging
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -31,18 +31,29 @@ jobs:
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
 
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "worker_name=harness-web" >> "$GITHUB_OUTPUT"
+            echo "fastapi_url=${{ secrets.FASTAPI_URL_PROD }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "worker_name=harness-web-staging" >> "$GITHUB_OUTPUT"
+            echo "fastapi_url=${{ secrets.FASTAPI_URL_STAGING }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build frontend
         run: cd apps/web && bun run build
         env:
           VITE_CONVEX_URL: ${{ secrets.VITE_CONVEX_URL }}
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-          VITE_FASTAPI_URL: ${{ secrets.FASTAPI_URL_STAGING }}
+          VITE_FASTAPI_URL: ${{ steps.env.outputs.fastapi_url }}
           ARCJET_KEY: ${{ secrets.ARCJET_KEY }}
 
       - name: Set Cloudflare Worker secrets
         run: |
-          echo "${{ secrets.ARCJET_KEY }}" | cd apps/web && npx wrangler secret put ARCJET_KEY --name harness-web-staging
+          echo "${{ secrets.ARCJET_KEY }}" | cd apps/web && npx wrangler secret put ARCJET_KEY --name ${{ steps.env.outputs.worker_name }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
@@ -51,6 +62,6 @@ jobs:
       # `--env` alone picks the right Worker name but leaves runtime vars
       # pointing at the top-level defaults. Override at deploy time.
       - name: Deploy to Cloudflare Workers
-        run: cd apps/web && npx wrangler deploy --name harness-web-staging
+        run: cd apps/web && npx wrangler deploy --name ${{ steps.env.outputs.worker_name }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
