@@ -119,12 +119,16 @@ function AgentCard({
 }
 
 export function AgentConnectStep() {
-	const { data: catalog } = useAgentCatalog();
+	const { data: catalog, isLoading, isError } = useAgentCatalog();
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 
 	const entryFor = (id: string) => catalog?.find((entry) => entry.id === id);
 	const selectedEntry = selectedId ? entryFor(selectedId) : undefined;
 	const selectedDef = AGENT_CARDS.find((d) => d.id === selectedId);
+	// A connectable card is selected but the catalog hasn't produced its
+	// entry yet (still loading, or the gateway is unreachable).
+	const selectedButNoEntry =
+		selectedDef && !selectedDef.comingSoon && !selectedEntry;
 
 	return (
 		<div>
@@ -169,6 +173,16 @@ export function AgentConnectStep() {
 					</motion.div>
 				)}
 			</AnimatePresence>
+
+			{selectedButNoEntry && (
+				<p className="mt-4 border border-border bg-muted/30 p-4 text-[11px] text-muted-foreground">
+					{isLoading
+						? "Loading connection options…"
+						: isError
+							? "The agent gateway is unreachable right now — you can connect this agent later in Settings."
+							: `${selectedDef.name} can't be connected here yet. You can connect it later in Settings.`}
+				</p>
+			)}
 
 			<p className="mt-4 text-[11px] leading-relaxed text-muted-foreground">
 				Your agent runs in an isolated cloud sandbox and uses your own

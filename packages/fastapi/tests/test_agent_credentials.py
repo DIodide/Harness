@@ -75,6 +75,42 @@ class TestValidateSecret:
         assert validate_secret("claude-code", "oauth_token", "tok") is None
         assert validate_secret("claude-code", "api_key", "sk-ant") is None
 
+    def test_cursor_auth_json_valid(self):
+        assert (
+            validate_secret(
+                "cursor", "auth_json",
+                '{"accessToken": "a", "refreshToken": "b"}',
+            )
+            is None
+        )
+
+    def test_cursor_auth_json_wrong_shape(self):
+        # A codex auth.json must not validate as a cursor one.
+        assert "cursor auth.json" in validate_secret(
+            "cursor", "auth_json", '{"tokens": {}}'
+        )
+
+    def test_cursor_api_key_allowed(self):
+        assert validate_secret("cursor", "api_key", "key_abc") is None
+
+    def test_cursor_oauth_rejected(self):
+        assert "not a valid credential type" in validate_secret(
+            "cursor", "oauth_token", "x"
+        )
+
+    def test_cursor_materialization(self):
+        from app.services.agents.credentials import _to_agent_credentials
+
+        creds = _to_agent_credentials(
+            "cursor", "auth_json", '{"accessToken": "a"}'
+        )
+        assert "/home/daytona/.config/cursor/auth.json" in creds.files
+        assert creds.env == {}
+
+        key = _to_agent_credentials("cursor", "api_key", "key_abc")
+        assert key.env == {"CURSOR_API_KEY": "key_abc"}
+        assert key.files == {}
+
     def test_empty_value_rejected(self):
         assert "empty" in validate_secret("claude-code", "api_key", "   ")
 
