@@ -94,9 +94,9 @@ const rotatingContexts = [
 const primaryFeatures = [
 	{
 		icon: Plug,
-		title: "Bring your own agent",
+		title: "Bring your own credentials",
 		description:
-			"Connect Claude Code, Codex, or Cursor with your own subscription. Each runs in an isolated cloud sandbox — Harness never sees your model bill.",
+			"Connect Claude Code, Codex, or Cursor with your own login or API key. Each runs in an isolated cloud sandbox — Harness never sees your model bill.",
 	},
 	{
 		icon: Repeat,
@@ -818,9 +818,9 @@ function AgentsSection() {
 						Use the agent you already pay for.
 					</h2>
 					<p className="mb-12 max-w-[34rem] text-[15px] leading-[1.6] text-black/55 md:mb-16">
-						No lock-in, no markup. Connect once with your own subscription — the
-						agent runs in an isolated cloud sandbox, billed to your account.
-						Switch agents whenever you like.
+						No lock-in, no markup. Connect with your own credentials — a login
+						or an API key — and the agent runs in an isolated cloud sandbox,
+						billed to your account. Switch agents whenever you like.
 					</p>
 				</FadeIn>
 
@@ -871,6 +871,42 @@ function AgentsSection() {
 							<Check size={12} className="text-emerald-600" />
 							Or use Harness's built-in models
 						</span>
+					</div>
+				</FadeIn>
+
+				{/* ACP compliance — the registry is the real breadth story */}
+				<FadeIn delay={0.25}>
+					<div className="mt-10 flex flex-col gap-4 border border-black/[0.08] bg-white p-6 sm:flex-row sm:items-center sm:gap-6">
+						<div className="flex h-11 w-11 shrink-0 items-center justify-center border border-black/[0.06] bg-[#fafafa]">
+							<Workflow size={20} strokeWidth={1.5} />
+						</div>
+						<div className="min-w-0 flex-1">
+							<h3 className="text-[15px] font-medium">
+								Built on the Agent Client Protocol
+							</h3>
+							<p className="mt-1 text-[13px] leading-[1.55] text-black/55">
+								Harness speaks ACP, so it works with any agent on the{" "}
+								<a
+									href="https://agentclientprotocol.com/get-started/registry"
+									target="_blank"
+									rel="noreferrer"
+									className="text-black underline decoration-black/20 underline-offset-2 transition-colors hover:decoration-black"
+								>
+									ACP registry
+								</a>{" "}
+								— not just the ones above. New compliant agents drop in as they
+								ship.
+							</p>
+						</div>
+						<a
+							href="https://agentclientprotocol.com/get-started/registry"
+							target="_blank"
+							rel="noreferrer"
+							className="flex shrink-0 items-center gap-1 text-[13px] font-medium text-black transition-colors hover:text-black/60"
+						>
+							Browse the registry
+							<ArrowRight size={13} />
+						</a>
 					</div>
 				</FadeIn>
 			</div>
