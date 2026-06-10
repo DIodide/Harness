@@ -116,7 +116,7 @@ export function agentStatusLabel(data: {
 	const agent = AGENT_LABELS[data.agent ?? ""] ?? "agent";
 	switch (data.state) {
 		case "provisioning":
-			return `Starting ${agent} sandbox… (first message takes ~30s)`;
+			return `Starting ${agent}… (usually a few seconds; up to ~30s on a cold start)`;
 		case "ready":
 			return `${agent} is thinking…`;
 		default:

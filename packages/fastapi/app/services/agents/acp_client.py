@@ -43,11 +43,19 @@ class AcpTransportError(Exception):
 class AcpConnection:
     """One JSON-RPC connection to one ACP agent process."""
 
-    def __init__(self, base_url: str, headers: dict[str, str]):
+    def __init__(
+        self,
+        base_url: str,
+        headers: dict[str, str],
+        start_msg_id: int = 1,
+    ):
         self._base_url = base_url
         self._headers = headers
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=None))
-        self._ids = itertools.count(1)
+        # Adopted connections (same agent process, new HTTP client) seed the
+        # id counter past the previous connection's range so in-flight-id
+        # reuse on the shared stdio stream is impossible.
+        self._ids = itertools.count(start_msg_id)
         self._pending: dict[int, asyncio.Future] = {}
         self._last_seq = 0
         self._closed = False
@@ -77,13 +85,10 @@ class AcpConnection:
     def agent_exited(self) -> str | None:
         return self._agent_exited
 
-    async def healthz(self) -> bool:
-        """True when the shim is reachable AND the agent process is alive.
-
-        False covers every stale-runtime mode: sandbox auto-stopped (proxy
-        502), preview token rotated across a restart (proxy 401), or the
-        agent process died.
-        """
+    async def probe(self) -> dict | None:
+        """The shim's healthz payload ({ok, agentRunning, seq}), or None when
+        the runtime is stale: sandbox auto-stopped (proxy 502), preview token
+        rotated across a restart (proxy 401), or the shim is unreachable."""
         try:
             resp = await self._http.get(
                 f"{self._base_url}/healthz",
@@ -91,13 +96,26 @@ class AcpConnection:
                 timeout=10.0,
             )
         except httpx.HTTPError:
-            return False
+            return None
         if resp.status_code != 200:
-            return False
+            return None
         try:
-            return bool(resp.json().get("agentRunning"))
+            payload = resp.json()
         except ValueError:
-            return False
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    async def healthz(self) -> bool:
+        """True when the shim is reachable AND the agent process is alive."""
+        info = await self.probe()
+        return bool(info and info.get("agentRunning"))
+
+    def start_from(self, seq: int) -> None:
+        """Skip the shim's buffered event history up to `seq` — used when
+        ADOPTING a running agent process: replaying another connection's
+        JSON-RPC traffic would re-trigger relay requests and stale
+        permission responses. Call before start()."""
+        self._last_seq = max(self._last_seq, int(seq))
 
     # ── Outgoing ───────────────────────────────────────────
 

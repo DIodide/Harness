@@ -36,7 +36,11 @@ class Settings(BaseSettings):
     # Built by packages/fastapi/scripts/create_acp_snapshot.py.
     acp_snapshot_name: str = "harness-acp-v2"
     acp_shim_port: int = 8787
-    # Idle ACP sessions are torn down (sandbox deleted) after this many minutes.
+    # Idle ACP sessions are PARKED (runtime kept warm for the user's next
+    # conversation) after this many minutes; parked runtimes are destroyed
+    # after acp_parked_ttl_minutes more.
+    acp_parked_ttl_minutes: int = 60
+    # Idle ACP sessions are parked after this many minutes.
     acp_session_idle_minutes: int = 60
     # Encrypts per-user agent credentials (AES-256-GCM; key derived via
     # SHA-256). Required for users to connect their own agent accounts —

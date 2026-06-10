@@ -385,7 +385,7 @@ def _wait_for_shim(
                     last_error = f"healthz HTTP {resp.status_code}"
             except httpx.HTTPError as e:
                 last_error = str(e)
-            time.sleep(1.5)
+            time.sleep(0.5)
 
     # Pull the shim log + the agent's buffered stderr for a useful error.
     shim_log = ""

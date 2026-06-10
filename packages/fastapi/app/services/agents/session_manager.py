@@ -37,9 +37,6 @@ from app.services.agents.daytona_runtime import (
     write_cursor_mcp_config,
 )
 
-
-class _AlreadyRegistered(Exception):
-    """Control-flow marker: attached sandboxes skip Convex registration."""
 from app.services.agents.credentials import resolve_agent_credentials
 from app.services.agents.registry import SANDBOX_WORKSPACE, get_agent
 from app.services.mcp_client import UserContext
@@ -92,6 +89,10 @@ class AgentSession:
     # event_queue; the active stream ends only when all turns complete.
     extra_turns: list[asyncio.Task] = field(default_factory=list)
     pending_permissions: dict[str, asyncio.Future] = field(default_factory=dict)
+    # JSON-RPC id floor this session's connection started counting from —
+    # bumped on every adoption so ids never collide across connections that
+    # share one agent process's stdio stream.
+    msg_id_floor: int = 1
     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_activity: float = field(default_factory=time.monotonic)
@@ -312,11 +313,43 @@ def _build_replay_preamble(transcript: list[dict]) -> str:
     return "\n".join(lines)
 
 
+@dataclass
+class ParkedRuntime:
+    """A live sandbox + running agent process awaiting its next conversation.
+
+    Parking instead of destroying is the cold-start fix: adopting a parked
+    runtime skips sandbox creation, file pushes, and agent boot (~4-30s)
+    and goes straight to a fresh ACP session (~1s)."""
+
+    runtime: ProvisionedRuntime
+    agent_id: str
+    user_id: str
+    agent_capabilities: dict
+    msg_id_floor: int
+    parked_at: float = field(default_factory=time.monotonic)
+
+
 class AgentSessionManager:
     def __init__(self):
         self._sessions: dict[str, AgentSession] = {}
+        # Warm runtimes by (user, agent, scope) — scope is the attached
+        # sandbox id, or "owned" for session-owned sandboxes. One per key;
+        # a newer parked runtime replaces (and destroys) an older one.
+        self._parked: dict[tuple[str, str, str], ParkedRuntime] = {}
         self._reaper_task: asyncio.Task | None = None
         self._http: httpx.AsyncClient | None = None
+
+    @staticmethod
+    def _runtime_key(
+        user_id: str, agent_id: str, attach_sandbox_id: str | None,
+    ) -> tuple[str, str, str]:
+        return (user_id, agent_id, attach_sandbox_id or "owned")
+
+    @staticmethod
+    def _session_attach_id(session: AgentSession) -> str | None:
+        if session.runtime is not None and not session.runtime.owns_sandbox:
+            return session.runtime.sandbox_id
+        return None
 
     def _http_client(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -357,6 +390,84 @@ class AgentSessionManager:
         asyncio.create_task(self._provision(session, creds, user_ctx))
         return session
 
+    def _claim_parked(self, session: AgentSession, attach_sandbox_id: str | None):
+        """Pop a warm runtime for this session, stealing from an idle live
+        session of the same (user, agent, scope) when none is parked.
+
+        Stealing is what makes "new chat" fast: the previous conversation's
+        session usually still holds a perfectly warm agent. Its frontend
+        cache will 404 on next use and recreate (possibly stealing back) —
+        each hop costs ~1s instead of a full cold start. Sessions that are
+        mid-prompt are never touched.
+        """
+        key = self._runtime_key(session.user_id, session.agent_id, attach_sandbox_id)
+        parked = self._parked.pop(key, None)
+        if parked is not None:
+            return parked
+        victims = [
+            s
+            for s in self._sessions.values()
+            if s.id != session.id
+            and s.user_id == session.user_id
+            and s.agent_id == session.agent_id
+            and s.status == "ready"
+            and not s.lock.locked()
+            and s.runtime is not None
+            and self._runtime_key(s.user_id, s.agent_id, self._session_attach_id(s))
+            == key
+        ]
+        if not victims:
+            return None
+        victim = max(victims, key=lambda s: s.last_activity)
+        logger.info(
+            "Stealing idle session '%s' runtime for new conversation '%s'",
+            victim.id, session.conversation_id,
+        )
+        return victim, key
+
+    async def _adopt(self, session: AgentSession, parked: ParkedRuntime) -> bool:
+        """Bind this session to a warm runtime: new connection (skipping the
+        shim's buffered history), fresh ACP session on the already-running
+        agent. Falls back to revive-in-place when the runtime went stale
+        (e.g. sandbox auto-stopped). Returns False only on hard failure."""
+        runtime = parked.runtime
+        conn = AcpConnection(
+            runtime.base_url, runtime.headers, start_msg_id=parked.msg_id_floor,
+        )
+        info = await conn.probe()
+        if info and info.get("agentRunning"):
+            conn.start_from(int(info.get("seq") or 0))
+            session.runtime = runtime
+            session.msg_id_floor = parked.msg_id_floor
+            session.agent_capabilities = parked.agent_capabilities
+            session.connection = conn
+            conn.on_notification = self._make_notification_handler(session)
+            conn.on_request = self._make_request_handler(session)
+            conn.on_relay_request = self._make_relay_handler(session)
+            await conn.start()
+            logger.info(
+                "Adopted warm %s runtime (sandbox=%s) for session '%s'",
+                session.agent_id, runtime.sandbox_id, session.id,
+            )
+            return True
+        # Stale (sandbox auto-stopped / token rotated): revive in place —
+        # still reuses the same sandbox, just relaunches the shim + agent.
+        await conn.close()
+        session.runtime = runtime
+        try:
+            await self._revive(session)
+            return True
+        except Exception:
+            logger.exception(
+                "Adoption revive failed for sandbox '%s'; falling back to fresh",
+                runtime.sandbox_id,
+            )
+            with contextlib.suppress(Exception):
+                await self._destroy_runtime(runtime, session.agent_id)
+            session.runtime = None
+            session.connection = None
+            return False
+
     async def _provision(self, session: AgentSession, creds, user_ctx) -> None:
         try:
             agent = get_agent(session.agent_id)
@@ -368,49 +479,55 @@ class AgentSessionManager:
                 if session.harness.sandbox_enabled and session.harness.sandbox_id
                 else None
             )
-            session.runtime = await asyncio.to_thread(
-                provision_agent_sandbox,
-                session.user_id,
-                agent,
-                creds,
-                attach_sandbox_id,
-            )
-            conn = AcpConnection(session.runtime.base_url, session.runtime.headers)
-            session.connection = conn
-            conn.on_notification = self._make_notification_handler(session)
-            conn.on_request = self._make_request_handler(session)
-            conn.on_relay_request = self._make_relay_handler(session)
-            await conn.start()
 
-            init = await conn.initialize()
-            session.agent_capabilities = init.get("agentCapabilities") or {}
-            await self._open_acp_session(session, user_ctx)
+            # Warm path: adopt a parked runtime (or steal an idle session's)
+            # before paying for a cold sandbox.
+            session.user_ctx = user_ctx  # revive-during-adopt opens with it
+            adopted = False
+            claim = self._claim_parked(session, attach_sandbox_id)
+            if isinstance(claim, tuple):
+                victim, key = claim
+                await self._teardown(victim, park=True)
+                claim = self._parked.pop(key, None)
+            if claim is not None:
+                adopted = await self._adopt(session, claim)
+                if adopted and session.acp_session_id is None:
+                    # Warm adopt skips _revive's open — open the ACP session.
+                    await self._open_acp_session(session, user_ctx)
+
+            if not adopted:
+                session.runtime = await asyncio.to_thread(
+                    provision_agent_sandbox,
+                    session.user_id,
+                    agent,
+                    creds,
+                    attach_sandbox_id,
+                )
+                conn = AcpConnection(
+                    session.runtime.base_url, session.runtime.headers,
+                )
+                session.connection = conn
+                conn.on_notification = self._make_notification_handler(session)
+                conn.on_request = self._make_request_handler(session)
+                conn.on_relay_request = self._make_relay_handler(session)
+                await conn.start()
+
+                init = await conn.initialize()
+                session.agent_capabilities = init.get("agentCapabilities") or {}
+                await self._open_acp_session(session, user_ctx)
 
             # Register in the sandboxes table so the agent's sandbox shows up
             # in Manage Sandboxes and the existing terminal/file tooling works
             # against it (attached harness sandboxes are already registered).
             # Best-effort: a cap or Convex hiccup must not block the session.
-            try:
-                if not session.runtime.owns_sandbox:
-                    raise _AlreadyRegistered
-                from app.services.convex import create_sandbox_record
-
-                await create_sandbox_record(
-                    self._http_client(),
-                    session.user_id,
-                    None,  # never hijack the harness's own sandbox slot
-                    session.runtime.sandbox_id,
-                    f"{agent.name} · agent session",
-                    "python",
-                    False,
-                    {"cpu": 2, "memoryGB": 4, "diskGB": 10},
-                )
-            except _AlreadyRegistered:
-                pass
-            except Exception as e:
-                logger.warning(
-                    "Could not register agent sandbox '%s' in Convex: %s",
-                    session.runtime.sandbox_id, e,
+            if not adopted and session.runtime.owns_sandbox:
+                # Fire-and-forget: registration is bookkeeping, not part of
+                # the user's cold-start wait. Adopted runtimes are already
+                # registered from their first provisioning.
+                asyncio.create_task(
+                    self._register_sandbox_record(
+                        session.user_id, session.runtime.sandbox_id, agent.name,
+                    )
                 )
 
             session.status = "ready"
@@ -424,6 +541,30 @@ class AgentSessionManager:
             session.error = str(e)
         finally:
             session.ready_event.set()
+
+
+    async def _register_sandbox_record(
+        self, user_id: str, sandbox_id: str, agent_name: str,
+    ) -> None:
+        """Best-effort Manage Sandboxes registration for agent sandboxes."""
+        try:
+            from app.services.convex import create_sandbox_record
+
+            await create_sandbox_record(
+                self._http_client(),
+                user_id,
+                None,  # never hijack the harness's own sandbox slot
+                sandbox_id,
+                f"{agent_name} \u00b7 agent session",
+                "python",
+                False,
+                {"cpu": 2, "memoryGB": 4, "diskGB": 10},
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not register agent sandbox '%s' in Convex: %s",
+                sandbox_id, e,
+            )
 
     async def _revive(self, session: AgentSession) -> None:
         """Re-provision a session whose runtime went stale.
@@ -1081,32 +1222,63 @@ class AgentSessionManager:
 
     async def close(self, session_id: str, user_id: str) -> None:
         session = self.get(session_id, user_id)
-        await self._teardown(session)
+        await self._teardown(session, park=True)
 
-    async def _teardown(self, session: AgentSession) -> None:
+    async def _teardown(self, session: AgentSession, park: bool = False) -> None:
+        """End a session. With park=True a healthy runtime is kept warm for
+        the user's next conversation instead of being destroyed."""
         session.status = "closed"
         self._sessions.pop(session.id, None)
         if session.connection:
             await session.connection.close()
-        if session.runtime:
-            if session.runtime.owns_sandbox:
-                await asyncio.to_thread(teardown_sandbox, session.runtime.sandbox_id)
-                # Drop the Manage Sandboxes record for the deleted sandbox.
-                from app.services.convex import ConvexMutationError, run_convex_mutation
+            session.connection = None
+        if session.runtime is None:
+            return
+        if park and session.error is None:
+            await self._park_runtime(session)
+            return
+        await self._destroy_runtime(session.runtime, session.agent_id)
 
-                with contextlib.suppress(ConvexMutationError):
-                    await run_convex_mutation(
-                        self._http_client(),
-                        "sandboxes:removeByDaytonaId",
-                        {"daytonaSandboxId": session.runtime.sandbox_id},
-                    )
-            else:
-                # Attached to the harness's sandbox: stop only our shim.
-                await asyncio.to_thread(
-                    stop_agent_shim,
-                    session.runtime.sandbox_id,
-                    get_agent(session.agent_id),
+    async def _park_runtime(self, session: AgentSession) -> None:
+        key = self._runtime_key(
+            session.user_id, session.agent_id, self._session_attach_id(session),
+        )
+        replaced = self._parked.pop(key, None)
+        if replaced is not None and (
+            replaced.runtime.sandbox_id != session.runtime.sandbox_id
+        ):
+            await self._destroy_runtime(replaced.runtime, replaced.agent_id)
+        self._parked[key] = ParkedRuntime(
+            runtime=session.runtime,
+            agent_id=session.agent_id,
+            user_id=session.user_id,
+            agent_capabilities=session.agent_capabilities,
+            msg_id_floor=session.msg_id_floor + 1_000_000,
+        )
+        logger.info(
+            "Parked %s runtime (sandbox=%s) for user '%s'",
+            session.agent_id, session.runtime.sandbox_id, session.user_id,
+        )
+
+    async def _destroy_runtime(
+        self, runtime: ProvisionedRuntime, agent_id: str,
+    ) -> None:
+        if runtime.owns_sandbox:
+            await asyncio.to_thread(teardown_sandbox, runtime.sandbox_id)
+            # Drop the Manage Sandboxes record for the deleted sandbox.
+            from app.services.convex import ConvexMutationError, run_convex_mutation
+
+            with contextlib.suppress(ConvexMutationError):
+                await run_convex_mutation(
+                    self._http_client(),
+                    "sandboxes:removeByDaytonaId",
+                    {"daytonaSandboxId": runtime.sandbox_id},
                 )
+        else:
+            # Attached to the harness's sandbox: stop only our shim.
+            await asyncio.to_thread(
+                stop_agent_shim, runtime.sandbox_id, get_agent(agent_id),
+            )
 
     def _ensure_reaper(self) -> None:
         if self._reaper_task is None or self._reaper_task.done():
@@ -1116,14 +1288,24 @@ class AgentSessionManager:
         while True:
             await asyncio.sleep(60)
             ttl = settings.acp_session_idle_minutes * 60
+            parked_ttl = settings.acp_parked_ttl_minutes * 60
             now = time.monotonic()
             for session in list(self._sessions.values()):
                 if session.status == "prompting":
                     continue
                 if now - session.last_activity > ttl:
-                    logger.info("Reaping idle ACP session '%s'", session.id)
+                    logger.info("Parking idle ACP session '%s'", session.id)
                     with contextlib.suppress(Exception):
-                        await self._teardown(session)
+                        await self._teardown(session, park=True)
+            for key, parked in list(self._parked.items()):
+                if now - parked.parked_at > parked_ttl:
+                    logger.info(
+                        "Expiring parked %s runtime (sandbox=%s)",
+                        parked.agent_id, parked.runtime.sandbox_id,
+                    )
+                    self._parked.pop(key, None)
+                    with contextlib.suppress(Exception):
+                        await self._destroy_runtime(parked.runtime, parked.agent_id)
 
 
 _manager: AgentSessionManager | None = None
