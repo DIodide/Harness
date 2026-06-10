@@ -41,6 +41,10 @@ let seq = 0;
 const MAX_BUFFER = 20000;
 const buffer = []; // { id, event, data }
 const clients = new Set();
+// Highest event id ever evicted from the replay buffer. A reconnect asking
+// for older events gets a `gap` event first — silent loss would leave the
+// backend waiting forever on JSON-RPC responses it can never receive.
+let evictedThrough = 0;
 
 function writeEvent(res, entry) {
 	const data = entry.data.split("\n").join("\ndata: ");
@@ -50,7 +54,10 @@ function writeEvent(res, entry) {
 function push(event, data) {
 	const entry = { id: ++seq, event, data };
 	buffer.push(entry);
-	if (buffer.length > MAX_BUFFER) buffer.splice(0, buffer.length - MAX_BUFFER);
+	if (buffer.length > MAX_BUFFER) {
+		const evicted = buffer.splice(0, buffer.length - MAX_BUFFER);
+		evictedThrough = evicted[evicted.length - 1].id;
+	}
 	for (const res of clients) {
 		try {
 			writeEvent(res, entry);
@@ -64,8 +71,18 @@ const child = spawn(AGENT_CMD[0], AGENT_CMD.slice(1), {
 	stdio: ["pipe", "pipe", "pipe"],
 	env: process.env,
 });
-child.on("error", (err) => push("spawn_error", String(err)));
-child.on("exit", (code, signal) => push("exit", JSON.stringify({ code, signal })));
+// exitCode stays null for signal-killed children (only signalCode is set),
+// so track liveness with an explicit flag instead of `exitCode === null` —
+// a SIGKILLed agent must not report as running.
+let agentExited = false;
+child.on("error", (err) => {
+	agentExited = true;
+	push("spawn_error", String(err));
+});
+child.on("exit", (code, signal) => {
+	agentExited = true;
+	push("exit", JSON.stringify({ code, signal }));
+});
 readline.createInterface({ input: child.stdout }).on("line", (l) => push("line", l));
 readline.createInterface({ input: child.stderr }).on("line", (l) => push("stderr", l));
 
@@ -154,7 +171,7 @@ const server = http.createServer((req, res) => {
 
 	if (req.method === "GET" && url.pathname === "/healthz") {
 		res.writeHead(200, { "content-type": "application/json" });
-		res.end(JSON.stringify({ ok: true, agentRunning: child.exitCode === null, seq }));
+		res.end(JSON.stringify({ ok: true, agentRunning: !agentExited, seq }));
 		return;
 	}
 
@@ -167,6 +184,15 @@ const server = http.createServer((req, res) => {
 		});
 		res.write(":connected\n\n");
 		const since = Number.parseInt(url.searchParams.get("since") || "0", 10);
+		if (since < evictedThrough) {
+			// Events the client never saw were evicted — it must resync
+			// (revive) rather than silently miss JSON-RPC responses.
+			writeEvent(res, {
+				id: since,
+				event: "gap",
+				data: JSON.stringify({ evictedThrough }),
+			});
+		}
 		for (const entry of buffer) {
 			if (entry.id > since) writeEvent(res, entry);
 		}
@@ -192,9 +218,15 @@ const server = http.createServer((req, res) => {
 			body += chunk;
 		});
 		req.on("end", () => {
-			if (child.exitCode !== null) {
+			if (agentExited) {
 				res.writeHead(409, { "content-type": "application/json" });
-				res.end(JSON.stringify({ error: "agent exited", code: child.exitCode }));
+				res.end(
+					JSON.stringify({
+						error: "agent exited",
+						code: child.exitCode,
+						signal: child.signalCode,
+					}),
+				);
 				return;
 			}
 			try {

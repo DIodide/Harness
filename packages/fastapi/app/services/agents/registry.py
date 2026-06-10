@@ -32,11 +32,16 @@ SANDBOX_WORKSPACE = f"{SANDBOX_HOME}/workspace"
 class AgentCredentials:
     """Materialized credentials for one agent run.
 
-    files: absolute path inside the sandbox → file content.
+    files: absolute path inside the sandbox → file content (replaced).
+    json_merge_files: absolute path → top-level JSON keys merged into the
+        existing file (ours win per key, other keys preserved) — for config
+        files the user may also maintain, e.g. ~/.claude/settings.json in
+        an attached persistent sandbox.
     env:   extra environment variables for the agent process.
     """
 
     files: dict[str, str] = field(default_factory=dict)
+    json_merge_files: dict[str, dict] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
 
 

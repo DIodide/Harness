@@ -40,6 +40,11 @@ class AcpTransportError(Exception):
     """Shim/agent transport failure (agent exited, sandbox gone, ...)."""
 
 
+def _log_relay_task_error(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("MCP relay handler crashed: %s", task.exception())
+
+
 class AcpConnection:
     """One JSON-RPC connection to one ACP agent process."""
 
@@ -239,16 +244,26 @@ class AcpConnection:
         if event_type == "relay_request":
             if self.on_relay_request is not None:
                 try:
-                    asyncio.create_task(self.on_relay_request(json.loads(data)))
+                    task = asyncio.create_task(self.on_relay_request(json.loads(data)))
+                    task.add_done_callback(_log_relay_task_error)
                 except json.JSONDecodeError:
                     logger.warning("Malformed relay_request from shim")
             return
-        if event_type in ("exit", "spawn_error"):
-            self._agent_exited = data
+        if event_type in ("exit", "spawn_error", "gap"):
+            # "gap": the shim evicted events we never received — JSON-RPC
+            # responses may be gone for good, so treat the connection as
+            # dead and let the session manager revive with a fresh ACP
+            # session instead of hanging on unanswerable futures.
+            reason = (
+                f"event stream gap (lost events): {data}"
+                if event_type == "gap"
+                else data
+            )
+            self._agent_exited = reason
             for future in self._pending.values():
                 if not future.done():
                     future.set_exception(
-                        AcpTransportError(f"agent exited: {data}")
+                        AcpTransportError(f"agent connection lost: {reason}")
                     )
             return
         if event_type != "line":
