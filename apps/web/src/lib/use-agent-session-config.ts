@@ -58,7 +58,12 @@ export function useAgentSessionConfig(
 
 	const setOption = useMutation({
 		mutationFn: async (input: { configId: string; value: string }) => {
-			const sessionId = query.data?.sessionId;
+			// Resolve the LIVE session id at call time — query.data.sessionId
+			// goes stale when the session is recreated/stolen (warm reuse),
+			// which made model/mode switches POST to a dead session → 404.
+			const sessionId = conversationId
+				? getCachedAgentSessionId(conversationId, agent)
+				: null;
 			if (!sessionId) throw new Error("Agent session not started yet");
 			const token = await getToken({ template: "convex" });
 			return setAgentConfigOption(
