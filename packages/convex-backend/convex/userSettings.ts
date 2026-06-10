@@ -5,7 +5,7 @@ const DEFAULTS = {
 	autoSwitchHarness: true,
 	displayMode: "standard" as const,
 	modelSelectorMode: "session" as const,
-	workspacesMode: "basic" as const,
+	workspacesMode: "workspaces" as const,
 } as const;
 
 export const get = query({
@@ -24,7 +24,7 @@ export const get = query({
 			autoSwitchHarness: settings.autoSwitchHarness,
 			displayMode: settings.displayMode ?? "standard",
 			modelSelectorMode: settings.modelSelectorMode ?? "session",
-			workspacesMode: settings.workspacesMode ?? "basic"
+			workspacesMode: settings.workspacesMode ?? "workspaces"
 		};
 	},
 });

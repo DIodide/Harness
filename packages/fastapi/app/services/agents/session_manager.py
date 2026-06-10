@@ -29,11 +29,17 @@ from app.config import settings
 from app.models import HarnessConfig, McpServer
 from app.services.agents.acp_client import AcpConnection, AcpError, AcpTransportError
 from app.services.agents.daytona_runtime import (
-    write_cursor_mcp_config,
     ProvisionedRuntime,
     provision_agent_sandbox,
+    shim_port,
+    stop_agent_shim,
     teardown_sandbox,
+    write_cursor_mcp_config,
 )
+
+
+class _AlreadyRegistered(Exception):
+    """Control-flow marker: attached sandboxes skip Convex registration."""
 from app.services.agents.credentials import resolve_agent_credentials
 from app.services.agents.registry import SANDBOX_WORKSPACE, get_agent
 from app.services.mcp_client import UserContext
@@ -300,8 +306,20 @@ class AgentSessionManager:
     async def _provision(self, session: AgentSession, creds, user_ctx) -> None:
         try:
             agent = get_agent(session.agent_id)
+            # Deeper unification: harnesses with a sandbox run the agent
+            # INSIDE that sandbox (user's real files, persistent), instead
+            # of a session-owned scratch sandbox.
+            attach_sandbox_id = (
+                session.harness.sandbox_id
+                if session.harness.sandbox_enabled and session.harness.sandbox_id
+                else None
+            )
             session.runtime = await asyncio.to_thread(
-                provision_agent_sandbox, session.user_id, agent, creds,
+                provision_agent_sandbox,
+                session.user_id,
+                agent,
+                creds,
+                attach_sandbox_id,
             )
             conn = AcpConnection(session.runtime.base_url, session.runtime.headers)
             session.connection = conn
@@ -316,9 +334,11 @@ class AgentSessionManager:
 
             # Register in the sandboxes table so the agent's sandbox shows up
             # in Manage Sandboxes and the existing terminal/file tooling works
-            # against it. Best-effort: a cap or Convex hiccup must not block
-            # the agent session.
+            # against it (attached harness sandboxes are already registered).
+            # Best-effort: a cap or Convex hiccup must not block the session.
             try:
+                if not session.runtime.owns_sandbox:
+                    raise _AlreadyRegistered
                 from app.services.convex import create_sandbox_record
 
                 await create_sandbox_record(
@@ -331,6 +351,8 @@ class AgentSessionManager:
                     False,
                     {"cpu": 2, "memoryGB": 4, "diskGB": 10},
                 )
+            except _AlreadyRegistered:
+                pass
             except Exception as e:
                 logger.warning(
                     "Could not register agent sandbox '%s' in Convex: %s",
@@ -366,7 +388,7 @@ class AgentSessionManager:
             {
                 "type": "http",
                 "name": server.name,
-                "url": f"http://127.0.0.1:{settings.acp_shim_port}/mcp/{index}",
+                "url": f"http://127.0.0.1:{shim_port(get_agent(session.agent_id))}/mcp/{index}",
                 "headers": [],
             }
             for index, server in enumerate(servers)
@@ -378,11 +400,12 @@ class AgentSessionManager:
             await asyncio.to_thread(
                 write_cursor_mcp_config,
                 session.runtime.sandbox_id,
-                settings.acp_shim_port,
+                shim_port(get_agent(session.agent_id)),
                 servers,
             )
         result = await session.connection.new_session(
-            cwd=SANDBOX_WORKSPACE, mcp_servers=acp_servers,
+            cwd=(session.runtime.cwd if session.runtime else SANDBOX_WORKSPACE),
+            mcp_servers=acp_servers,
         )
         session.acp_session_id = result["sessionId"]
         session.config_options = result.get("configOptions") or []
@@ -730,15 +753,23 @@ class AgentSessionManager:
         if session.connection:
             await session.connection.close()
         if session.runtime:
-            await asyncio.to_thread(teardown_sandbox, session.runtime.sandbox_id)
-            # Drop the Manage Sandboxes record for the deleted sandbox.
-            from app.services.convex import ConvexMutationError, run_convex_mutation
+            if session.runtime.owns_sandbox:
+                await asyncio.to_thread(teardown_sandbox, session.runtime.sandbox_id)
+                # Drop the Manage Sandboxes record for the deleted sandbox.
+                from app.services.convex import ConvexMutationError, run_convex_mutation
 
-            with contextlib.suppress(ConvexMutationError):
-                await run_convex_mutation(
-                    self._http_client(),
-                    "sandboxes:removeByDaytonaId",
-                    {"daytonaSandboxId": session.runtime.sandbox_id},
+                with contextlib.suppress(ConvexMutationError):
+                    await run_convex_mutation(
+                        self._http_client(),
+                        "sandboxes:removeByDaytonaId",
+                        {"daytonaSandboxId": session.runtime.sandbox_id},
+                    )
+            else:
+                # Attached to the harness's sandbox: stop only our shim.
+                await asyncio.to_thread(
+                    stop_agent_shim,
+                    session.runtime.sandbox_id,
+                    get_agent(session.agent_id),
                 )
 
     def _ensure_reaper(self) -> None:

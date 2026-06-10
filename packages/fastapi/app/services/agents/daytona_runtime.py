@@ -31,8 +31,62 @@ from app.services.daytona_service import get_daytona_service
 logger = logging.getLogger(__name__)
 
 SHIM_PATH = Path(__file__).parent / "acp_shim.mjs"
-SHIM_REMOTE_PATH = f"{SANDBOX_HOME}/acp-shim.mjs"
-LAUNCHER_REMOTE_PATH = f"{SANDBOX_HOME}/acp-shim-start.sh"
+RUNTIME_MARKER = "/opt/harness/.acp-runtime-v1"
+
+
+def _shim_remote_path(agent: AgentDefinition) -> str:
+    # Per-agent filename so pkill targets only this agent's shim and
+    # multiple agents can coexist in one attached sandbox.
+    return f"{SANDBOX_HOME}/acp-shim-{agent.id}.mjs"
+
+
+def _launcher_remote_path(agent: AgentDefinition) -> str:
+    return f"{SANDBOX_HOME}/acp-shim-start-{agent.id}.sh"
+
+
+def shim_port(agent: AgentDefinition) -> int:
+    return settings.acp_shim_port + agent.port_offset
+
+
+# Idempotent bootstrap so agents can run inside harness sandboxes whose
+# image predates the ACP snapshot (node + adapters installed on demand).
+def _bootstrap_script() -> str:
+    from app.services.agents.registry import CLAUDE_AGENT_ACP_VERSION, CODEX_ACP_URL
+
+    return f"""#!/bin/bash
+set -e
+if [ -f {RUNTIME_MARKER} ]; then echo runtime-ready; exit 0; fi
+# Tier-snapshot sandboxes exec as the daytona user; system installs need sudo.
+SUDO=""
+if [ "$(id -u)" != "0" ]; then
+  if sudo -n true 2>/dev/null; then
+    SUDO="sudo -n"
+  else
+    echo "ERROR: not root and passwordless sudo unavailable in this sandbox image"
+    exit 1
+  fi
+fi
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v node >/dev/null 2>&1; then
+  $SUDO apt-get update -qq && $SUDO apt-get install -y -qq curl ca-certificates
+  curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO bash -
+  $SUDO apt-get install -y -qq nodejs
+fi
+if ! command -v claude-agent-acp >/dev/null 2>&1; then
+  # User-prefix npm installs need no root; sudo (with the caller's PATH,
+  # since npm may live outside secure_path) only as fallback.
+  npm install -g --silent @agentclientprotocol/claude-agent-acp@{CLAUDE_AGENT_ACP_VERSION} \\
+    || $SUDO env "PATH=$PATH" npm install -g --silent @agentclientprotocol/claude-agent-acp@{CLAUDE_AGENT_ACP_VERSION}
+fi
+if [ ! -x /usr/local/bin/codex-acp ]; then
+  curl -fsSL -o /tmp/codex-acp.tgz {CODEX_ACP_URL}
+  $SUDO tar -xzf /tmp/codex-acp.tgz -C /usr/local/bin
+  $SUDO chmod +x /usr/local/bin/codex-acp && rm /tmp/codex-acp.tgz
+fi
+printf 'precedence ::ffff:0:0/96  100\\nprecedence ::/0  10\\n' | $SUDO tee /etc/gai.conf >/dev/null || true
+$SUDO mkdir -p /opt/harness && $SUDO touch {RUNTIME_MARKER}
+echo runtime-ready
+"""
 
 
 def _with_retries(operation, what: str, attempts: int = 4):
@@ -62,12 +116,18 @@ class ProvisionedRuntime:
     sandbox_id: str
     base_url: str  # preview URL for the shim port (no trailing slash)
     headers: dict[str, str]  # auth headers for every shim request
+    # The agent's working directory: the user-visible home for attached
+    # harness sandboxes, a scratch workspace for session-owned ones.
+    cwd: str = SANDBOX_WORKSPACE
+    # False when attached to a harness's persistent sandbox — teardown then
+    # stops the shim instead of deleting the sandbox.
+    owns_sandbox: bool = True
 
 
 def _build_launcher(agent: AgentDefinition, creds: AgentCredentials, shim_token: str) -> str:
     """Launcher script: exports env and backgrounds the shim with nohup."""
     env = {
-        "SHIM_PORT": str(settings.acp_shim_port),
+        "SHIM_PORT": str(shim_port(agent)),
         "SHIM_TOKEN": shim_token,
         "AGENT_CMD": json.dumps(agent.command),
         "HOME": SANDBOX_HOME,
@@ -78,9 +138,11 @@ def _build_launcher(agent: AgentDefinition, creds: AgentCredentials, shim_token:
         **creds.env,
     }
     lines = ["#!/bin/bash", "set -e"]
+    # Replace any stale shim for this agent (reattach after gateway restart).
+    lines.append(f"pkill -f {shlex.quote(_shim_remote_path(agent))} 2>/dev/null || true")
     lines += [f"export {key}={shlex.quote(value)}" for key, value in env.items()]
     lines.append(
-        f"nohup node {SHIM_REMOTE_PATH} > /tmp/acp-shim.log 2>&1 &"
+        f"nohup node {_shim_remote_path(agent)} > /tmp/acp-shim-{agent.id}.log 2>&1 &"
     )
     lines.append("echo started")
     return "\n".join(lines) + "\n"
@@ -90,43 +152,64 @@ def provision_agent_sandbox(
     user_id: str,
     agent: AgentDefinition,
     creds: AgentCredentials,
+    attach_sandbox_id: str | None = None,
 ) -> ProvisionedRuntime:
-    """Create a sandbox, start the shim, and wait until it is healthy."""
+    """Start the agent shim in a sandbox and wait until it is healthy.
+
+    With attach_sandbox_id the agent runs inside the harness's existing
+    persistent sandbox (bootstrapping node + adapters on first use) so it
+    works on the user's real files; otherwise a fresh session-owned sandbox
+    is created from the ACP snapshot.
+    """
     service = get_daytona_service()
     client = service._get_client()
 
-    params = CreateSandboxFromSnapshotParams(
-        snapshot=settings.acp_snapshot_name,
-        labels={
-            "harness_user_id": user_id,
-            "harness_acp_agent": agent.id,
-        },
-        auto_stop_interval=30,
-        ephemeral=False,
-    )
-    logger.info(
-        "Provisioning ACP sandbox (agent=%s, snapshot=%s) for user '%s'",
-        agent.id, settings.acp_snapshot_name, user_id,
-    )
-    sandbox = client.create(params)
-    sandbox_id = sandbox.id
+    owns_sandbox = attach_sandbox_id is None
+    if attach_sandbox_id:
+        logger.info(
+            "Attaching agent '%s' to harness sandbox '%s' for user '%s'",
+            agent.id, attach_sandbox_id, user_id,
+        )
+        sandbox = service._ensure_running(attach_sandbox_id)
+        sandbox_id = attach_sandbox_id
+        _ensure_agent_runtime(sandbox)
+        cwd = SANDBOX_HOME
+    else:
+        params = CreateSandboxFromSnapshotParams(
+            snapshot=settings.acp_snapshot_name,
+            labels={
+                "harness_user_id": user_id,
+                "harness_acp_agent": agent.id,
+            },
+            auto_stop_interval=30,
+            ephemeral=False,
+        )
+        logger.info(
+            "Provisioning ACP sandbox (agent=%s, snapshot=%s) for user '%s'",
+            agent.id, settings.acp_snapshot_name, user_id,
+        )
+        sandbox = client.create(params)
+        sandbox_id = sandbox.id
+        cwd = SANDBOX_WORKSPACE
 
     try:
         # Daytona sandboxes blackhole outbound IPv6 (TCP connects, TLS gets
         # reset), and many MCP hosts are dual-stack. Prefer IPv4 for every
         # getaddrinfo consumer (full table: a lone precedence line would
-        # drop glibc's defaults).
-        _with_retries(
-            lambda: sandbox.fs.upload_file(
-                b"precedence ::ffff:0:0/96  100\nprecedence ::/0  10\n",
-                "/etc/gai.conf",
-            ),
-            "upload gai.conf",
-        )
+        # drop glibc's defaults). Attached sandboxes get this via the sudo
+        # bootstrap — the toolbox user can't write /etc there.
+        if owns_sandbox:
+            _with_retries(
+                lambda: sandbox.fs.upload_file(
+                    b"precedence ::ffff:0:0/96  100\nprecedence ::/0  10\n",
+                    "/etc/gai.conf",
+                ),
+                "upload gai.conf",
+            )
 
-        # Workspace dir the agent runs in (ACP session cwd).
+        # Working dir the agent runs in (ACP session cwd).
         _with_retries(
-            lambda: sandbox.fs.create_folder(SANDBOX_WORKSPACE, "0755"),
+            lambda: sandbox.fs.create_folder(cwd, "0755"),
             "create workspace",
         )
 
@@ -148,24 +231,26 @@ def provision_agent_sandbox(
         # Shim + launcher.
         shim_token = secrets.token_urlsafe(24)
         _with_retries(
-            lambda: sandbox.fs.upload_file(SHIM_PATH.read_bytes(), SHIM_REMOTE_PATH),
+            lambda: sandbox.fs.upload_file(
+                SHIM_PATH.read_bytes(), _shim_remote_path(agent),
+            ),
             "upload shim",
         )
         launcher = _build_launcher(agent, creds, shim_token)
         _with_retries(
             lambda: sandbox.fs.upload_file(
-                launcher.encode("utf-8"), LAUNCHER_REMOTE_PATH,
+                launcher.encode("utf-8"), _launcher_remote_path(agent),
             ),
             "upload launcher",
         )
         _with_retries(
             lambda: sandbox.process.exec(
-                f"bash {LAUNCHER_REMOTE_PATH}", cwd=SANDBOX_HOME, timeout=30,
+                f"bash {_launcher_remote_path(agent)}", cwd=SANDBOX_HOME, timeout=30,
             ),
             "start shim",
         )
 
-        preview = sandbox.get_preview_link(settings.acp_shim_port)
+        preview = sandbox.get_preview_link(shim_port(agent))
         base_url = preview.url.rstrip("/")
         headers = {"x-shim-token": shim_token}
         preview_token = getattr(preview, "token", None)
@@ -178,15 +263,51 @@ def provision_agent_sandbox(
             sandbox_id, agent.id, base_url,
         )
         return ProvisionedRuntime(
-            sandbox_id=sandbox_id, base_url=base_url, headers=headers,
+            sandbox_id=sandbox_id,
+            base_url=base_url,
+            headers=headers,
+            cwd=cwd,
+            owns_sandbox=owns_sandbox,
         )
     except Exception:
-        # Don't leak half-provisioned sandboxes.
-        try:
-            client.delete(sandbox)
-        except Exception:
-            logger.exception("Failed to clean up sandbox '%s'", sandbox_id)
+        # Don't leak half-provisioned sandboxes — but never delete a
+        # harness's own sandbox on attach failure.
+        if owns_sandbox:
+            try:
+                client.delete(sandbox)
+            except Exception:
+                logger.exception("Failed to clean up sandbox '%s'", sandbox_id)
         raise
+
+
+def _ensure_agent_runtime(sandbox) -> None:
+    """Install node + ACP adapters into an attached sandbox (idempotent)."""
+    script_path = f"{SANDBOX_HOME}/.harness-acp-bootstrap.sh"
+    _with_retries(
+        lambda: sandbox.fs.upload_file(
+            _bootstrap_script().encode("utf-8"), script_path,
+        ),
+        "upload bootstrap",
+    )
+    result = sandbox.process.exec(f"bash {script_path}", timeout=300)
+    output = (result.result or "")[-1500:]
+    if result.exit_code != 0 or "runtime-ready" not in output:
+        raise RuntimeError(
+            "Could not prepare the harness sandbox for agents (node/adapter "
+            f"install failed):\n{output}"
+        )
+
+
+def stop_agent_shim(sandbox_id: str, agent: AgentDefinition) -> None:
+    """Stop one agent's shim in an attached sandbox (best-effort)."""
+    try:
+        sandbox = get_daytona_service().get_sandbox(sandbox_id)
+        sandbox.process.exec(
+            f"pkill -f {shlex.quote(_shim_remote_path(agent))} || true",
+            timeout=15,
+        )
+    except Exception:
+        logger.exception("Failed to stop shim for '%s' in '%s'", agent.id, sandbox_id)
 
 
 def _wait_for_shim(

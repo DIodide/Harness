@@ -149,6 +149,19 @@ function ChatPage() {
 		convexQuery(api.harnesses.list, {}),
 	);
 	const { data: workspaces } = useQuery(convexQuery(api.workspaces.list, {}));
+
+	// Every user should have a workspace for chats to live in — create the
+	// Default lazily for accounts predating (or skipping) onboarding.
+	const ensureDefaultWorkspace = useMutation({
+		mutationFn: useConvexMutation(api.workspaces.ensureDefault),
+	});
+	const ensuredDefaultRef = useRef(false);
+	useEffect(() => {
+		if (workspaces && workspaces.length === 0 && !ensuredDefaultRef.current) {
+			ensuredDefaultRef.current = true;
+			ensureDefaultWorkspace.mutate({});
+		}
+	}, [workspaces, ensureDefaultWorkspace]);
 	const { data: sandboxes } = useQuery(convexQuery(api.sandboxes.list, {}));
 	const { data: userSettings } = useQuery(
 		convexQuery(api.userSettings.get, {}),

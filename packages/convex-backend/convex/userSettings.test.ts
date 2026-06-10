@@ -22,7 +22,7 @@ describe("userSettings.get", () => {
 			autoSwitchHarness: true,
 			displayMode: "standard",
 			modelSelectorMode: "session",
-			workspacesMode: "basic",
+			workspacesMode: "workspaces",
 		});
 	});
 

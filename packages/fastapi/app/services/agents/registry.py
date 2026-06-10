@@ -47,6 +47,9 @@ class AgentDefinition:
     command: list[str]
     # Static env always set for this agent (credentials add to this).
     env: dict[str, str]
+    # Offset on settings.acp_shim_port so multiple agents can run shims in
+    # the same (attached harness) sandbox without port clashes.
+    port_offset: int = 0
 
 
 AGENT_REGISTRY: dict[str, AgentDefinition] = {
@@ -55,6 +58,7 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
         name="Codex CLI",
         command=["/usr/local/bin/codex-acp"],
         env={"CODEX_HOME": f"{SANDBOX_HOME}/.codex"},
+        port_offset=0,
     ),
     "claude-code": AgentDefinition(
         id="claude-code",
@@ -63,6 +67,7 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
         # (/usr/bin with nodesource, /usr/local/bin with the official image).
         command=["claude-agent-acp"],
         env={},
+        port_offset=1,
     ),
     "cursor": AgentDefinition(
         id="cursor",
@@ -73,6 +78,7 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
         # otherwise marks them "needs approval").
         command=["/usr/local/bin/cursor-agent", "--force", "acp"],
         env={},
+        port_offset=2,
     ),
 }
 

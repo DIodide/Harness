@@ -211,6 +211,9 @@ function OnboardingPage() {
 	const ensureSkillDetailsFn = useConvexAction(api.skills.ensureSkillDetails);
 	const { getToken } = useAuth();
 	const createHarnessFn = useConvexMutation(api.harnesses.create);
+	const ensureDefaultWorkspaceFn = useConvexMutation(
+		api.workspaces.ensureDefault,
+	);
 	const { data: sandboxes, isLoading: sandboxesLoading } = useQuery(
 		convexQuery(api.sandboxes.list, {}),
 	);
@@ -266,13 +269,26 @@ function OnboardingPage() {
 
 			return harnessId;
 		},
-		onSuccess: (harnessId, variables) => {
+		onSuccess: async (harnessId, variables) => {
 			const id = harnessId as Id<"harnesses">;
 			if (variables.status === "draft") {
 				navigate({ to: "/harnesses" });
 				toast.success("Draft saved");
 			} else {
-				navigate({ to: "/chat", search: { harnessId: id as string } });
+				// Every user gets a Default workspace so the new harness's
+				// chats have a home; land in the workspaces experience.
+				let workspaceId: string | undefined;
+				try {
+					workspaceId = (await ensureDefaultWorkspaceFn({
+						harnessId: id,
+					})) as string;
+				} catch {
+					// non-fatal: the workspaces page self-heals on load
+				}
+				navigate({
+					to: "/workspaces",
+					search: { harnessId: id as string, workspaceId },
+				});
 			}
 
 			// Fire-and-forget: sync skill details for added skills

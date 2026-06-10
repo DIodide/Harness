@@ -103,6 +103,13 @@ async def terminal_websocket(
 
         def _create_pty():
             sandbox = service._ensure_running(sandbox_id)
+            # A missing cwd makes the PTY runner fail with a misleading
+            # "fork/exec /usr/bin/bash: no such file or directory" — custom
+            # images (e.g. the ACP agent snapshot) don't ship /home/daytona.
+            try:
+                sandbox.fs.create_folder("/home/daytona", "0755")
+            except Exception:
+                pass  # already exists
             handle = sandbox.process.create_pty_session(
                 id=session_id,
                 cwd="/home/daytona",

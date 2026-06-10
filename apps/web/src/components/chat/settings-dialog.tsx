@@ -206,7 +206,7 @@ export function SettingsDialog({
 								</p>
 							</div>
 							<Select
-								value={(userSettings?.workspacesMode as string) ?? "basic"}
+								value={(userSettings?.workspacesMode as string) ?? "workspaces"}
 								onValueChange={async (value) => {
 									await updateSettings.mutateAsync({
 										workspacesMode: value as "basic" | "workspaces",
