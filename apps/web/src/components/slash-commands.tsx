@@ -1,4 +1,4 @@
-import { Wrench } from "lucide-react";
+import { Bot, Wrench } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
@@ -7,14 +7,30 @@ import { cn } from "../lib/utils";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export type SlashCommand = McpServerCommand;
+/**
+ * A slash-menu entry. Two sources with different send semantics:
+ * - "mcp" (default): intercepted client-side and sent as forced_tool with
+ *   the command prefix stripped.
+ * - "agent": an ACP agent built-in (/compact, /review, ...) — sent through
+ *   verbatim as prompt text; the agent parses it itself. Args optional.
+ */
+export type SlashCommand = McpServerCommand & {
+	source?: "mcp" | "agent";
+	inputHint?: string;
+};
+
+/** Outcome of trySend for a "/"-prefixed message. */
+export type SlashSendResult =
+	| { kind: "mcp"; forcedTool: string; message: string }
+	| { kind: "agent" }
+	| { kind: "invalid" };
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
 function parseSlashCommand(
 	text: string,
 	commands: SlashCommand[],
-): { toolName: string; message: string } | null {
+): { cmd: SlashCommand; message: string } | null {
 	if (!text.startsWith("/")) return null;
 
 	const afterSlash = text.slice(1).trim();
@@ -25,13 +41,13 @@ function parseSlashCommand(
 	for (const cmd of sorted) {
 		if (afterSlash === cmd.name || afterSlash.startsWith(`${cmd.name} `)) {
 			return {
-				toolName: cmd.name,
+				cmd,
 				message: afterSlash.slice(cmd.name.length).trim(),
 			};
 		}
 		if (afterSlash === cmd.tool || afterSlash.startsWith(`${cmd.tool} `)) {
 			return {
-				toolName: cmd.name,
+				cmd,
 				message: afterSlash.slice(cmd.tool.length).trim(),
 			};
 		}
@@ -153,24 +169,32 @@ export function useSlashCommandInput({
 	);
 
 	// ── trySend ────────────────────────────────────────────────────────────────
-	// Returns { forcedTool, message } if this is a slash command, or null if not.
-	// The caller should strip the command prefix and send the message through the
-	// normal chat stream with forced_tool set.
+	// Classifies a "/"-prefixed message. MCP commands are intercepted (send
+	// the stripped message with forced_tool); agent commands pass through
+	// verbatim as prompt text (args optional — /compact alone is valid).
 
 	const trySend = useCallback(
-		(content: string): { forcedTool: string; message: string } | null => {
+		(content: string): SlashSendResult | null => {
 			const parsed = parseSlashCommand(content, commands);
 			if (!parsed) return null;
+
+			setMenuOpen(false);
+			if (parsed.cmd.source === "agent") {
+				return { kind: "agent" };
+			}
 
 			if (!parsed.message) {
 				toast.error(
 					"Add a message after the command, e.g. /tool describe what you want",
 				);
-				return { forcedTool: "", message: "" }; // signal "handled but don't send"
+				return { kind: "invalid" };
 			}
 
-			setMenuOpen(false);
-			return { forcedTool: parsed.toolName, message: parsed.message };
+			return {
+				kind: "mcp",
+				forcedTool: parsed.cmd.name,
+				message: parsed.message,
+			};
 		},
 		[commands],
 	);
@@ -196,6 +220,8 @@ interface SlashCommandMenuProps {
 	filtered: SlashCommand[];
 	selectedIndex: number;
 	onSelect: (command: SlashCommand) => void;
+	/** Copy when no commands exist at all (varies by agent vs MCP mode). */
+	emptyLabel?: string;
 }
 
 export function SlashCommandMenu({
@@ -204,6 +230,7 @@ export function SlashCommandMenu({
 	filtered,
 	selectedIndex,
 	onSelect,
+	emptyLabel = "No MCP tools available",
 }: SlashCommandMenuProps) {
 	const listRef = useRef<HTMLDivElement>(null);
 
@@ -221,7 +248,7 @@ export function SlashCommandMenu({
 				{filtered.length === 0 ? (
 					<div className="px-3 py-4 text-sm text-muted-foreground">
 						{commands.length === 0
-							? "No MCP tools available"
+							? emptyLabel
 							: "No commands match your search"}
 					</div>
 				) : (
@@ -241,14 +268,26 @@ export function SlashCommandMenu({
 									: "text-foreground hover:bg-accent/50",
 							)}
 						>
-							<Wrench
-								size={14}
-								className="mt-0.5 shrink-0 text-muted-foreground"
-							/>
+							{cmd.source === "agent" ? (
+								<Bot
+									size={14}
+									className="mt-0.5 shrink-0 text-muted-foreground"
+								/>
+							) : (
+								<Wrench
+									size={14}
+									className="mt-0.5 shrink-0 text-muted-foreground"
+								/>
+							)}
 							<div className="min-w-0 flex-1">
 								<div className="flex items-center gap-1.5">
 									<span className="font-medium">/{cmd.tool}</span>
-									<span className="text-xs text-muted-foreground">
+									{cmd.inputHint && (
+										<span className="truncate text-xs italic text-muted-foreground/70">
+											{cmd.inputHint}
+										</span>
+									)}
+									<span className="ml-auto shrink-0 text-xs text-muted-foreground">
 										{cmd.server}
 									</span>
 								</div>

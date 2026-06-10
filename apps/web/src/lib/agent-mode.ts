@@ -217,11 +217,19 @@ export function flattenConfigChoices(
 	return out;
 }
 
+/** Agent-advertised slash command (ACP available_commands_update). */
+export interface AgentCommand {
+	name: string;
+	description?: string;
+	input?: { hint?: string } | null;
+}
+
 export interface AgentSessionInfo {
 	session_id: string;
 	status: string;
 	prompt_queueing?: boolean;
 	config_options?: AgentConfigOption[];
+	available_commands?: AgentCommand[];
 }
 
 /** Fetch live session info (status, config options). Null when gone. */

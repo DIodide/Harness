@@ -61,7 +61,9 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
         id="codex",
         name="Codex CLI",
         command=["/usr/local/bin/codex-acp"],
-        env={"CODEX_HOME": f"{SANDBOX_HOME}/.codex"},
+        # RUST_LOG=error: surface codex-acp failures on stderr (visible as
+        # "[agent stderr]" in gateway logs) without info-level noise.
+        env={"CODEX_HOME": f"{SANDBOX_HOME}/.codex", "RUST_LOG": "error"},
         port_offset=0,
         models=("gpt-5.5-codex", "gpt-5.5", "gpt-5.4-codex"),
     ),

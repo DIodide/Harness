@@ -9,6 +9,7 @@ import {
 	forgetAgentSession,
 } from "./agent-mode";
 import { checkChatRateLimit } from "./chat-ratelimit";
+import { buildAcpImageBlocks } from "./multimodal";
 
 const FASTAPI_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
@@ -134,6 +135,8 @@ interface UseChatStreamCallbacks {
 	onPlan?: (conversationId: string, entries: AgentPlanEntry[]) => void;
 	/** ACP agent mode: context window + cost from the user's own account. */
 	onAgentUsage?: (conversationId: string, usage: AgentUsage) => void;
+	/** ACP agent mode: session config/commands/mode changed server-side. */
+	onAgentSessionChanged?: (conversationId: string) => void;
 }
 
 export type MessageContent = string | Array<Record<string, unknown>>;
@@ -255,6 +258,9 @@ async function runAgentStream(
 	const messages = body.messages;
 	const last = messages[messages.length - 1];
 	const message = last ? extractText(last.content) : "";
+	// Image attachments become ACP image blocks (base64); the gateway drops
+	// them for agents without promptCapabilities.image.
+	const blocks = last ? await buildAcpImageBlocks(last.content) : [];
 	const history = messages.slice(0, -1).map((m) => ({
 		role: m.role,
 		content: extractText(m.content),
@@ -267,7 +273,11 @@ async function runAgentStream(
 				"Content-Type": "application/json",
 				...(token ? { Authorization: `Bearer ${token}` } : {}),
 			},
-			body: JSON.stringify({ message, history }),
+			body: JSON.stringify({
+				message,
+				history,
+				...(blocks.length > 0 ? { blocks } : {}),
+			}),
 			signal: controller.signal,
 		});
 
@@ -361,7 +371,14 @@ async function runAgentStream(
 			case "error":
 				cb.onError(convoId, data.message as string);
 				break;
-			// "commands_update", "mode_update": not yet rendered
+			case "config_update":
+			case "commands_update":
+			case "mode_update":
+				// Session-level state changed (agent switched mode itself, new
+				// slash commands, ...) — composer selectors refresh from the
+				// session endpoint.
+				cb.onAgentSessionChanged?.(convoId);
+				break;
 		}
 	});
 

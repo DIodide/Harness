@@ -1,4 +1,5 @@
 import { useAuth } from "@clerk/tanstack-react-start";
+import { useQueryClient } from "@tanstack/react-query";
 import {
 	createContext,
 	type ReactNode,
@@ -102,6 +103,7 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 
 	const sideEffectsRegistryRef = useRef<SideEffectsRegistry>(new Map());
 	const { getToken } = useAuth();
+	const queryClient = useQueryClient();
 	const [pendingPermissions, setPendingPermissions] = useState<
 		Record<string, PendingAgentPermission>
 	>({});
@@ -311,6 +313,14 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 					agentUsage: usage,
 				},
 			}));
+		},
+		onAgentSessionChanged: (convoId) => {
+			// The agent changed its own session state (mode flip from an
+			// "always allow" approval, plan-mode exit, new slash commands).
+			// Refresh the composer's selectors/menu from the session endpoint.
+			queryClient.invalidateQueries({
+				queryKey: ["agent-session-config", convoId],
+			});
 		},
 	});
 

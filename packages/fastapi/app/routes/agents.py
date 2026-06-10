@@ -49,9 +49,61 @@ async def _user_context(http_client: httpx.AsyncClient, user: dict) -> UserConte
 # Combined base64 payload cap for image blocks (~15 MB of raw image data).
 MAX_IMAGE_BLOCK_BYTES = 20_000_000
 
+# codex_core rejects degenerate images as a poisoning risk — and worse, the
+# rejected image stays in the thread history, failing every later turn.
+# Guard dimensions here so a bad attachment can never brick a session.
+MIN_IMAGE_DIMENSION = 4
+
+
+def _png_dimensions(raw: bytes) -> tuple[int, int] | None:
+    if len(raw) < 24 or raw[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    import struct
+
+    width, height = struct.unpack(">II", raw[16:24])
+    return width, height
+
+
+def _gif_dimensions(raw: bytes) -> tuple[int, int] | None:
+    if len(raw) < 10 or raw[:4] != b"GIF8":
+        return None
+    import struct
+
+    width, height = struct.unpack("<HH", raw[6:10])
+    return width, height
+
+
+def _jpeg_dimensions(raw: bytes) -> tuple[int, int] | None:
+    if len(raw) < 4 or raw[:2] != b"\xff\xd8":
+        return None
+    import struct
+
+    pos = 2
+    while pos + 9 < len(raw):
+        if raw[pos] != 0xFF:
+            pos += 1
+            continue
+        marker = raw[pos + 1]
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            height, width = struct.unpack(">HH", raw[pos + 5 : pos + 9])
+            return width, height
+        length = struct.unpack(">H", raw[pos + 2 : pos + 4])[0]
+        pos += 2 + length
+    return None
+
+
+def _image_dimensions(raw: bytes) -> tuple[int, int] | None:
+    for probe in (_png_dimensions, _gif_dimensions, _jpeg_dimensions):
+        dims = probe(raw)
+        if dims is not None:
+            return dims
+    return None  # unknown container (e.g. webp) — let the agent decide
+
 
 def _validated_image_blocks(blocks: list[dict] | None) -> list[dict]:
     """Keep only well-formed ACP image blocks, within a total size budget."""
+    import base64
+
     out: list[dict] = []
     total = 0
     for block in blocks or []:
@@ -67,6 +119,20 @@ def _validated_image_blocks(blocks: list[dict] | None) -> list[dict]:
         if total > MAX_IMAGE_BLOCK_BYTES:
             logger.warning("Dropping image blocks over the %dB cap", MAX_IMAGE_BLOCK_BYTES)
             break
+        try:
+            raw = base64.b64decode(data, validate=True)
+        except Exception:
+            logger.warning("Dropping image block with invalid base64")
+            continue
+        dims = _image_dimensions(raw)
+        if dims is not None and (
+            dims[0] < MIN_IMAGE_DIMENSION or dims[1] < MIN_IMAGE_DIMENSION
+        ):
+            logger.warning(
+                "Dropping %dx%d image — below the %dpx floor that agents accept",
+                dims[0], dims[1], MIN_IMAGE_DIMENSION,
+            )
+            continue
         out.append({"type": "image", "data": data, "mimeType": mime})
     return out
 

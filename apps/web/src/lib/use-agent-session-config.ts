@@ -1,6 +1,7 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	type AgentCommand,
 	type AgentConfigOption,
 	type AgentMode,
 	fetchAgentSession,
@@ -11,6 +12,7 @@ import {
 interface SessionConfig {
 	sessionId: string | null;
 	options: AgentConfigOption[];
+	commands: AgentCommand[];
 }
 
 /**
@@ -31,20 +33,27 @@ export function useAgentSessionConfig(
 		queryKey,
 		enabled,
 		queryFn: async (): Promise<SessionConfig> => {
-			if (!conversationId) return { sessionId: null, options: [] };
+			if (!conversationId)
+				return { sessionId: null, options: [], commands: [] };
 			const sessionId = getCachedAgentSessionId(conversationId, agent);
-			if (!sessionId) return { sessionId: null, options: [] };
+			if (!sessionId) return { sessionId: null, options: [], commands: [] };
 			const token = await getToken({ template: "convex" });
 			const info = await fetchAgentSession(token, sessionId);
 			return {
 				sessionId,
 				options: info?.config_options ?? [],
+				commands: info?.available_commands ?? [],
 			};
 		},
-		// Until the session exists and reports options, check again shortly —
-		// it appears after the first message (sandbox provisioning included).
+		// Until the session exists and reports options/commands, check again
+		// shortly — they appear after the first message (sandbox provisioning
+		// included). Once present, live refresh happens via stream events.
 		refetchInterval: (q) =>
-			enabled && (q.state.data?.options?.length ?? 0) === 0 ? 5000 : false,
+			enabled &&
+			(q.state.data?.options?.length ?? 0) === 0 &&
+			(q.state.data?.commands?.length ?? 0) === 0
+				? 5000
+				: false,
 	});
 
 	const setOption = useMutation({
@@ -63,12 +72,14 @@ export function useAgentSessionConfig(
 			queryClient.setQueryData(queryKey, (prev: SessionConfig | undefined) => ({
 				sessionId: prev?.sessionId ?? null,
 				options,
+				commands: prev?.commands ?? [],
 			}));
 		},
 	});
 
 	return {
 		options: query.data?.options ?? [],
+		commands: query.data?.commands ?? [],
 		sessionReady: Boolean(query.data?.sessionId),
 		setOption,
 	};

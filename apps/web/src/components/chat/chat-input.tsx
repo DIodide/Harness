@@ -32,6 +32,7 @@ import { useFileAttachments } from "../../hooks/use-file-attachments";
 import {
 	AGENT_MODES,
 	type AgentMode,
+	cancelAgentTurn,
 	flattenConfigChoices,
 	getCachedAgentSessionId,
 	queueAgentPrompt,
@@ -45,6 +46,7 @@ import type { McpAuthType, McpServerCommand } from "../../lib/mcp";
 import {
 	acceptString,
 	allowedMimeTypes,
+	IMAGE_MIMES,
 	MODELS,
 	modelSupportsAudio,
 	modelSupportsMedia,
@@ -56,7 +58,11 @@ import { useAgentSessionConfig } from "../../lib/use-agent-session-config";
 import { cn } from "../../lib/utils";
 import { AgentPermissionCard } from "../agent-permission-card";
 import { AttachmentChip } from "../attachment-chip";
-import { SlashCommandMenu, useSlashCommandInput } from "../slash-commands";
+import {
+	type SlashCommand,
+	SlashCommandMenu,
+	useSlashCommandInput,
+} from "../slash-commands";
 import { Button } from "../ui/button";
 import {
 	DropdownMenu,
@@ -213,10 +219,15 @@ export function ChatInput({
 		for (const entry of agentCatalog ?? []) map.set(entry.id, entry.available);
 		return map;
 	}, [agentCatalog]);
-	// ACP session config options (model, mode, ...) for the active agent
-	// session — populated once the session exists (after the first send).
-	const { options: agentConfigOptions, setOption: setAgentOption } =
-		useAgentSessionConfig(conversationId, agentMode);
+	// ACP session config options (model, mode, ...) and agent-advertised
+	// slash commands — populated once the session exists (after the first
+	// send), kept live by config/commands stream events.
+	const {
+		options: agentConfigOptions,
+		commands: agentCommands,
+		setOption: setAgentOption,
+	} = useAgentSessionConfig(conversationId, agentMode);
+	const agentModeActive = agentMode !== "default";
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
@@ -224,13 +235,19 @@ export function ChatInput({
 		effectiveModel ??
 		"Model";
 
-	const supportsMedia = modelSupportsMedia(effectiveModel);
-	const supportsAudio = modelSupportsAudio(effectiveModel);
+	// In agent mode attachments are governed by the agent, not the harness
+	// model: both Claude Code and Codex accept images (the gateway drops
+	// them for agents that don't); audio is not part of ACP prompts.
+	const supportsMedia = agentModeActive || modelSupportsMedia(effectiveModel);
+	const supportsAudio = !agentModeActive && modelSupportsAudio(effectiveModel);
 	const supportsAnyAttachment = supportsMedia || supportsAudio;
-	const modelAccept = acceptString(effectiveModel);
+	const modelAccept = agentModeActive
+		? IMAGE_MIMES.join(",")
+		: acceptString(effectiveModel);
 	const modelAllowedMimes = useMemo(
-		() => allowedMimeTypes(effectiveModel),
-		[effectiveModel],
+		() =>
+			agentModeActive ? new Set(IMAGE_MIMES) : allowedMimeTypes(effectiveModel),
+		[agentModeActive, effectiveModel],
 	);
 
 	const {
@@ -248,8 +265,30 @@ export function ChatInput({
 	}, [supportsAnyAttachment, clearAttachments]);
 
 	// ── Slash commands ──────────────────────────────────────────────
+	// Default mode: MCP tool commands (intercepted, sent as forced_tool).
+	// Agent mode: the agent's own commands (/compact, /review, ...) sent
+	// through verbatim — the agent parses them itself.
+	const agentSlashCommands = useMemo<SlashCommand[]>(() => {
+		if (!agentModeActive) return [];
+		const agentLabel =
+			AGENT_MODES.find((a) => a.id === agentMode)?.label ?? "Agent";
+		return agentCommands.map((cmd) => ({
+			name: cmd.name,
+			tool: cmd.name,
+			server: agentLabel,
+			description: cmd.description ?? "",
+			parameters: {},
+			source: "agent" as const,
+			inputHint: cmd.input?.hint,
+		}));
+	}, [agentModeActive, agentMode, agentCommands]);
+
+	const effectiveSlashCommands = agentModeActive
+		? agentSlashCommands
+		: (slashCommands ?? []);
+
 	const slash = useSlashCommandInput({
-		storedCommands: slashCommands ?? [],
+		storedCommands: effectiveSlashCommands,
 		text,
 		setText,
 		textareaRef,
@@ -341,16 +380,15 @@ export function ChatInput({
 		if (budgetExceeded && agentMode === "default") return;
 
 		// ── Slash command interception ────────────────────────────────
-		// If it's a slash command, trySend returns the forced tool + cleaned message.
-		// We then send it through the normal chat flow with forced_tool set.
-		const slashResult = slashCommands ? slash.trySend(content) : null;
-		if (slashResult !== null) {
-			if (!slashResult.forcedTool) return; // validation error (e.g. no message), already toasted
-		}
+		// MCP commands are stripped + sent with forced_tool; agent commands
+		// pass through verbatim (the agent parses "/name args" itself).
+		const slashResult = slash.trySend(content);
+		if (slashResult?.kind === "invalid") return; // already toasted
 
-		// Use the cleaned message for slash commands, or the raw content for normal messages
-		const messageContent = slashResult ? slashResult.message : content;
-		const forcedTool = slashResult?.forcedTool;
+		const messageContent =
+			slashResult?.kind === "mcp" ? slashResult.message : content;
+		const forcedTool =
+			slashResult?.kind === "mcp" ? slashResult.forcedTool : undefined;
 
 		setText("");
 		setHistoryIndex(-1);
@@ -487,7 +525,7 @@ export function ChatInput({
 
 	const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
 		// Slash command menu gets first shot at keyboard events
-		if (slashCommands && slash.handleKeyDown(e)) return;
+		if (slash.handleKeyDown(e)) return;
 
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault();
@@ -566,6 +604,34 @@ export function ChatInput({
 	};
 
 	const showStopButton = isStreaming && !text.trim();
+
+	// Stopping an agent turn must reach the agent (ACP session/cancel), not
+	// just abort the browser fetch — otherwise it keeps running in its
+	// sandbox. The stream then concludes with stopReason=cancelled and the
+	// partial response is saved.
+	const handleStop = useCallback(
+		(convoId: string) => {
+			if (!agentModeActive) {
+				onInterrupt(convoId);
+				return;
+			}
+			const sessionId = getCachedAgentSessionId(convoId, agentMode);
+			if (!sessionId) {
+				onInterrupt(convoId);
+				return;
+			}
+			void (async () => {
+				try {
+					const token = await getToken({ template: "convex" });
+					await cancelAgentTurn(token, sessionId);
+				} catch {
+					// Gateway unreachable — at least stop the local stream.
+					onInterrupt(convoId);
+				}
+			})();
+		},
+		[agentModeActive, agentMode, getToken, onInterrupt],
+	);
 
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop drop zone
@@ -689,6 +755,11 @@ export function ChatInput({
 						filtered={slash.filtered}
 						selectedIndex={slash.selectedIndex}
 						onSelect={slash.selectCommand}
+						emptyLabel={
+							agentModeActive
+								? "Agent commands appear after the first message"
+								: "No MCP tools available"
+						}
 					/>
 				</div>
 
@@ -947,7 +1018,7 @@ export function ChatInput({
 									className="ml-1"
 									onClick={() => {
 										if (showStopButton && conversationId) {
-											onInterrupt(conversationId);
+											handleStop(conversationId);
 										} else {
 											handleSend();
 										}
@@ -972,7 +1043,9 @@ export function ChatInput({
 							</TooltipTrigger>
 							<TooltipContent>
 								{showStopButton
-									? "Stop generation"
+									? agentModeActive
+										? "Stop the agent"
+										: "Stop generation"
 									: isStreaming
 										? "Queue message"
 										: "Send message"}
