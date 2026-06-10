@@ -30,12 +30,16 @@ function pickInitial(): number {
 
 export function PendingResponseIndicator({
 	className,
+	message: messageOverride,
 }: {
 	className?: string;
+	/** Real status (e.g. "Starting Codex sandbox…") instead of flavor text. */
+	message?: string | null;
 }) {
 	const [idx, setIdx] = useState(pickInitial);
 
 	useEffect(() => {
+		if (messageOverride) return;
 		const prefersReduced =
 			window?.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 		if (prefersReduced) return;
@@ -43,9 +47,9 @@ export function PendingResponseIndicator({
 			setIdx((prev) => (prev + 1) % FLAVOR_MESSAGES.length);
 		}, ROTATE_MS);
 		return () => clearInterval(id);
-	}, []);
+	}, [messageOverride]);
 
-	const message = FLAVOR_MESSAGES[idx];
+	const message = messageOverride ?? FLAVOR_MESSAGES[idx];
 
 	return (
 		<div
@@ -55,7 +59,7 @@ export function PendingResponseIndicator({
 			<RoseCurveSpinner size={14} />
 			<AnimatePresence mode="wait">
 				<motion.span
-					key={idx}
+					key={messageOverride ?? idx}
 					initial={{ opacity: 0, y: 4 }}
 					animate={{ opacity: 1, y: 0 }}
 					exit={{ opacity: 0, y: -4 }}

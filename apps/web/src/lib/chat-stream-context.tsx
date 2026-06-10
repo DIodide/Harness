@@ -12,6 +12,7 @@ import {
 } from "react";
 import {
 	type AgentPermissionRequest,
+	agentStatusLabel,
 	answerAgentPermission,
 } from "./agent-mode";
 import {
@@ -32,6 +33,8 @@ export const EMPTY_STREAM_STATE: ConvoStreamState = {
 	pendingDoneContent: null,
 	usage: null,
 	model: null,
+	agentStatus: null,
+	plan: null,
 };
 
 interface ChatStreamSideEffects {
@@ -134,6 +137,7 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 						...state,
 						content: (state.content ?? "") + content,
 						parts,
+						agentStatus: null,
 					},
 				};
 			});
@@ -220,6 +224,8 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 					pendingDoneContent: fullContent,
 					usage: usage ?? prev[convoId]?.usage ?? null,
 					model: model ?? prev[convoId]?.model ?? null,
+					agentStatus: null,
+					plan: null,
 				},
 			}));
 			dispatchSideEffect("onDone", (h) =>
@@ -253,6 +259,24 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 				delete next[convoId];
 				return next;
 			});
+		},
+		onAgentStatus: (convoId, data) => {
+			setStreamStates((prev) => ({
+				...prev,
+				[convoId]: {
+					...(prev[convoId] ?? EMPTY_STREAM_STATE),
+					agentStatus: agentStatusLabel(data),
+				},
+			}));
+		},
+		onPlan: (convoId, entries) => {
+			setStreamStates((prev) => ({
+				...prev,
+				[convoId]: {
+					...(prev[convoId] ?? EMPTY_STREAM_STATE),
+					plan: entries,
+				},
+			}));
 		},
 	});
 

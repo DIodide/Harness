@@ -121,23 +121,3 @@ def get_agent(agent_id: str) -> AgentDefinition:
     if agent is None:
         raise KeyError(f"Unknown agent '{agent_id}'")
     return agent
-
-
-def list_agents_status(user_id: str) -> list[dict]:
-    """Agent catalog with per-user credential availability (for the UI)."""
-    out = []
-    for agent in AGENT_REGISTRY.values():
-        try:
-            resolve_credentials(agent.id, user_id)
-            available, reason = True, None
-        except AgentCredentialsError as e:
-            available, reason = False, str(e)
-        out.append(
-            {
-                "id": agent.id,
-                "name": agent.name,
-                "available": available,
-                "unavailable_reason": reason,
-            }
-        )
-    return out

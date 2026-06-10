@@ -16,12 +16,20 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.dependencies import get_current_user, get_http_client
 from app.models import (
+    AgentCredentialStoreRequest,
     AgentPermissionAnswer,
     AgentPromptRequest,
     AgentSessionCreateRequest,
     AgentSwitchHarnessRequest,
 )
-from app.services.agents.registry import AgentCredentialsError, list_agents_status
+from app.services.agents.credentials import (
+    CredentialCryptoError,
+    credential_sources,
+    delete_user_credential,
+    store_user_credential,
+    validate_secret,
+)
+from app.services.agents.registry import AGENT_REGISTRY, AgentCredentialsError
 from app.services.agents.session_manager import get_session_manager
 from app.services.convex import save_assistant_message
 from app.services.mcp_client import UserContext, resolve_princeton_netid
@@ -49,9 +57,57 @@ def _session_payload(session) -> dict:
 
 
 @router.get("")
-async def list_agents(user: dict = Depends(get_current_user)):
-    """Agent catalog with availability (default agent is implicit)."""
-    return {"agents": list_agents_status(user.get("sub", ""))}
+async def list_agents(
+    user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+):
+    """Agent catalog with per-user availability (default agent is implicit).
+
+    `source` tells the UI where credentials come from: "user" (connected in
+    settings), "server" (deployment fallback), or null (not connected).
+    """
+    sources = await credential_sources(http_client, user.get("sub", ""))
+    return {
+        "agents": [
+            {"id": agent.id, "name": agent.name, **sources[agent.id]}
+            for agent in AGENT_REGISTRY.values()
+        ]
+    }
+
+
+@router.post("/credentials")
+async def store_credential(
+    body: AgentCredentialStoreRequest,
+    user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+):
+    """Store a per-user agent credential (write-only; value never echoed)."""
+    if body.agent not in AGENT_REGISTRY:
+        raise HTTPException(status_code=404, detail=f"Unknown agent '{body.agent}'")
+    error = validate_secret(body.agent, body.kind, body.value)
+    if error:
+        raise HTTPException(status_code=422, detail=error)
+    try:
+        await store_user_credential(
+            http_client, user["sub"], body.agent, body.kind, body.value, body.label,
+        )
+    except CredentialCryptoError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except AgentCredentialsError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"ok": True, "agent": body.agent, "kind": body.kind}
+
+
+@router.delete("/credentials/{agent_id}")
+async def delete_credential(
+    agent_id: str,
+    user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+):
+    if agent_id not in AGENT_REGISTRY:
+        raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_id}'")
+    await delete_user_credential(http_client, user["sub"], agent_id)
+    return {"ok": True}
 
 
 @router.post("/sessions")

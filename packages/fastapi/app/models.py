@@ -124,3 +124,10 @@ class AgentSwitchHarnessRequest(BaseModel):
     harness: HarnessConfig
 
 
+class AgentCredentialStoreRequest(BaseModel):
+    agent: str  # "codex" | "claude-code"
+    kind: Literal["auth_json", "api_key", "oauth_token"]
+    value: str  # plaintext secret; encrypted server-side, never echoed back
+    label: str | None = Field(default=None, max_length=80)
+
+

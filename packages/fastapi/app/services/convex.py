@@ -38,6 +38,39 @@ async def query_convex(
         return None
 
 
+async def run_convex_mutation(
+    http_client: httpx.AsyncClient,
+    path: str,
+    args: dict[str, Any],
+) -> Any:
+    """Execute a Convex mutation via the HTTP API using the deploy key.
+
+    Returns the mutation's value, or None when Convex is unconfigured or the
+    call fails (mirrors query_convex's fail-soft behavior).
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        logger.warning("Convex not configured — skipping mutation '%s'", path)
+        return None
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/mutation",
+            headers={"Authorization": f"Convex {settings.convex_deploy_key}"},
+            json={"path": path, "args": args, "format": "json"},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") == "error":
+            logger.error(
+                "Convex mutation '%s' failed: %s", path, data.get("errorMessage"),
+            )
+            return None
+        return data.get("value")
+    except Exception:
+        logger.exception("Failed to run Convex mutation '%s'", path)
+        return None
+
+
 async def save_assistant_message(
     http_client: httpx.AsyncClient,
     conversation_id: str,

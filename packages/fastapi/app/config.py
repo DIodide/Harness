@@ -38,8 +38,11 @@ class Settings(BaseSettings):
     acp_shim_port: int = 8787
     # Idle ACP sessions are torn down (sandbox deleted) after this many minutes.
     acp_session_idle_minutes: int = 60
-    # Dev/server-level agent credentials. Per-user encrypted credentials will
-    # replace these (see services/agents/registry.resolve_credentials).
+    # Encrypts per-user agent credentials (AES-256-GCM; key derived via
+    # SHA-256). Required for users to connect their own agent accounts.
+    agent_credentials_key: str = ""
+    # Dev/server-level agent credentials — fallback when a user has not
+    # connected their own (see services/agents/credentials.py).
     codex_auth_json: str = ""  # raw contents of a codex auth.json
     codex_auth_json_path: str = ""  # or a path to one on the API host
     openai_api_key_for_codex: str = ""

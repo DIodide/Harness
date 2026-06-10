@@ -179,6 +179,25 @@ export default defineSchema({
 		}),
 
 
+	// Per-user credentials for external ACP agents (Codex CLI, Claude Code).
+	// Values are AES-256-GCM ciphertext produced by the FastAPI backend —
+	// Convex and the browser never see plaintext.
+	agentCredentials: defineTable({
+		userId: v.string(),
+		agent: v.string(), // "codex" | "claude-code"
+		kind: v.union(
+			v.literal("auth_json"),
+			v.literal("api_key"),
+			v.literal("oauth_token"),
+		),
+		ciphertext: v.string(),
+		label: v.optional(v.string()),
+		createdAt: v.number(),
+		lastUsedAt: v.optional(v.number()),
+	})
+		.index("by_user", ["userId"])
+		.index("by_user_agent", ["userId", "agent"]),
+
 	mcpOAuthTokens: defineTable({
 		userId: v.string(),
 		mcpServerUrl: v.string(),

@@ -33,11 +33,8 @@ from app.services.agents.daytona_runtime import (
     provision_agent_sandbox,
     teardown_sandbox,
 )
-from app.services.agents.registry import (
-    SANDBOX_WORKSPACE,
-    get_agent,
-    resolve_credentials,
-)
+from app.services.agents.credentials import resolve_agent_credentials
+from app.services.agents.registry import SANDBOX_WORKSPACE, get_agent
 from app.services.mcp_client import UserContext
 
 logger = logging.getLogger(__name__)
@@ -208,7 +205,9 @@ class AgentSessionManager:
         user_ctx: UserContext | None,
     ) -> AgentSession:
         agent = get_agent(agent_id)  # raises KeyError for unknown agents
-        creds = resolve_credentials(agent_id, user_id)
+        creds = await resolve_agent_credentials(
+            self._http_client(), agent_id, user_id,
+        )
 
         session = AgentSession(
             id=uuid.uuid4().hex,
@@ -424,8 +423,16 @@ class AgentSessionManager:
             session.pending_replay = bool(session.transcript)
 
         if session.status == "provisioning":
-            yield {"event": "status", "data": {"state": "provisioning"}}
+            yield {
+                "event": "status",
+                "data": {"state": "provisioning", "agent": session.agent_id},
+            }
             await session.ready_event.wait()
+            if session.status != "error":
+                yield {
+                    "event": "status",
+                    "data": {"state": "ready", "agent": session.agent_id},
+                }
         if session.status == "error":
             yield {"event": "error", "data": {"message": session.error or "session failed"}}
             return

@@ -46,6 +46,34 @@ export interface AgentPermissionRequest {
 	options: AgentPermissionOption[];
 }
 
+/** One entry of an ACP agent plan (session/update "plan"). */
+export interface AgentPlanEntry {
+	content: string;
+	status: "pending" | "in_progress" | "completed";
+	priority?: "high" | "medium" | "low";
+}
+
+const AGENT_LABELS: Record<string, string> = {
+	codex: "Codex",
+	"claude-code": "Claude Code",
+};
+
+/** Friendly label for gateway status events shown in the pending indicator. */
+export function agentStatusLabel(data: {
+	state?: string;
+	agent?: string;
+}): string {
+	const agent = AGENT_LABELS[data.agent ?? ""] ?? "agent";
+	switch (data.state) {
+		case "provisioning":
+			return `Starting ${agent} sandbox… (first message takes ~30s)`;
+		case "ready":
+			return `${agent} is thinking…`;
+		default:
+			return `${agent}: ${data.state ?? "working"}…`;
+	}
+}
+
 // FastAPI HarnessConfig (snake_case) — same shape sent to /api/chat/stream.
 export type AgentHarnessConfig = Record<string, unknown> & {
 	harness_id?: string;

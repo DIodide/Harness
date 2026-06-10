@@ -4,6 +4,7 @@ import { env } from "../env";
 import {
 	type AgentMode,
 	type AgentPermissionRequest,
+	type AgentPlanEntry,
 	ensureAgentSession,
 	forgetAgentSession,
 } from "./agent-mode";
@@ -42,6 +43,10 @@ export interface ConvoStreamState {
 	pendingDoneContent: string | null;
 	usage: UsageData | null;
 	model: string | null;
+	/** ACP agent mode: friendly gateway status ("Starting Codex sandbox…"). */
+	agentStatus: string | null;
+	/** ACP agent mode: latest plan snapshot from the agent. */
+	plan: AgentPlanEntry[] | null;
 }
 
 export interface BudgetExceededInfo {
@@ -84,6 +89,13 @@ interface UseChatStreamCallbacks {
 	) => void;
 	/** ACP agent mode: a pending permission request was resolved. */
 	onPermissionResolved?: (conversationId: string, requestId: string) => void;
+	/** ACP agent mode: gateway status (provisioning, ready, ...). */
+	onAgentStatus?: (
+		conversationId: string,
+		data: { state?: string; agent?: string },
+	) => void;
+	/** ACP agent mode: agent plan snapshot. */
+	onPlan?: (conversationId: string, entries: AgentPlanEntry[]) => void;
 }
 
 export type MessageContent = string | Array<Record<string, unknown>>;
@@ -247,6 +259,12 @@ async function runAgentStream(
 			case "permission_resolved":
 				cb.onPermissionResolved?.(convoId, data.request_id as string);
 				break;
+			case "status":
+				cb.onAgentStatus?.(convoId, data as { state?: string; agent?: string });
+				break;
+			case "plan":
+				cb.onPlan?.(convoId, (data.entries ?? []) as AgentPlanEntry[]);
+				break;
 			case "done":
 				cb.onDone(
 					convoId,
@@ -258,7 +276,7 @@ async function runAgentStream(
 			case "error":
 				cb.onError(convoId, data.message as string);
 				break;
-			// "status", "plan", "commands_update", "mode_update": not yet rendered
+			// "commands_update", "mode_update": not yet rendered
 		}
 	});
 }

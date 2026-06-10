@@ -49,7 +49,9 @@ import React, {
 	useState,
 } from "react";
 import toast from "react-hot-toast";
+import { AgentConnections } from "../../components/agent-connections";
 import { AgentPermissionCard } from "../../components/agent-permission-card";
+import { AgentPlanCard } from "../../components/agent-plan-card";
 import { AttachmentChip } from "../../components/attachment-chip";
 import { useChatPaletteCommands } from "../../components/command-palette/commands/chat-commands";
 import { HarnessMark } from "../../components/harness-mark";
@@ -117,7 +119,11 @@ import { UsageDialog } from "../../components/usage-dialog";
 import { formatResetTime, UsageBadge } from "../../components/usage-display";
 import { env } from "../../env";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
-import { AGENT_MODES, type AgentMode } from "../../lib/agent-mode";
+import {
+	AGENT_MODES,
+	type AgentMode,
+	type AgentPlanEntry,
+} from "../../lib/agent-mode";
 import {
 	CHAT_INPUT_COUNTER_THRESHOLD,
 	CHAT_INPUT_MAX_LENGTH,
@@ -142,6 +148,7 @@ import {
 	useSandboxPanel,
 } from "../../lib/sandbox-panel-context";
 import type { SkillEntry } from "../../lib/skills";
+import { useAgentCatalog } from "../../lib/use-agent-catalog";
 import type {
 	BudgetExceededInfo,
 	StreamPart,
@@ -1098,6 +1105,8 @@ function ChatPage() {
 							pendingDoneContent={activeStreamState.pendingDoneContent}
 							streamUsage={activeStreamState.usage}
 							streamModel={activeStreamState.model}
+							agentStatus={activeStreamState.agentStatus}
+							streamPlan={activeStreamState.plan}
 							onStreamSynced={handleStreamSynced}
 							displayMode={
 								(userSettings?.displayMode as DisplayMode) ?? "standard"
@@ -1644,7 +1653,7 @@ function SettingsDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="sm:max-w-sm">
+			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-sm">
 				<DialogHeader>
 					<DialogTitle className="text-sm">Settings</DialogTitle>
 					<DialogDescription>Manage your preferences.</DialogDescription>
@@ -1773,6 +1782,15 @@ function SettingsDialog({
 								</SelectContent>
 							</Select>
 						</div>
+					</div>
+
+					<Separator />
+
+					<div>
+						<p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+							Agent Connections
+						</p>
+						<AgentConnections />
 					</div>
 
 					<Separator />
@@ -2220,6 +2238,8 @@ function ChatMessages({
 	pendingDoneContent,
 	streamUsage,
 	streamModel,
+	agentStatus,
+	streamPlan,
 	onStreamSynced,
 	displayMode,
 	onRegenerate,
@@ -2282,6 +2302,8 @@ function ChatMessages({
 	pendingDoneContent: string | null;
 	streamUsage: UsageData | null;
 	streamModel: string | null;
+	agentStatus: string | null;
+	streamPlan: AgentPlanEntry[] | null;
 	onStreamSynced: (convoId: string) => void;
 	displayMode: DisplayMode;
 	onRegenerate: (
@@ -2881,6 +2903,9 @@ function ChatMessages({
 							</AvatarFallback>
 						</Avatar>
 						<div className="max-w-[80%]">
+							{streamPlan && streamPlan.length > 0 && (
+								<AgentPlanCard entries={streamPlan} />
+							)}
 							<div className="text-sm leading-relaxed text-foreground">
 								{streamParts.length > 0
 									? streamParts.map((part, idx) => {
@@ -2917,7 +2942,9 @@ function ChatMessages({
 										})
 									: !streamingReasoning &&
 										activeToolCalls.length === 0 &&
-										!streamingContent && <PendingResponseIndicator />}
+										!streamingContent && (
+											<PendingResponseIndicator message={agentStatus} />
+										)}
 							</div>
 							{displayMode === "developer" && streamUsage && (
 								<div className="flex items-center gap-3 pt-1">
@@ -3334,6 +3361,12 @@ function ChatInput({
 	const pendingPermission = conversationId
 		? pendingPermissions[conversationId]
 		: undefined;
+	const { data: agentCatalog } = useAgentCatalog();
+	const agentAvailability = useMemo(() => {
+		const map = new Map<string, boolean>();
+		for (const entry of agentCatalog ?? []) map.set(entry.id, entry.available);
+		return map;
+	}, [agentCatalog]);
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
@@ -3870,25 +3903,33 @@ function ChatInput({
 								</TooltipContent>
 							</Tooltip>
 							<DropdownMenuContent align="end">
-								{AGENT_MODES.map((agentOption) => (
-									<DropdownMenuItem
-										key={agentOption.id}
-										onClick={() => setAgentMode(agentOption.id)}
-										className="flex items-center gap-2"
-									>
-										{agentOption.id === agentMode ? (
-											<Check size={12} className="shrink-0" />
-										) : (
-											<span className="w-3 shrink-0" />
-										)}
-										<div className="flex flex-col">
-											<span>{agentOption.label}</span>
-											<span className="text-[10px] text-muted-foreground">
-												{agentOption.description}
-											</span>
-										</div>
-									</DropdownMenuItem>
-								))}
+								{AGENT_MODES.map((agentOption) => {
+									const unavailable =
+										agentOption.id !== "default" &&
+										agentAvailability.get(agentOption.id) === false;
+									return (
+										<DropdownMenuItem
+											key={agentOption.id}
+											disabled={unavailable}
+											onClick={() => setAgentMode(agentOption.id)}
+											className="flex items-center gap-2"
+										>
+											{agentOption.id === agentMode ? (
+												<Check size={12} className="shrink-0" />
+											) : (
+												<span className="w-3 shrink-0" />
+											)}
+											<div className="flex flex-col">
+												<span>{agentOption.label}</span>
+												<span className="text-[10px] text-muted-foreground">
+													{unavailable
+														? "Connect in Settings → Agent Connections"
+														: agentOption.description}
+												</span>
+											</div>
+										</DropdownMenuItem>
+									);
+								})}
 							</DropdownMenuContent>
 						</DropdownMenu>
 					)}
