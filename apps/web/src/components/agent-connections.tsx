@@ -1,6 +1,7 @@
 import { Bot, Check, Loader2 } from "lucide-react";
 import { useState } from "react";
 import toast from "react-hot-toast";
+import { KIND_OPTIONS } from "../lib/agent-kind-options";
 import {
 	type AgentCatalogEntry,
 	type AgentCredentialKind,
@@ -18,45 +19,7 @@ import {
 } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 
-interface KindOption {
-	kind: AgentCredentialKind;
-	label: string;
-	hint: string;
-	multiline: boolean;
-}
-
-const KIND_OPTIONS: Record<string, KindOption[]> = {
-	codex: [
-		{
-			kind: "auth_json",
-			label: "ChatGPT login (auth.json)",
-			hint: "Run `codex login` locally, then paste the contents of ~/.codex/auth.json.",
-			multiline: true,
-		},
-		{
-			kind: "api_key",
-			label: "OpenAI API key",
-			hint: "An OpenAI API key (sk-...). Billed to your OpenAI account.",
-			multiline: false,
-		},
-	],
-	"claude-code": [
-		{
-			kind: "oauth_token",
-			label: "Claude Code OAuth token",
-			hint: "Run `claude setup-token` locally and paste the generated token.",
-			multiline: false,
-		},
-		{
-			kind: "api_key",
-			label: "Anthropic API key",
-			hint: "An Anthropic API key (sk-ant-...). Billed to your Anthropic account.",
-			multiline: false,
-		},
-	],
-};
-
-function StatusBadge({ entry }: { entry: AgentCatalogEntry }) {
+export function StatusBadge({ entry }: { entry: AgentCatalogEntry }) {
 	if (entry.source === "user") {
 		return (
 			<span className="flex items-center gap-1 text-[10px] text-green-500">
@@ -81,7 +44,7 @@ function StatusBadge({ entry }: { entry: AgentCatalogEntry }) {
 	);
 }
 
-function ConnectForm({
+export function ConnectForm({
 	entry,
 	onDone,
 }: {

@@ -38,7 +38,9 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { HarnessCreationAssistant } from "../components/harness-creation-assistant";
+import { HarnessMark } from "../components/harness-mark";
 import { OAuthConnectRow } from "../components/mcp-oauth-connect-row";
+import { AgentConnectStep } from "../components/onboarding/agent-connect-step";
 import { PresetMcpGrid } from "../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../components/princeton-connect-row";
 import { RecommendedSkillsGrid } from "../components/recommended-skills-grid";
@@ -83,6 +85,9 @@ import { SYSTEM_PROMPT_MAX_LENGTH } from "../lib/system-prompt";
 const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
 export const Route = createFileRoute("/onboarding")({
+	validateSearch: (search: Record<string, unknown>): { flow?: string } => ({
+		flow: (search.flow as string) ?? undefined,
+	}),
 	beforeLoad: ({ context }) => {
 		if (!context.userId) {
 			throw redirect({ to: "/sign-in" });
@@ -103,6 +108,13 @@ const CONNECT_STEP = { key: "connect", label: "Connect", icon: Link2 };
 function OnboardingPage() {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
+	const { flow } = Route.useSearch();
+	// First-run onboarding starts by connecting a coding agent; the harness
+	// wizard afterwards is optional ("Skip for now" creates a starter).
+	const isFirstRun = flow === "first-run";
+	const [phase, setPhase] = useState<"agents" | "harness">(
+		isFirstRun ? "agents" : "harness",
+	);
 
 	const _prefill = (() => {
 		try {
@@ -429,6 +441,18 @@ function OnboardingPage() {
 		return getDefaultSandboxSelection(sandbox);
 	};
 
+	// "Skip for now" in first-run: chat needs a harness to exist, so create
+	// a minimal starter quietly and drop the user straight into chat.
+	const submitStarter = () => {
+		createHarness.mutate({
+			name: "My Harness",
+			model: MODELS[0].value,
+			status: "started",
+			mcpServers: [],
+			skills: [],
+		});
+	};
+
 	const submitHarness = async (status: "started" | "draft") => {
 		try {
 			const defaultSandbox = await resolveDefaultSandbox();
@@ -465,21 +489,85 @@ function OnboardingPage() {
 		);
 	};
 
+	// ── First-run phase 1: bring your own coding agent ──────────────
+	if (phase === "agents") {
+		return (
+			<div className="flex min-h-screen flex-col bg-background">
+				<header className="flex items-center justify-between border-b border-border px-6 py-4">
+					<div className="flex items-center gap-2">
+						<HarnessMark size={20} className="text-foreground" />
+						<span className="text-sm font-semibold tracking-tight text-foreground">
+							Harness
+						</span>
+					</div>
+					<p className="text-xs text-muted-foreground">Step 1 of 2</p>
+				</header>
+
+				<div className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-6 py-10">
+					<motion.div
+						initial={{ opacity: 0, y: 12 }}
+						animate={{ opacity: 1, y: 0 }}
+						transition={{ duration: 0.35 }}
+					>
+						<h1 className="text-2xl font-medium tracking-tight text-foreground">
+							Welcome to Harness
+						</h1>
+						<p className="mt-2 mb-8 text-sm leading-relaxed text-muted-foreground">
+							Bring your own coding agent. Connect it once and Harness equips it
+							with your tool configurations — running in an isolated cloud
+							sandbox, billed to your own account.
+						</p>
+
+						<AgentConnectStep />
+
+						<div className="mt-8 flex items-center justify-between border-t border-border pt-6">
+							<Button
+								variant="ghost"
+								size="sm"
+								className="text-muted-foreground"
+								onClick={() => setPhase("harness")}
+							>
+								Skip for now
+							</Button>
+							<Button size="sm" onClick={() => setPhase("harness")}>
+								Continue
+								<ArrowRight size={14} />
+							</Button>
+						</div>
+					</motion.div>
+				</div>
+			</div>
+		);
+	}
+
+	// ── Harness wizard (phase 2 of first-run, or standalone create) ──
 	return (
 		<div className="flex min-h-screen flex-col bg-background">
 			<header className="flex items-center justify-between border-b border-border px-6 py-4">
 				<div className="flex items-center gap-4">
-					<Button variant="ghost" size="icon-xs" asChild>
-						<Link to="/harnesses">
+					{isFirstRun ? (
+						<Button
+							variant="ghost"
+							size="icon-xs"
+							onClick={() => setPhase("agents")}
+						>
 							<ArrowLeft size={14} />
-						</Link>
-					</Button>
+						</Button>
+					) : (
+						<Button variant="ghost" size="icon-xs" asChild>
+							<Link to="/harnesses">
+								<ArrowLeft size={14} />
+							</Link>
+						</Button>
+					)}
 					<div>
 						<h1 className="text-lg font-medium tracking-tight text-foreground">
 							Create Harness
 						</h1>
 						<p className="text-xs text-muted-foreground">
-							Configure a new AI agent harness
+							{isFirstRun
+								? "Step 2 of 2 — optional"
+								: "Configure a new AI agent harness"}
 						</p>
 					</div>
 				</div>
@@ -492,14 +580,25 @@ function OnboardingPage() {
 						<Sparkles size={14} />
 						Create with AI
 					</Button>
-					<Button
-						variant="ghost"
-						size="sm"
-						onClick={() => void submitHarness("draft")}
-						disabled={createHarness.isPending || createSandbox.isPending}
-					>
-						Save Draft
-					</Button>
+					{isFirstRun ? (
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={submitStarter}
+							disabled={createHarness.isPending || createSandbox.isPending}
+						>
+							Skip for now
+						</Button>
+					) : (
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={() => void submitHarness("draft")}
+							disabled={createHarness.isPending || createSandbox.isPending}
+						>
+							Save Draft
+						</Button>
+					)}
 				</div>
 			</header>
 
@@ -511,7 +610,9 @@ function OnboardingPage() {
 							: "Let's build your first harness"}
 					</h1>
 					<p className="mt-2 text-sm text-muted-foreground">
-						Configure the tools and capabilities your AI agent needs.
+						{isFirstRun
+							? "Optional — harnesses bundle MCP servers and skills for your agent. Skip and you can add one anytime."
+							: "Configure the tools and capabilities your AI agent needs."}
 					</p>
 				</div>
 

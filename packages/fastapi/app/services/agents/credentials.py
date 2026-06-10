@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 VALID_KINDS: dict[str, set[str]] = {
     "codex": {"auth_json", "api_key"},
     "claude-code": {"oauth_token", "api_key"},
+    "cursor": {"api_key"},
 }
 
 MAX_SECRET_LENGTH = 32_768
@@ -149,6 +150,8 @@ def _to_agent_credentials(agent_id: str, kind: str, value: str) -> AgentCredenti
         if kind == "oauth_token":
             return AgentCredentials(env={"CLAUDE_CODE_OAUTH_TOKEN": value.strip()})
         return AgentCredentials(env={"ANTHROPIC_API_KEY": value.strip()})
+    if agent_id == "cursor":
+        return AgentCredentials(env={"CURSOR_API_KEY": value.strip()})
     raise AgentCredentialsError(f"Unknown agent '{agent_id}'")
 
 

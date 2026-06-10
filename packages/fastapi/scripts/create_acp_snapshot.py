@@ -39,6 +39,10 @@ def build_image() -> Image:
             f"curl -fsSL -o /tmp/codex-acp.tgz {CODEX_ACP_URL} "
             "&& tar -xzf /tmp/codex-acp.tgz -C /usr/local/bin "
             "&& chmod +x /usr/local/bin/codex-acp && rm /tmp/codex-acp.tgz",
+            # Cursor CLI (cursor-agent) — provides `cursor-agent acp`.
+            "curl -fsS https://cursor.com/install | bash "
+            "&& ln -sf /root/.local/bin/cursor-agent /usr/local/bin/cursor-agent "
+            "&& /usr/local/bin/cursor-agent --version || true",
             "node --version && codex-acp --version || true",
         )
     )

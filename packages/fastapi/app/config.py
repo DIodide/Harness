@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # ── ACP agent gateway (external agents in Daytona sandboxes) ──
     # Daytona snapshot with node + codex-acp + claude-agent-acp preinstalled.
     # Built by packages/fastapi/scripts/create_acp_snapshot.py.
-    acp_snapshot_name: str = "harness-acp-v1"
+    acp_snapshot_name: str = "harness-acp-v2"
     acp_shim_port: int = 8787
     # Idle ACP sessions are torn down (sandbox deleted) after this many minutes.
     acp_session_idle_minutes: int = 60

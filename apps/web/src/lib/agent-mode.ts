@@ -10,7 +10,7 @@ import { env } from "../env";
 
 const FASTAPI_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 
-export type AgentMode = "default" | "codex" | "claude-code";
+export type AgentMode = "default" | "codex" | "claude-code" | "cursor";
 
 export const AGENT_MODES: Array<{
 	id: AgentMode;
@@ -31,6 +31,11 @@ export const AGENT_MODES: Array<{
 		id: "claude-code",
 		label: "Claude Code",
 		description: "Anthropic Claude Code via ACP (your account)",
+	},
+	{
+		id: "cursor",
+		label: "Cursor",
+		description: "Cursor CLI via ACP (your account)",
 	},
 ];
 
@@ -54,6 +59,7 @@ export interface AgentPlanEntry {
 }
 
 const AGENT_LABELS: Record<string, string> = {
+	cursor: "Cursor",
 	codex: "Codex",
 	"claude-code": "Claude Code",
 };

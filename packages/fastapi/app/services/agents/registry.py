@@ -64,6 +64,14 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
         command=["claude-agent-acp"],
         env={},
     ),
+    "cursor": AgentDefinition(
+        id="cursor",
+        name="Cursor",
+        # Installed by the snapshot via cursor.com/install; `acp` speaks
+        # ACP over stdio (same adapter Zed/T3 use).
+        command=["/usr/local/bin/cursor-agent", "acp"],
+        env={},
+    ),
 }
 
 

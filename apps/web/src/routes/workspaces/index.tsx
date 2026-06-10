@@ -482,7 +482,7 @@ function ChatPage() {
 	const { isAuthenticated: convexAuthReady } = useConvexAuth();
 	useEffect(() => {
 		if (convexAuthReady && harnesses && harnesses.length === 0) {
-			navigate({ to: "/onboarding" });
+			navigate({ to: "/onboarding", search: { flow: "first-run" } });
 		}
 	}, [convexAuthReady, harnesses, navigate]);
 
