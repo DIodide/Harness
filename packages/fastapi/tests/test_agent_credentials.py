@@ -118,3 +118,178 @@ class TestValidateSecret:
         assert "too large" in validate_secret(
             "claude-code", "api_key", "x" * 40_000
         )
+
+
+class _FakeConvex:
+    """Patchable stand-ins for the Convex query/mutation helpers."""
+
+    def __init__(self, rows=None):
+        self.rows = rows or {}
+        self.mutations: list[tuple[str, dict]] = []
+
+    async def query(self, _http, path, args):
+        if path == "agentCredentials:getById":
+            row = self.rows.get(args["credentialId"])
+            if row and row.get("_userId") == args["userId"]:
+                return {k: v for k, v in row.items() if not k.startswith("_")}
+            return None
+        if path == "agentCredentials:getForAgent":
+            for cid, row in self.rows.items():
+                if row.get("_userId") == args["userId"] and row["agent"] == args["agent"]:
+                    return {"credentialId": cid, **{k: v for k, v in row.items() if not k.startswith("_")}}
+            return None
+        if path == "agentCredentials:listForUser":
+            return [
+                {"credentialId": cid, "agent": r["agent"], "kind": r["kind"],
+                 "label": r.get("label"), "createdAt": r.get("createdAt", 0)}
+                for cid, r in self.rows.items() if r.get("_userId") == args["userId"]
+            ]
+        return None
+
+    async def mutate(self, _http, path, args):
+        self.mutations.append((path, args))
+        return "new-credential-id"
+
+
+@pytest.fixture()
+def fake_convex(monkeypatch):
+    from app.services.agents import credentials as mod
+
+    fake = _FakeConvex()
+    monkeypatch.setattr(mod, "query_convex", fake.query)
+    monkeypatch.setattr(mod, "run_convex_mutation", fake.mutate)
+    return fake
+
+
+class TestResolveAgentCredentials:
+    async def test_resolves_by_credential_id(self, fake_convex):
+        from app.services.agents.credentials import (
+            encrypt_secret,
+            resolve_agent_credentials,
+        )
+
+        fake_convex.rows["cred-1"] = {
+            "_userId": "u1", "agent": "claude-code", "kind": "oauth_token",
+            "ciphertext": encrypt_secret("tok-123"),
+        }
+        creds = await resolve_agent_credentials(None, "claude-code", "u1", "cred-1")
+        assert creds.env == {"CLAUDE_CODE_OAUTH_TOKEN": "tok-123"}
+        # lastUsedAt touch targeted the exact credential
+        assert ("agentCredentials:touch", {"credentialId": "cred-1"}) in fake_convex.mutations
+
+    async def test_rejects_other_users_credential(self, fake_convex):
+        from app.services.agents.credentials import (
+            AgentCredentialsError,
+            encrypt_secret,
+            resolve_agent_credentials,
+        )
+
+        fake_convex.rows["cred-1"] = {
+            "_userId": "owner", "agent": "claude-code", "kind": "oauth_token",
+            "ciphertext": encrypt_secret("tok"),
+        }
+        with pytest.raises(AgentCredentialsError, match="No credential"):
+            await resolve_agent_credentials(None, "claude-code", "intruder", "cred-1")
+
+    async def test_rejects_agent_mismatch(self, fake_convex):
+        from app.services.agents.credentials import (
+            AgentCredentialsError,
+            encrypt_secret,
+            resolve_agent_credentials,
+        )
+
+        fake_convex.rows["cred-1"] = {
+            "_userId": "u1", "agent": "codex", "kind": "api_key",
+            "ciphertext": encrypt_secret("sk"),
+        }
+        with pytest.raises(AgentCredentialsError, match="belongs to 'codex'"):
+            await resolve_agent_credentials(None, "claude-code", "u1", "cred-1")
+
+    async def test_falls_back_to_newest_for_agent(self, fake_convex):
+        from app.services.agents.credentials import (
+            encrypt_secret,
+            resolve_agent_credentials,
+        )
+
+        fake_convex.rows["cred-9"] = {
+            "_userId": "u1", "agent": "cursor", "kind": "api_key",
+            "ciphertext": encrypt_secret("key_abc"),
+        }
+        creds = await resolve_agent_credentials(None, "cursor", "u1", None)
+        assert creds.env == {"CURSOR_API_KEY": "key_abc"}
+
+    async def test_unreadable_ciphertext_raises(self, fake_convex):
+        from app.services.agents.credentials import (
+            AgentCredentialsError,
+            resolve_agent_credentials,
+        )
+
+        fake_convex.rows["cred-1"] = {
+            "_userId": "u1", "agent": "claude-code", "kind": "oauth_token",
+            "ciphertext": "not-valid-ciphertext",
+        }
+        with pytest.raises(AgentCredentialsError, match="could not be decrypted"):
+            await resolve_agent_credentials(None, "claude-code", "u1", "cred-1")
+
+
+class TestStoreUserCredential:
+    async def test_creates_new_credential(self, fake_convex):
+        from app.services.agents.credentials import store_user_credential
+
+        plaintext = "THE-PLAINTEXT-SECRET-MARKER"
+        cid = await store_user_credential(
+            None, "u1", "claude-code", "oauth_token", plaintext, label="work",
+        )
+        assert cid == "new-credential-id"
+        path, args = fake_convex.mutations[0]
+        assert path == "agentCredentials:create"
+        assert args["label"] == "work"
+        assert plaintext not in str(args)  # only ciphertext leaves the process
+
+    async def test_replaces_in_place_with_credential_id(self, fake_convex):
+        from app.services.agents.credentials import store_user_credential
+
+        await store_user_credential(
+            None, "u1", "codex", "api_key", "sk-x", credential_id="cred-7",
+        )
+        path, args = fake_convex.mutations[0]
+        assert path == "agentCredentials:updateSecret"
+        assert args["credentialId"] == "cred-7"
+
+
+class TestCredentialSources:
+    async def test_groups_per_agent_newest_first(self, fake_convex):
+        from app.services.agents.credentials import credential_sources
+
+        fake_convex.rows["old"] = {
+            "_userId": "u1", "agent": "codex", "kind": "api_key",
+            "ciphertext": "x", "createdAt": 1,
+        }
+        fake_convex.rows["new"] = {
+            "_userId": "u1", "agent": "codex", "kind": "auth_json",
+            "ciphertext": "y", "createdAt": 2, "label": "personal",
+        }
+        sources = await credential_sources(None, "u1")
+        codex = sources["codex"]
+        assert codex["available"] is True
+        assert [c["credential_id"] for c in codex["credentials"]] == ["new", "old"]
+        assert codex["kind"] == "auth_json"  # newest summarized
+        assert sources["claude-code"]["available"] is False
+        assert sources["claude-code"]["credentials"] == []
+
+
+class TestRegistry:
+    def test_unknown_agent_raises(self):
+        from app.services.agents.registry import get_agent
+
+        with pytest.raises(KeyError):
+            get_agent("not-an-agent")
+
+    def test_known_agents_have_models(self):
+        from app.services.agents.registry import AGENT_REGISTRY, get_agent
+
+        for agent_id in ("codex", "claude-code", "cursor"):
+            agent = get_agent(agent_id)
+            assert agent.id == agent_id
+            assert len(agent.models) > 0
+        assert set(AGENT_REGISTRY) == {"codex", "claude-code", "cursor"}

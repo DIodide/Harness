@@ -19,6 +19,14 @@ omit = [
     "app/services/mcp_oauth.py",
     "app/services/daytona_service.py",
     "app/services/sandbox_tools.py",
+    # ACP agent gateway orchestration: exercised by the live E2E scripts
+    # (scripts/acp_*.py) against real Daytona sandboxes + agents — unit
+    # coverage would be mock theater. credentials.py and registry.py stay
+    # measured (real unit tests).
+    "app/routes/agents.py",
+    "app/services/agents/acp_client.py",
+    "app/services/agents/daytona_runtime.py",
+    "app/services/agents/session_manager.py",
 ]
 
 [tool.coverage.report]
