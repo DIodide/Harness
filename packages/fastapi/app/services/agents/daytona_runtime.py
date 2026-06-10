@@ -144,15 +144,31 @@ def _build_launcher(agent: AgentDefinition, shim_token: str) -> str:
         "NODE_OPTIONS": "--dns-result-order=ipv4first",
         **agent.env,
     }
+    shim_file = _shim_remote_path(agent)
+    shim_name = shim_file.rsplit("/", 1)[-1]
+    pidfile = f"/tmp/acp-shim-{agent.id}.pid"
     lines = ["#!/bin/bash", "set -e"]
-    # Replace any stale shim for this agent (reattach after gateway restart).
-    lines.append(f"pkill -f {shlex.quote(_shim_remote_path(agent))} 2>/dev/null || true")
+    # Replace any stale shim for this agent: the sandbox survives gateway
+    # restarts with the old shim still bound to the port, and a port clash
+    # means the NEW shim dies (EADDRINUSE) while the OLD one keeps answering
+    # healthz with the old token → endless 401s. procps (pkill/ps) is NOT
+    # in the slim images, so kill via the pid file plus a pure-/proc scan.
+    lines.append(f'[ -f {pidfile} ] && kill "$(cat {pidfile})" 2>/dev/null || true')
+    lines.append(
+        "for d in /proc/[0-9]*; do "
+        f'grep -q {shlex.quote(shim_name)} "$d/cmdline" 2>/dev/null '
+        '&& kill "${d#/proc/}" 2>/dev/null || true; '
+        "done"
+    )
+    # Give the kernel a beat to release the listen socket.
+    lines.append("sleep 0.3")
     lines += [f"export {key}={shlex.quote(value)}" for key, value in env.items()]
     # `exec env -i`-free: the shell already holds the secret env vars passed
     # to process.exec; nohup'd node inherits them without them appearing here.
     lines.append(
-        f"nohup node {_shim_remote_path(agent)} > /tmp/acp-shim-{agent.id}.log 2>&1 &"
+        f"nohup node {shim_file} > /tmp/acp-shim-{agent.id}.log 2>&1 &"
     )
+    lines.append(f"echo $! > {pidfile}")
     lines.append("echo started")
     return "\n".join(lines) + "\n"
 
