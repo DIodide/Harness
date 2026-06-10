@@ -70,6 +70,11 @@ class AgentSession:
     # Agent-advertised slash commands (available_commands_update). Invoked by
     # sending "/name args" as plain prompt text; surfaced in the slash menu.
     available_commands: list[dict] = field(default_factory=list)
+    # session/update notifications that arrived before acp_session_id was
+    # assigned (they race the session/new response); replayed afterwards.
+    early_notifications: list[dict] = field(default_factory=list)
+    # Pending AskUserQuestion / MCP elicitations (elicitation/create).
+    pending_questions: dict[str, asyncio.Future] = field(default_factory=dict)
     # Harness-side transcript for context replay across harness switches.
     transcript: list[dict] = field(default_factory=list)
     pending_replay: bool = False
@@ -240,6 +245,49 @@ def normalize_session_update(update: dict) -> dict | None:
         return {"event": "mode_update", "data": {"mode_id": update.get("currentModeId")}}
     # user_message_chunk and unknown kinds: nothing to surface.
     return None
+
+
+def parse_elicitation_fields(requested_schema: dict) -> list[dict]:
+    """Flatten an ACP form-elicitation JSON schema into UI-friendly fields.
+
+    claude-agent-acp encodes AskUserQuestion as one property per question
+    (string+oneOf for single-select, array+items.anyOf for multi-select)
+    plus an optional free-text "customAnswer" property. Generic MCP
+    elicitations may also use plain string/number/boolean properties.
+    """
+    fields: list[dict] = []
+    for key, prop in (requested_schema.get("properties") or {}).items():
+        if not isinstance(prop, dict):
+            continue
+        base = {
+            "key": key,
+            "title": prop.get("title"),
+            "description": prop.get("description"),
+        }
+        one_of = prop.get("oneOf")
+        any_of = (prop.get("items") or {}).get("anyOf") if prop.get("type") == "array" else None
+        choices = one_of if isinstance(one_of, list) else any_of
+        if isinstance(choices, list) and choices:
+            fields.append(
+                {
+                    **base,
+                    "kind": "multiselect" if any_of else "select",
+                    "options": [
+                        {
+                            "value": c.get("const"),
+                            "label": c.get("title") or str(c.get("const")),
+                        }
+                        for c in choices
+                        if isinstance(c, dict) and c.get("const") is not None
+                    ],
+                }
+            )
+        elif prop.get("type") == "boolean":
+            fields.append({**base, "kind": "boolean"})
+        else:
+            # Plain string/number inputs (incl. the customAnswer free-text).
+            fields.append({**base, "kind": "text"})
+    return fields
 
 
 def _build_replay_preamble(transcript: list[dict]) -> str:
@@ -476,6 +524,14 @@ class AgentSessionManager:
         )
         session.acp_session_id = result["sessionId"]
         session.config_options = result.get("configOptions") or []
+        # Replay notifications that raced the session/new response: Claude
+        # Code sends available_commands_update on a setTimeout(0) right after
+        # responding, which lands before acp_session_id is assigned above and
+        # would otherwise be dropped by the id filter.
+        early, session.early_notifications = session.early_notifications, []
+        for params in early:
+            if params.get("sessionId") == session.acp_session_id:
+                await self._process_session_update(session, params)
         await self._apply_harness_model(session)
 
     async def _apply_harness_model(self, session: AgentSession) -> None:
@@ -573,23 +629,32 @@ class AgentSessionManager:
 
     # ── Incoming agent traffic ─────────────────────────────
 
+    async def _process_session_update(self, session: AgentSession, params: dict) -> None:
+        update = params.get("update") or {}
+        # Keep session-level state fresh even between turns (the event
+        # queue is only drained while a prompt streams — the initial
+        # available_commands_update would otherwise be lost as stale).
+        if update.get("sessionUpdate") == "config_option_update":
+            session.config_options = update.get("configOptions") or []
+        elif update.get("sessionUpdate") == "available_commands_update":
+            session.available_commands = update.get("availableCommands") or []
+        event = normalize_session_update(update)
+        if event is not None:
+            await session.event_queue.put(event)
+
     def _make_notification_handler(self, session: AgentSession):
         async def handle(method: str, params: dict) -> None:
             if method != "session/update":
                 return
             if params.get("sessionId") != session.acp_session_id:
+                # Likely a notification racing the session/new (or
+                # switch-harness) response — the agent already knows the new
+                # session id while ours is still unassigned. Hold it for
+                # replay in _open_acp_session instead of dropping it.
+                if len(session.early_notifications) < 50:
+                    session.early_notifications.append(params)
                 return
-            update = params.get("update") or {}
-            # Keep session-level state fresh even between turns (the event
-            # queue is only drained while a prompt streams — the initial
-            # available_commands_update would otherwise be lost as stale).
-            if update.get("sessionUpdate") == "config_option_update":
-                session.config_options = update.get("configOptions") or []
-            elif update.get("sessionUpdate") == "available_commands_update":
-                session.available_commands = update.get("availableCommands") or []
-            event = normalize_session_update(update)
-            if event is not None:
-                await session.event_queue.put(event)
+            await self._process_session_update(session, params)
 
         return handle
 
@@ -597,6 +662,8 @@ class AgentSessionManager:
         async def handle(method: str, params: dict) -> dict:
             if method == "session/request_permission":
                 return await self._handle_permission(session, params)
+            if method == "elicitation/create":
+                return await self._handle_elicitation(session, params)
             # fs/* and terminal/* are not advertised in clientCapabilities;
             # reject anything unexpected.
             raise AcpError(-32601, f"Client does not support {method}")
@@ -651,6 +718,76 @@ class AgentSessionManager:
                     "request_id": request_id,
                     "outcome": "cancelled" if cancelled else option_id,
                 },
+            }
+        )
+
+    # ── Questions (ACP form elicitation / AskUserQuestion) ─
+
+    QUESTION_TIMEOUT_SECONDS = 600.0
+
+    async def _handle_elicitation(self, session: AgentSession, params: dict) -> dict:
+        """elicitation/create: the agent is asking the user a question.
+
+        Claude Code's AskUserQuestion arrives here as a form elicitation;
+        MCP servers can also elicit input. Surfaced to the UI as a
+        question_request event; the answer resolves this request.
+        """
+        if params.get("mode") != "form":
+            raise AcpError(-32602, "Only form elicitations are supported")
+        request_id = uuid.uuid4().hex
+        fields = parse_elicitation_fields(params.get("requestedSchema") or {})
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        session.pending_questions[request_id] = future
+        await session.event_queue.put(
+            {
+                "event": "question_request",
+                "data": {
+                    "request_id": request_id,
+                    "message": params.get("message") or "",
+                    "tool_call_id": params.get("toolCallId"),
+                    "fields": fields,
+                },
+            }
+        )
+        try:
+            return await asyncio.wait_for(
+                future, timeout=self.QUESTION_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            await session.event_queue.put(
+                {
+                    "event": "question_resolved",
+                    "data": {"request_id": request_id, "action": "decline"},
+                }
+            )
+            # Decline = "user skipped" (the turn continues); cancel would
+            # abort the whole tool call.
+            return {"action": "decline"}
+        finally:
+            session.pending_questions.pop(request_id, None)
+
+    async def answer_question(
+        self, session_id: str, user_id: str, request_id: str,
+        action: str, content: dict | None,
+    ) -> None:
+        session = self.get(session_id, user_id)
+        future = session.pending_questions.get(request_id)
+        if future is None or future.done():
+            raise KeyError(request_id)
+        result: dict = {"action": action}
+        if action == "accept":
+            clean: dict = {}
+            for key, value in (content or {}).items():
+                if isinstance(value, str | int | float | bool):
+                    clean[key] = value
+                elif isinstance(value, list):
+                    clean[key] = [str(v) for v in value]
+            result["content"] = clean
+        future.set_result(result)
+        await session.event_queue.put(
+            {
+                "event": "question_resolved",
+                "data": {"request_id": request_id, "action": action},
             }
         )
 

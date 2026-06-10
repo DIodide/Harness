@@ -51,6 +51,50 @@ export interface AgentPermissionRequest {
 	options: AgentPermissionOption[];
 }
 
+/** One field of an agent question (ACP form elicitation / AskUserQuestion). */
+export interface AgentQuestionField {
+	key: string;
+	kind: "select" | "multiselect" | "text" | "boolean";
+	title?: string | null;
+	description?: string | null;
+	options?: Array<{ value: string; label: string }>;
+}
+
+export interface AgentQuestionRequest {
+	request_id: string;
+	message: string;
+	tool_call_id?: string | null;
+	fields: AgentQuestionField[];
+}
+
+/** accept = answers submitted; decline = skipped (turn continues);
+ *  cancel = abort the asking tool call. */
+export type AgentQuestionAction = "accept" | "decline" | "cancel";
+
+export async function answerAgentQuestion(
+	token: string | null,
+	sessionId: string,
+	requestId: string,
+	action: AgentQuestionAction,
+	content?: Record<string, string | string[] | boolean>,
+): Promise<void> {
+	const response = await api(token, `/sessions/${sessionId}/question`, {
+		method: "POST",
+		body: JSON.stringify({
+			request_id: requestId,
+			action,
+			...(content ? { content } : {}),
+		}),
+	});
+	if (!response.ok) {
+		throw new Error(
+			response.status === 404
+				? "This question is no longer pending (the agent session may have restarted)."
+				: `Failed to send answer (HTTP ${response.status})`,
+		);
+	}
+}
+
 /** One entry of an ACP agent plan (session/update "plan"). */
 export interface AgentPlanEntry {
 	content: string;

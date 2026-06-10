@@ -1,14 +1,16 @@
-import { ShieldQuestion } from "lucide-react";
+import { ClipboardCheck, ShieldQuestion } from "lucide-react";
 import { useState } from "react";
 import type { AgentPermissionRequest } from "../lib/agent-mode";
 import { extractCommand, kindIcon } from "./agent-tool-call";
+import { MarkdownMessage } from "./markdown-message";
 import { Button } from "./ui/button";
 
 /**
  * Blocking approval card shown while an ACP agent waits on
  * session/request_permission. Rendered first-class by tool kind — shell
- * commands as a terminal line, file edits by path — with the raw input
- * behind a toggle. Options come straight from the agent.
+ * commands as a terminal line, file edits by path, and plan-mode exits
+ * (ExitPlanMode: rawInput.plan) as a full markdown plan review — with the
+ * raw input behind a toggle. Options come straight from the agent.
  */
 
 const KIND_VERBS: Record<string, string> = {
@@ -55,6 +57,45 @@ export function AgentPermissionCard({
 	const rawInput = toolCall.rawInput
 		? JSON.stringify(toolCall.rawInput, null, 2)
 		: null;
+	// ExitPlanMode: the input carries the full plan — this is a plan review,
+	// not a tool approval. Render the document, not a JSON blob.
+	const plan =
+		typeof toolCall.rawInput?.plan === "string" ? toolCall.rawInput.plan : null;
+
+	if (plan !== null) {
+		return (
+			<div className="mb-2 min-w-0 rounded-lg border border-border bg-muted/30 p-3">
+				<div className="flex items-center gap-2 text-xs font-medium text-foreground">
+					<ClipboardCheck size={14} className="shrink-0" />
+					<span>Plan ready for review</span>
+				</div>
+				<div className="mt-2 max-h-80 min-w-0 overflow-y-auto rounded-md border border-border bg-background px-3 py-2 text-sm">
+					<MarkdownMessage content={plan} />
+				</div>
+				<div className="mt-2 flex flex-wrap gap-2">
+					{request.options.map((option) => (
+						<Button
+							key={option.optionId}
+							size="sm"
+							variant={option.kind?.startsWith("allow") ? "default" : "outline"}
+							className="h-7 text-xs"
+							onClick={() => onAnswer(option.optionId)}
+						>
+							{option.name}
+						</Button>
+					))}
+					<Button
+						size="sm"
+						variant="ghost"
+						className="h-7 text-xs text-muted-foreground"
+						onClick={() => onAnswer(null)}
+					>
+						Dismiss
+					</Button>
+				</div>
+			</div>
+		);
+	}
 
 	return (
 		<div className="mb-2 min-w-0 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">

@@ -5,6 +5,7 @@ import {
 	type AgentMode,
 	type AgentPermissionRequest,
 	type AgentPlanEntry,
+	type AgentQuestionRequest,
 	ensureAgentSession,
 	forgetAgentSession,
 } from "./agent-mode";
@@ -137,6 +138,14 @@ interface UseChatStreamCallbacks {
 	onAgentUsage?: (conversationId: string, usage: AgentUsage) => void;
 	/** ACP agent mode: session config/commands/mode changed server-side. */
 	onAgentSessionChanged?: (conversationId: string) => void;
+	/** ACP agent mode: the agent asked the user a structured question. */
+	onQuestionRequest?: (
+		conversationId: string,
+		sessionId: string,
+		request: AgentQuestionRequest,
+	) => void;
+	/** ACP agent mode: a pending question was answered or timed out. */
+	onQuestionResolved?: (conversationId: string, requestId: string) => void;
 }
 
 export type MessageContent = string | Array<Record<string, unknown>>;
@@ -345,6 +354,16 @@ async function runAgentStream(
 				break;
 			case "permission_resolved":
 				cb.onPermissionResolved?.(convoId, data.request_id as string);
+				break;
+			case "question_request":
+				cb.onQuestionRequest?.(
+					convoId,
+					sessionId,
+					data as unknown as AgentQuestionRequest,
+				);
+				break;
+			case "question_resolved":
+				cb.onQuestionResolved?.(convoId, data.request_id as string);
 				break;
 			case "status":
 				cb.onAgentStatus?.(convoId, data as { state?: string; agent?: string });

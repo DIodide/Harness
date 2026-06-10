@@ -20,6 +20,7 @@ from app.models import (
     AgentCredentialStoreRequest,
     AgentPermissionAnswer,
     AgentPromptRequest,
+    AgentQuestionAnswer,
     AgentQueuePromptRequest,
     AgentSessionCreateRequest,
     AgentSwitchHarnessRequest,
@@ -401,6 +402,22 @@ async def answer_permission(
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="No such pending permission request")
+    return {"ok": True}
+
+
+@router.post("/sessions/{session_id}/question")
+async def answer_question(
+    session_id: str,
+    body: AgentQuestionAnswer,
+    user: dict = Depends(get_current_user),
+):
+    """Answer an agent question (AskUserQuestion / MCP form elicitation)."""
+    try:
+        await get_session_manager().answer_question(
+            session_id, user["sub"], body.request_id, body.action, body.content,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No such pending question")
     return {"ok": True}
 
 

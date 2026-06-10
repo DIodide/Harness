@@ -1,6 +1,7 @@
 import {
 	Brain,
 	ChevronRight,
+	ClipboardCheck,
 	FileDiff,
 	FileText,
 	Globe,
@@ -11,6 +12,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
+import { MarkdownMessage } from "./markdown-message";
 import { RoseCurveSpinner } from "./rose-curve-spinner";
 
 /**
@@ -82,6 +84,8 @@ export function kindIcon(kind: string, className: string) {
 			return <Globe size={10} className={className} />;
 		case "think":
 			return <Brain size={10} className={className} />;
+		case "switch_mode":
+			return <ClipboardCheck size={10} className={className} />;
 		default:
 			return <Wrench size={10} className={className} />;
 	}
@@ -191,6 +195,9 @@ export function AgentToolCallBlock({
 	const [showRaw, setShowRaw] = useState(false);
 	const summary = summaryText(kind, title, args, locations);
 	const output = result ? stripFences(result) : "";
+	// ExitPlanMode-style calls carry the plan document as input — render it
+	// as markdown, not a JSON/mono blob.
+	const plan = typeof args.plan === "string" ? args.plan : null;
 
 	return (
 		<div className="mb-1.5">
@@ -225,7 +232,11 @@ export function AgentToolCallBlock({
 						className="overflow-hidden"
 					>
 						<div className="mt-1.5 ml-4 min-w-0 space-y-2">
-							{kind === "execute" ? (
+							{plan !== null ? (
+								<div className="max-h-80 min-w-0 overflow-y-auto rounded-md border border-border bg-background px-3 py-2 text-sm">
+									<MarkdownMessage content={plan} />
+								</div>
+							) : kind === "execute" ? (
 								<TerminalView
 									command={summary}
 									output={output}

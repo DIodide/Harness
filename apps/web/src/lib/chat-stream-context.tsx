@@ -14,8 +14,11 @@ import {
 import toast from "react-hot-toast";
 import {
 	type AgentPermissionRequest,
+	type AgentQuestionAction,
+	type AgentQuestionRequest,
 	agentStatusLabel,
 	answerAgentPermission,
+	answerAgentQuestion,
 } from "./agent-mode";
 import {
 	type BudgetExceededInfo,
@@ -65,6 +68,11 @@ export interface PendingAgentPermission {
 	request: AgentPermissionRequest;
 }
 
+export interface PendingAgentQuestion {
+	sessionId: string;
+	request: AgentQuestionRequest;
+}
+
 interface ChatStreamContextValue {
 	streamStates: Record<string, ConvoStreamState>;
 	streamStatesRef: React.MutableRefObject<Record<string, ConvoStreamState>>;
@@ -81,6 +89,13 @@ interface ChatStreamContextValue {
 	answerPermission: (
 		conversationId: string,
 		optionId: string | null,
+	) => Promise<void>;
+	/** ACP agent mode: pending agent question (AskUserQuestion) per convo. */
+	pendingQuestions: Record<string, PendingAgentQuestion>;
+	answerQuestion: (
+		conversationId: string,
+		action: AgentQuestionAction,
+		content?: Record<string, string | string[] | boolean>,
 	) => Promise<void>;
 }
 
@@ -106,6 +121,9 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 	const queryClient = useQueryClient();
 	const [pendingPermissions, setPendingPermissions] = useState<
 		Record<string, PendingAgentPermission>
+	>({});
+	const [pendingQuestions, setPendingQuestions] = useState<
+		Record<string, PendingAgentQuestion>
 	>({});
 
 	const dispatchSideEffect = useCallback(
@@ -314,6 +332,20 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 				},
 			}));
 		},
+		onQuestionRequest: (convoId, sessionId, request) => {
+			setPendingQuestions((prev) => ({
+				...prev,
+				[convoId]: { sessionId, request },
+			}));
+		},
+		onQuestionResolved: (convoId, requestId) => {
+			setPendingQuestions((prev) => {
+				if (prev[convoId]?.request.request_id !== requestId) return prev;
+				const next = { ...prev };
+				delete next[convoId];
+				return next;
+			});
+		},
 		onAgentSessionChanged: (convoId) => {
 			// The agent changed its own session state (mode flip from an
 			// "always allow" approval, plan-mode exit, new slash commands).
@@ -323,6 +355,37 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 			});
 		},
 	});
+
+	const answerQuestion = useCallback(
+		async (
+			conversationId: string,
+			action: AgentQuestionAction,
+			content?: Record<string, string | string[] | boolean>,
+		) => {
+			const pending = pendingQuestions[conversationId];
+			if (!pending) return;
+			setPendingQuestions((prev) => {
+				const next = { ...prev };
+				delete next[conversationId];
+				return next;
+			});
+			try {
+				const token = await getToken({ template: "convex" });
+				await answerAgentQuestion(
+					token,
+					pending.sessionId,
+					pending.request.request_id,
+					action,
+					content,
+				);
+			} catch (err) {
+				toast.error(
+					err instanceof Error ? err.message : "Failed to send answer",
+				);
+			}
+		},
+		[pendingQuestions, getToken],
+	);
 
 	const answerPermission = useCallback(
 		async (conversationId: string, optionId: string | null) => {
@@ -382,6 +445,8 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 			setStreamState,
 			pendingPermissions,
 			answerPermission,
+			pendingQuestions,
+			answerQuestion,
 		}),
 		[
 			streamStates,
@@ -392,6 +457,8 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 			setStreamState,
 			pendingPermissions,
 			answerPermission,
+			pendingQuestions,
+			answerQuestion,
 		],
 	);
 

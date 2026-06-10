@@ -57,6 +57,7 @@ import { useAgentCatalog } from "../../lib/use-agent-catalog";
 import { useAgentSessionConfig } from "../../lib/use-agent-session-config";
 import { cn } from "../../lib/utils";
 import { AgentPermissionCard } from "../agent-permission-card";
+import { AgentQuestionCard } from "../agent-question-card";
 import { AttachmentChip } from "../attachment-chip";
 import {
 	type SlashCommand,
@@ -242,9 +243,17 @@ export function ChatInput({
 		}
 	};
 	const { getToken } = useAuth();
-	const { pendingPermissions, answerPermission } = useChatStreamContext();
+	const {
+		pendingPermissions,
+		answerPermission,
+		pendingQuestions,
+		answerQuestion,
+	} = useChatStreamContext();
 	const pendingPermission = conversationId
 		? pendingPermissions[conversationId]
+		: undefined;
+	const pendingQuestion = conversationId
+		? pendingQuestions[conversationId]
 		: undefined;
 	const { data: agentCatalog } = useAgentCatalog();
 	const agentAvailability = useMemo(() => {
@@ -709,6 +718,15 @@ export function ChatInput({
 			/>
 
 			<div className="mx-auto max-w-xl">
+				{/* ACP agent question (AskUserQuestion) — blocks until answered */}
+				{pendingQuestion && conversationId && (
+					<AgentQuestionCard
+						request={pendingQuestion.request}
+						onAnswer={(action, content) =>
+							answerQuestion(conversationId, action, content)
+						}
+					/>
+				)}
 				{/* ACP agent approval — blocks the turn until answered */}
 				{pendingPermission && conversationId && (
 					<AgentPermissionCard

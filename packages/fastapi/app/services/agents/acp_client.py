@@ -301,6 +301,10 @@ class AcpConnection:
                     # Harness does not proxy fs/terminal back through itself.
                     "fs": {"readTextFile": False, "writeTextFile": False},
                     "terminal": False,
+                    # Form elicitation (unstable): lets Claude Code surface
+                    # AskUserQuestion as a structured question instead of a
+                    # generic permission prompt.
+                    "elicitation": {"form": {}},
                 },
                 "clientInfo": {"name": client_name, "version": "0.1.0"},
             },

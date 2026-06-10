@@ -136,6 +136,18 @@ class AgentPermissionAnswer(BaseModel):
     cancelled: bool = False
 
 
+class AgentQuestionAnswer(BaseModel):
+    """Answer to an agent question (ACP form elicitation / AskUserQuestion).
+
+    accept carries the per-field answers; decline means "skipped" (the turn
+    continues); cancel aborts the asking tool call.
+    """
+
+    request_id: str
+    action: Literal["accept", "decline", "cancel"]
+    content: dict | None = None
+
+
 class AgentSwitchHarnessRequest(BaseModel):
     harness: HarnessConfig
 
