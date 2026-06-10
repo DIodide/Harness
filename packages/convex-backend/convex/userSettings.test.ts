@@ -22,6 +22,7 @@ describe("userSettings.get", () => {
 			autoSwitchHarness: true,
 			displayMode: "standard",
 			modelSelectorMode: "session",
+			chatConfigScope: "harness",
 			workspacesMode: "workspaces",
 		});
 	});
@@ -46,6 +47,7 @@ describe("userSettings.get", () => {
 			autoSwitchHarness: false,
 			displayMode: "developer",
 			modelSelectorMode: "harness",
+			chatConfigScope: "harness",
 			workspacesMode: "workspaces",
 		});
 	});

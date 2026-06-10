@@ -53,6 +53,8 @@ export const create = mutation({
 		mcpServers: v.array(mcpServerValidator),
 		skills: v.array(v.object({ name: v.string(), description: v.string() })),
 		systemPrompt: v.optional(v.string()),
+		agent: v.optional(v.string()),
+		agentCredentialId: v.optional(v.id("agentCredentials")),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxConfig: v.optional(
 			v.object({
@@ -98,6 +100,8 @@ export const update = mutation({
 		skills: v.optional(v.array(v.object({ name: v.string(), description: v.string() }))),
 		systemPrompt: v.optional(v.string()),
 		suggestedPrompts: v.optional(v.array(v.string())),
+		agent: v.optional(v.string()),
+		agentCredentialId: v.optional(v.id("agentCredentials")),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxId: v.optional(v.id("sandboxes")),
 		daytonaSandboxId: v.optional(v.string()),

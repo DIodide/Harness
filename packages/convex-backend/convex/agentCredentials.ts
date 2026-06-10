@@ -1,13 +1,21 @@
 import { v } from "convex/values";
-import { internalMutation, internalQuery, query } from "./_generated/server";
+import {
+	internalMutation,
+	internalQuery,
+	mutation,
+	query,
+} from "./_generated/server";
 
 /**
- * Per-user credentials for external ACP agents (Codex CLI, Claude Code).
+ * Per-user credentials for external ACP agents (Codex CLI, Claude Code,
+ * Cursor). A user may hold MULTIPLE credentials per agent (e.g. a work and
+ * a personal Claude account); each harness references one by id. Values are
+ * AES-256-GCM ciphertext produced by the FastAPI backend — Convex and the
+ * browser never see plaintext.
  *
  * Write path: browser → FastAPI (Clerk JWT) → AES-256-GCM encrypt →
- * internal mutation here via deploy key. The browser only ever reads
- * metadata through `listStatuses`; ciphertext is only returned to the
- * FastAPI backend through internal queries.
+ * `create` (deploy key). Ciphertext is only ever returned to FastAPI via
+ * the internal queries.
  */
 
 const KIND = v.union(
@@ -16,8 +24,8 @@ const KIND = v.union(
 	v.literal("oauth_token"),
 );
 
-/** Connection metadata for the current user (frontend use — no secrets). */
-export const listStatuses = query({
+/** All credentials for the current user (frontend — metadata, no secrets). */
+export const listMine = query({
 	handler: async (ctx) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return [];
@@ -25,18 +33,21 @@ export const listStatuses = query({
 			.query("agentCredentials")
 			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
 			.collect();
-		return rows.map((row) => ({
-			agent: row.agent,
-			kind: row.kind,
-			label: row.label,
-			createdAt: row.createdAt,
-			lastUsedAt: row.lastUsedAt,
-		}));
+		return rows
+			.map((row) => ({
+				_id: row._id,
+				agent: row.agent,
+				kind: row.kind,
+				label: row.label,
+				createdAt: row.createdAt,
+				lastUsedAt: row.lastUsedAt,
+			}))
+			.sort((a, b) => b.createdAt - a.createdAt);
 	},
 });
 
-/** Upsert a credential (FastAPI via deploy key; value already encrypted). */
-export const store = internalMutation({
+/** Insert a new credential (FastAPI via deploy key). Returns the new id. */
+export const create = internalMutation({
 	args: {
 		userId: v.string(),
 		agent: v.string(),
@@ -45,39 +56,43 @@ export const store = internalMutation({
 		label: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
-		const existing = await ctx.db
-			.query("agentCredentials")
-			.withIndex("by_user_agent", (q) =>
-				q.eq("userId", args.userId).eq("agent", args.agent),
-			)
-			.unique();
-		if (existing) {
-			await ctx.db.patch(existing._id, {
-				kind: args.kind,
-				ciphertext: args.ciphertext,
-				label: args.label,
-				createdAt: Date.now(),
-			});
-		} else {
-			await ctx.db.insert("agentCredentials", {
-				...args,
-				createdAt: Date.now(),
-			});
-		}
+		return await ctx.db.insert("agentCredentials", {
+			...args,
+			createdAt: Date.now(),
+		});
 	},
 });
 
-/** Fetch one credential, ciphertext included (FastAPI only). */
-export const getForAgent = internalQuery({
-	args: { userId: v.string(), agent: v.string() },
+/** Replace an existing credential's secret/label (FastAPI via deploy key). */
+export const updateSecret = internalMutation({
+	args: {
+		credentialId: v.id("agentCredentials"),
+		userId: v.string(),
+		kind: KIND,
+		ciphertext: v.string(),
+		label: v.optional(v.string()),
+	},
 	handler: async (ctx, args) => {
-		const row = await ctx.db
-			.query("agentCredentials")
-			.withIndex("by_user_agent", (q) =>
-				q.eq("userId", args.userId).eq("agent", args.agent),
-			)
-			.unique();
-		if (!row) return null;
+		const row = await ctx.db.get(args.credentialId);
+		if (!row || row.userId !== args.userId) {
+			throw new Error("Credential not found");
+		}
+		await ctx.db.patch(args.credentialId, {
+			kind: args.kind,
+			ciphertext: args.ciphertext,
+			label: args.label ?? row.label,
+			createdAt: Date.now(),
+		});
+		return args.credentialId;
+	},
+});
+
+/** Fetch one credential by id, ciphertext included (FastAPI only). */
+export const getById = internalQuery({
+	args: { credentialId: v.id("agentCredentials"), userId: v.string() },
+	handler: async (ctx, args) => {
+		const row = await ctx.db.get(args.credentialId);
+		if (!row || row.userId !== args.userId) return null;
 		return {
 			agent: row.agent,
 			kind: row.kind,
@@ -87,7 +102,35 @@ export const getForAgent = internalQuery({
 	},
 });
 
-/** Connection metadata for one user (FastAPI use — no secrets). */
+/** Most-recently-created credential for an agent (FastAPI fallback when a
+ *  harness has no explicit credential link). */
+export const getForAgent = internalQuery({
+	args: { userId: v.string(), agent: v.string() },
+	handler: async (ctx, args) => {
+		const rows = await ctx.db
+			.query("agentCredentials")
+			.withIndex("by_user_agent", (q) =>
+				q.eq("userId", args.userId).eq("agent", args.agent),
+			)
+			.collect();
+		if (rows.length === 0) return null;
+		const row = rows.sort(
+			(a, b) =>
+				b.createdAt - a.createdAt ||
+				b._creationTime - a._creationTime ||
+				(b._id > a._id ? 1 : -1),
+		)[0];
+		return {
+			credentialId: row._id,
+			agent: row.agent,
+			kind: row.kind,
+			ciphertext: row.ciphertext,
+			label: row.label,
+		};
+	},
+});
+
+/** Credentials for one user (FastAPI use — metadata, no secrets). */
 export const listForUser = internalQuery({
 	args: { userId: v.string() },
 	handler: async (ctx, args) => {
@@ -96,6 +139,7 @@ export const listForUser = internalQuery({
 			.withIndex("by_user", (q) => q.eq("userId", args.userId))
 			.collect();
 		return rows.map((row) => ({
+			credentialId: row._id,
 			agent: row.agent,
 			kind: row.kind,
 			label: row.label,
@@ -104,29 +148,34 @@ export const listForUser = internalQuery({
 	},
 });
 
-export const remove = internalMutation({
-	args: { userId: v.string(), agent: v.string() },
+/** Delete a credential the user owns, and unlink any harnesses using it. */
+export const remove = mutation({
+	args: { credentialId: v.id("agentCredentials") },
 	handler: async (ctx, args) => {
-		const row = await ctx.db
-			.query("agentCredentials")
-			.withIndex("by_user_agent", (q) =>
-				q.eq("userId", args.userId).eq("agent", args.agent),
-			)
-			.unique();
-		if (row) await ctx.db.delete(row._id);
-		return { removed: row !== null };
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+		const row = await ctx.db.get(args.credentialId);
+		if (!row || row.userId !== identity.subject) {
+			throw new Error("Credential not found");
+		}
+		const harnesses = await ctx.db
+			.query("harnesses")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.collect();
+		for (const harness of harnesses) {
+			if (harness.agentCredentialId === args.credentialId) {
+				await ctx.db.patch(harness._id, { agentCredentialId: undefined });
+			}
+		}
+		await ctx.db.delete(args.credentialId);
+		return { removed: true };
 	},
 });
 
 export const touch = internalMutation({
-	args: { userId: v.string(), agent: v.string() },
+	args: { credentialId: v.id("agentCredentials") },
 	handler: async (ctx, args) => {
-		const row = await ctx.db
-			.query("agentCredentials")
-			.withIndex("by_user_agent", (q) =>
-				q.eq("userId", args.userId).eq("agent", args.agent),
-			)
-			.unique();
-		if (row) await ctx.db.patch(row._id, { lastUsedAt: Date.now() });
+		const row = await ctx.db.get(args.credentialId);
+		if (row) await ctx.db.patch(args.credentialId, { lastUsedAt: Date.now() });
 	},
 });

@@ -15,121 +15,156 @@ function makeT() {
 
 const CRED = {
 	userId: "u-a",
-	agent: "codex",
-	kind: "auth_json" as const,
-	ciphertext: "base64-sealed-blob",
+	agent: "claude-code",
+	kind: "oauth_token" as const,
+	ciphertext: "sealed-blob-1",
 };
 
-describe("agentCredentials.listStatuses", () => {
+describe("agentCredentials.listMine", () => {
 	it("returns [] when unauthenticated", async () => {
 		const { raw } = makeT();
-		expect(await raw.query(api.agentCredentials.listStatuses, {})).toEqual([]);
+		expect(await raw.query(api.agentCredentials.listMine, {})).toEqual([]);
 	});
 
-	it("exposes metadata but never ciphertext", async () => {
+	it("exposes metadata but never ciphertext, newest first", async () => {
 		const { raw, asUser } = makeT();
-		await raw.mutation(internal.agentCredentials.store, {
+		await raw.mutation(internal.agentCredentials.create, {
 			...CRED,
-			label: "work account",
+			label: "work",
 		});
-		const rows = await asUser("u-a").query(
-			api.agentCredentials.listStatuses,
-			{},
-		);
-		expect(rows).toHaveLength(1);
-		expect(rows[0].agent).toBe("codex");
-		expect(rows[0].kind).toBe("auth_json");
-		expect(rows[0].label).toBe("work account");
-		expect(JSON.stringify(rows[0])).not.toContain("base64-sealed-blob");
+		await raw.mutation(internal.agentCredentials.create, {
+			...CRED,
+			ciphertext: "sealed-blob-2",
+			label: "personal",
+		});
+		const rows = await asUser("u-a").query(api.agentCredentials.listMine, {});
+		expect(rows).toHaveLength(2);
+		expect(rows[0].agent).toBe("claude-code");
+		expect(JSON.stringify(rows)).not.toContain("sealed-blob");
+		expect(rows.map((r) => r.label).sort()).toEqual(["personal", "work"]);
 	});
 
 	it("only returns the calling user's rows", async () => {
 		const { raw, asUser } = makeT();
-		await raw.mutation(internal.agentCredentials.store, CRED);
+		await raw.mutation(internal.agentCredentials.create, CRED);
 		expect(
-			await asUser("u-b").query(api.agentCredentials.listStatuses, {}),
+			await asUser("u-b").query(api.agentCredentials.listMine, {}),
 		).toEqual([]);
 	});
 });
 
-describe("agentCredentials.store", () => {
-	it("upserts per (user, agent)", async () => {
+describe("agentCredentials.create + getById", () => {
+	it("supports multiple credentials per (user, agent)", async () => {
 		const { raw } = makeT();
-		await raw.mutation(internal.agentCredentials.store, CRED);
-		await raw.mutation(internal.agentCredentials.store, {
+		const id1 = await raw.mutation(internal.agentCredentials.create, CRED);
+		const id2 = await raw.mutation(internal.agentCredentials.create, {
 			...CRED,
 			kind: "api_key" as const,
-			ciphertext: "new-blob",
+			ciphertext: "sealed-blob-2",
+		});
+		expect(id1).not.toBe(id2);
+		const row1 = await raw.query(internal.agentCredentials.getById, {
+			credentialId: id1,
+			userId: "u-a",
+		});
+		const row2 = await raw.query(internal.agentCredentials.getById, {
+			credentialId: id2,
+			userId: "u-a",
+		});
+		expect(row1?.ciphertext).toBe("sealed-blob-1");
+		expect(row2?.ciphertext).toBe("sealed-blob-2");
+	});
+
+	it("getById enforces ownership", async () => {
+		const { raw } = makeT();
+		const id = await raw.mutation(internal.agentCredentials.create, CRED);
+		expect(
+			await raw.query(internal.agentCredentials.getById, {
+				credentialId: id,
+				userId: "u-other",
+			}),
+		).toBeNull();
+	});
+});
+
+describe("agentCredentials.updateSecret", () => {
+	it("replaces the ciphertext in place", async () => {
+		const { raw } = makeT();
+		const id = await raw.mutation(internal.agentCredentials.create, CRED);
+		await raw.mutation(internal.agentCredentials.updateSecret, {
+			credentialId: id,
+			userId: "u-a",
+			kind: "oauth_token" as const,
+			ciphertext: "sealed-blob-new",
+		});
+		const row = await raw.query(internal.agentCredentials.getById, {
+			credentialId: id,
+			userId: "u-a",
+		});
+		expect(row?.ciphertext).toBe("sealed-blob-new");
+	});
+
+	it("rejects other users' credentials", async () => {
+		const { raw } = makeT();
+		const id = await raw.mutation(internal.agentCredentials.create, CRED);
+		await expect(
+			raw.mutation(internal.agentCredentials.updateSecret, {
+				credentialId: id,
+				userId: "u-other",
+				kind: "oauth_token" as const,
+				ciphertext: "x",
+			}),
+		).rejects.toThrow();
+	});
+});
+
+describe("agentCredentials.getForAgent", () => {
+	it("returns the most recently created credential", async () => {
+		const { raw } = makeT();
+		await raw.mutation(internal.agentCredentials.create, CRED);
+		const id2 = await raw.mutation(internal.agentCredentials.create, {
+			...CRED,
+			ciphertext: "sealed-blob-2",
 		});
 		const row = await raw.query(internal.agentCredentials.getForAgent, {
 			userId: "u-a",
-			agent: "codex",
-		});
-		expect(row?.kind).toBe("api_key");
-		expect(row?.ciphertext).toBe("new-blob");
-	});
-
-	it("keeps agents independent", async () => {
-		const { raw } = makeT();
-		await raw.mutation(internal.agentCredentials.store, CRED);
-		await raw.mutation(internal.agentCredentials.store, {
-			...CRED,
-			agent: "claude-code",
-			kind: "oauth_token" as const,
-			ciphertext: "claude-blob",
-		});
-		const codex = await raw.query(internal.agentCredentials.getForAgent, {
-			userId: "u-a",
-			agent: "codex",
-		});
-		const claude = await raw.query(internal.agentCredentials.getForAgent, {
-			userId: "u-a",
 			agent: "claude-code",
 		});
-		expect(codex?.ciphertext).toBe("base64-sealed-blob");
-		expect(claude?.ciphertext).toBe("claude-blob");
+		expect(row?.credentialId).toBe(id2);
 	});
 });
 
 describe("agentCredentials.remove", () => {
-	it("removes the row and reports it", async () => {
-		const { raw } = makeT();
-		await raw.mutation(internal.agentCredentials.store, CRED);
-		const result = await raw.mutation(internal.agentCredentials.remove, {
-			userId: "u-a",
-			agent: "codex",
-		});
-		expect(result).toEqual({ removed: true });
-		expect(
-			await raw.query(internal.agentCredentials.getForAgent, {
-				userId: "u-a",
-				agent: "codex",
-			}),
-		).toBeNull();
-	});
-
-	it("is a no-op when nothing stored", async () => {
-		const { raw } = makeT();
-		const result = await raw.mutation(internal.agentCredentials.remove, {
-			userId: "u-a",
-			agent: "codex",
-		});
-		expect(result).toEqual({ removed: false });
-	});
-});
-
-describe("agentCredentials.touch", () => {
-	it("sets lastUsedAt", async () => {
+	it("deletes the row and unlinks harnesses that referenced it", async () => {
 		const { raw, asUser } = makeT();
-		await raw.mutation(internal.agentCredentials.store, CRED);
-		await raw.mutation(internal.agentCredentials.touch, {
-			userId: "u-a",
-			agent: "codex",
+		const id = await raw.mutation(internal.agentCredentials.create, CRED);
+		const a = asUser("u-a");
+		const harnessId = await a.mutation(api.harnesses.create, {
+			name: "H",
+			model: "sonnet",
+			status: "started",
+			mcpServers: [],
+			skills: [],
+			agent: "claude-code",
+			agentCredentialId: id,
 		});
-		const rows = await asUser("u-a").query(
-			api.agentCredentials.listStatuses,
-			{},
+		await a.mutation(api.agentCredentials.remove, { credentialId: id });
+		expect(await a.query(api.agentCredentials.listMine, {})).toEqual([]);
+		const harness = (await a.query(api.harnesses.list, {})).find(
+			(h) => h._id === harnessId,
 		);
-		expect(rows[0].lastUsedAt).toBeGreaterThan(0);
+		expect(harness?.agentCredentialId).toBeUndefined();
+		// the agent choice itself survives
+		expect(harness?.agent).toBe("claude-code");
+	});
+
+	it("rejects other users' credentials", async () => {
+		const { raw, asUser } = makeT();
+		const id = await raw.mutation(internal.agentCredentials.create, CRED);
+		await expect(
+			asUser("u-b").mutation(api.agentCredentials.remove, {
+				credentialId: id,
+			}),
+		).rejects.toThrow();
 	});
 });

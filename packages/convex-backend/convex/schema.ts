@@ -24,6 +24,13 @@ export default defineSchema({
 		suggestedPrompts: v.optional(v.array(v.string())),
 		userId: v.string(),
 		lastUsedAt: v.optional(v.number()),
+		// Agent loop this harness runs on: "default" (Harness via OpenRouter)
+		// or an ACP agent id ("claude-code" | "codex" | "cursor"). Absent =
+		// default.
+		agent: v.optional(v.string()),
+		// The stored credential this harness uses for its ACP agent (one
+		// credential per harness; credentials are reusable across harnesses).
+		agentCredentialId: v.optional(v.id("agentCredentials")),
 		// Daytona sandbox configuration
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxId: v.optional(v.id("sandboxes")),
@@ -252,6 +259,11 @@ export default defineSchema({
 		),
 		// Controls whether the in-chat model selector changes only the current
 		// session ("session") or persists the change to the harness ("harness").
+		// Whether in-chat config changes (model, agent, modes) update the
+		// harness itself (default) or only the current session.
+		chatConfigScope: v.optional(
+			v.union(v.literal("harness"), v.literal("session")),
+		),
 		modelSelectorMode: v.optional(
 			v.union(v.literal("session"), v.literal("harness")),
 		),
