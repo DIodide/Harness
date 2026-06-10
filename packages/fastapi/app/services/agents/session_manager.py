@@ -45,7 +45,19 @@ logger = logging.getLogger(__name__)
 
 PERMISSION_TIMEOUT_SECONDS = 300.0
 
-_DONE = object()  # sentinel pushed to event queues when a turn finishes
+# Mirrors MAX_SANDBOXES_PER_USER in convex/sandboxes.ts — enforced here
+# BEFORE the Daytona sandbox exists (the Convex-side check fires only at
+# registration, after the compute is already spent).
+MAX_SANDBOXES_PER_USER = 5
+
+
+class SandboxAccessError(Exception):
+    """Client-supplied sandbox id that the requesting user does not own."""
+
+
+def _log_background_error(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("Background ACP task failed: %s", task.exception())
 
 
 @dataclass
@@ -78,9 +90,14 @@ class AgentSession:
     transcript: list[dict] = field(default_factory=list)
     pending_replay: bool = False
     # MCP relay: index → real server config. The agent only ever sees
-    # http://127.0.0.1:<shim>/mcp/<index>; Daytona egress restrictions and
-    # MCP credentials are both handled backend-side.
+    # http://127.0.0.1:<shim>/mcp/<generation>/<index>; Daytona egress
+    # restrictions and MCP credentials are both handled backend-side.
     relay_targets: list[McpServer] = field(default_factory=list)
+    # Random token regenerated on every ACP session open: requests from MCP
+    # clients of a PREVIOUS ACP session (the agent process outlives harness
+    # switches) carry the old generation and are rejected instead of being
+    # misrouted to whatever server now sits at that index.
+    relay_generation: str = ""
     user_ctx: UserContext | None = None
     # Queue of normalized events for the currently streaming prompt turn.
     event_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
@@ -96,6 +113,11 @@ class AgentSession:
     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_activity: float = field(default_factory=time.monotonic)
+    # Number of prompt() generators currently alive for this session.
+    # Non-zero from the generator's very first statement — unlike status/
+    # lock, which only flip after the pre-turn awaits (ready_event, healthz)
+    # — so _claim_parked can never steal a session whose turn is starting.
+    turn_guard: int = 0
 
     @property
     def supports_prompt_queueing(self) -> bool:
@@ -211,12 +233,22 @@ def normalize_session_update(update: dict) -> dict | None:
             ),
             None,
         )
+        status = update.get("status")
+        raw_output = update.get("rawOutput")
+        # Only terminal updates may fabricate a result from rawOutput: a
+        # truthy result marks the call finished in the UI, and ACP allows
+        # status-only progress updates carrying no content at all.
+        fallback = (
+            json.dumps(raw_output)[:4000]
+            if raw_output and status in ("completed", "failed")
+            else ""
+        )
         return {
             "event": "tool_result",
             "data": {
                 "call_id": update.get("toolCallId", ""),
-                "status": update.get("status"),
-                "result": result_text or json.dumps(update.get("rawOutput") or {})[:4000],
+                "status": status,
+                "result": result_text or fallback,
                 **({"diff": diff} if diff else {}),
             },
         }
@@ -326,6 +358,10 @@ class ParkedRuntime:
     user_id: str
     agent_capabilities: dict
     msg_id_floor: int
+    # Credential link the runtime's agent process was LAUNCHED with (env
+    # vars are baked in at spawn) — a session wanting different credentials
+    # must never adopt this runtime.
+    credential_id: str | None = None
     parked_at: float = field(default_factory=time.monotonic)
 
 
@@ -373,6 +409,35 @@ class AgentSessionManager:
         user_ctx: UserContext | None,
     ) -> AgentSession:
         agent = get_agent(agent_id)  # raises KeyError for unknown agents
+
+        # One live session per conversation: a reload or second tab must
+        # share the existing runtime, not race it for the same sandbox and
+        # double-persist assistant messages.
+        for existing in self._sessions.values():
+            if (
+                existing.user_id == user_id
+                and existing.conversation_id == conversation_id
+                and existing.agent_id == agent_id
+                and existing.status not in ("error", "closed")
+            ):
+                if existing.harness.harness_id != harness.harness_id:
+                    logger.info(
+                        "Reusing session '%s' for conversation '%s' despite a "
+                        "different harness — the client switches explicitly",
+                        existing.id, conversation_id,
+                    )
+                return existing
+
+        # The sandbox id is client-supplied: never attach an agent to a
+        # sandbox the requesting user does not own.
+        if harness.sandbox_enabled and harness.sandbox_id:
+            from app.services.convex import verify_sandbox_owner
+
+            if not await verify_sandbox_owner(harness.sandbox_id, user_id):
+                raise SandboxAccessError(
+                    "Sandbox not found or not owned by this user"
+                )
+
         creds = await resolve_agent_credentials(
             self._http_client(), agent_id, user_id,
             credential_id=harness.agent_credential_id,
@@ -403,15 +468,29 @@ class AgentSessionManager:
         key = self._runtime_key(session.user_id, session.agent_id, attach_sandbox_id)
         parked = self._parked.pop(key, None)
         if parked is not None:
-            return parked
+            if parked.credential_id == session.harness.agent_credential_id:
+                return parked
+            # The runtime's agent was launched with DIFFERENT credentials
+            # (env vars are fixed at spawn) — adopting it would keep e.g. a
+            # rotated-away token alive. Destroy it and provision fresh.
+            logger.info(
+                "Discarding parked %s runtime (sandbox=%s): credential link "
+                "changed", parked.agent_id, parked.runtime.sandbox_id,
+            )
+            destroy = asyncio.create_task(
+                self._destroy_runtime(parked.runtime, parked.agent_id)
+            )
+            destroy.add_done_callback(_log_background_error)
         victims = [
             s
             for s in self._sessions.values()
             if s.id != session.id
             and s.user_id == session.user_id
             and s.agent_id == session.agent_id
+            and s.harness.agent_credential_id == session.harness.agent_credential_id
             and s.status == "ready"
             and not s.lock.locked()
+            and s.turn_guard == 0
             and s.runtime is not None
             and self._runtime_key(s.user_id, s.agent_id, self._session_attach_id(s))
             == key
@@ -489,6 +568,8 @@ class AgentSessionManager:
                 victim, key = claim
                 await self._teardown(victim, park=True)
                 claim = self._parked.pop(key, None)
+            if claim is None and attach_sandbox_id is not None:
+                claim = await self._take_over_attached(session, attach_sandbox_id)
             if claim is not None:
                 adopted = await self._adopt(session, claim)
                 if adopted and session.acp_session_id is None:
@@ -496,6 +577,8 @@ class AgentSessionManager:
                     await self._open_acp_session(session, user_ctx)
 
             if not adopted:
+                if attach_sandbox_id is None:
+                    await self._check_sandbox_cap(session.user_id)
                 session.runtime = await asyncio.to_thread(
                     provision_agent_sandbox,
                     session.user_id,
@@ -542,6 +625,72 @@ class AgentSessionManager:
         finally:
             session.ready_event.set()
 
+
+    async def _take_over_attached(
+        self, session: AgentSession, attach_sandbox_id: str,
+    ):
+        """Claim an attached sandbox held by another live session.
+
+        One shim per (agent, attached sandbox): provisioning over a live
+        session would kill its shim underneath it and rotate the token
+        (silent connection-resets, then 401s, mid-turn). Instead the newer
+        conversation wins deterministically — the holder's turn is
+        cancelled, its stream gets an explanatory error, and its runtime is
+        parked for adoption. Returns a ParkedRuntime or None.
+        """
+        key = self._runtime_key(session.user_id, session.agent_id, attach_sandbox_id)
+        holder = next(
+            (
+                s
+                for s in self._sessions.values()
+                if s.id != session.id
+                and self._runtime_key(s.user_id, s.agent_id, self._session_attach_id(s))
+                == key
+            ),
+            None,
+        )
+        if holder is None:
+            return None
+        logger.info(
+            "Taking over attached sandbox '%s' from session '%s' for "
+            "conversation '%s'",
+            attach_sandbox_id, holder.id, session.conversation_id,
+        )
+        with contextlib.suppress(Exception):
+            if holder.connection is not None and holder.acp_session_id:
+                await holder.connection.cancel(holder.acp_session_id)
+        await holder.event_queue.put(
+            {
+                "event": "error",
+                "data": {
+                    "message": "This agent was taken over by a newer "
+                    "conversation on the same sandbox.",
+                },
+            }
+        )
+        await self._teardown(holder, park=True)
+        parked = self._parked.pop(key, None)
+        if (
+            parked is not None
+            and parked.credential_id != session.harness.agent_credential_id
+        ):
+            # Launched with different credentials — provision fresh into the
+            # sandbox instead (the launcher replaces the shim anyway).
+            await self._destroy_runtime(parked.runtime, parked.agent_id)
+            return None
+        return parked
+
+    async def _check_sandbox_cap(self, user_id: str) -> None:
+        """Refuse to create an owned agent sandbox past the per-user cap."""
+        from app.services.convex import count_user_sandboxes
+
+        count = await count_user_sandboxes(self._http_client(), user_id)
+        if count is not None and count >= MAX_SANDBOXES_PER_USER:
+            raise RuntimeError(
+                f"Sandbox limit reached ({count}/{MAX_SANDBOXES_PER_USER}) — "
+                "delete a sandbox in Manage Sandboxes before starting "
+                "another agent session."
+            )
 
     async def _register_sandbox_record(
         self, user_id: str, sandbox_id: str, agent_name: str,
@@ -642,11 +791,15 @@ class AgentSessionManager:
         # live only on this side of the tunnel.
         session.user_ctx = user_ctx
         session.relay_targets = list(servers)
+        session.relay_generation = uuid.uuid4().hex[:8]
         acp_servers = [
             {
                 "type": "http",
                 "name": server.name,
-                "url": f"http://127.0.0.1:{shim_port(get_agent(session.agent_id))}/mcp/{index}",
+                "url": (
+                    f"http://127.0.0.1:{shim_port(get_agent(session.agent_id))}"
+                    f"/mcp/{session.relay_generation}/{index}"
+                ),
                 "headers": [],
             }
             for index, server in enumerate(servers)
@@ -660,6 +813,7 @@ class AgentSessionManager:
                 session.runtime.sandbox_id,
                 shim_port(get_agent(session.agent_id)),
                 servers,
+                session.relay_generation,
             )
         result = await session.connection.new_session(
             cwd=(session.runtime.cwd if session.runtime else SANDBOX_WORKSPACE),
@@ -729,10 +883,19 @@ class AgentSessionManager:
             req_id = payload.get("reqId")
             status, resp_headers, body = 502, {}, b""
             try:
-                index = int(payload.get("path", "").split("/mcp/", 1)[1].split("/", 1)[0])
+                rest = payload.get("path", "").split("/mcp/", 1)[1]
+                generation, _, index_part = rest.partition("/")
+                index = int(index_part.split("/", 1)[0])
+                # A request from a previous ACP session's MCP clients (the
+                # agent process outlives harness switches) must be rejected,
+                # not misrouted to whatever server now sits at that index.
+                if generation != session.relay_generation:
+                    raise LookupError("stale relay generation")
                 target = session.relay_targets[index]
-            except (IndexError, ValueError):
-                await conn.post_relay_response(req_id, 404, {}, b"unknown relay target")
+            except (IndexError, ValueError, LookupError):
+                await conn.post_relay_response(
+                    req_id, 404, {}, b"unknown or stale relay target",
+                )
                 return
             try:
                 import base64
@@ -766,6 +929,12 @@ class AgentSessionManager:
                     "MCP relay to '%s' failed: %s", target.name, e,
                 )
                 body = str(e).encode()
+            except Exception:
+                # Auth-refresh and decode failures must never strand the
+                # shim's held request until its 120s relay timeout — always
+                # answer, even if only with a 502.
+                logger.exception("MCP relay to '%s' crashed", target.name)
+                body = b"relay failed"
             await conn.post_relay_response(req_id, status, resp_headers, body)
 
         return handle
@@ -992,6 +1161,21 @@ class AgentSessionManager:
         promptCapabilities.image.
         """
         session = self.get(session_id, user_id)
+        # Guard the WHOLE turn, including the pre-lock awaits (ready_event,
+        # healthz, revive): status/lock only flip later, and _claim_parked
+        # stealing a session in that window tears down its connection
+        # mid-request and hands its sandbox to another session.
+        session.turn_guard += 1
+        try:
+            async for event in self._prompt_turn(session, message, history, blocks):
+                yield event
+        finally:
+            session.turn_guard -= 1
+
+    async def _prompt_turn(
+        self, session: AgentSession, message: str,
+        history: list[dict] | None, blocks: list[dict] | None,
+    ):
         session.last_activity = time.monotonic()
         if history and not session.transcript:
             session.transcript = [
@@ -1069,6 +1253,7 @@ class AgentSessionManager:
                     session.acp_session_id, outgoing, blocks=extra_blocks,
                 )
             )
+            queue_get: asyncio.Task | None = None
             try:
                 while True:
                     queue_get = asyncio.create_task(session.event_queue.get())
@@ -1125,11 +1310,23 @@ class AgentSessionManager:
                 yield {"event": "error", "data": {"message": str(e)}}
             except GeneratorExit:
                 # SSE client disconnected mid-turn (tab closed, dev-server
-                # reload, proxy drop). The agent keeps running server-side.
+                # reload, proxy drop). Stop the now-headless turn agent-side
+                # too: cancelling the local task only pops a future — without
+                # session/cancel the agent keeps producing output that the
+                # next turn would silently drain as stale.
                 logger.warning(
                     "SSE consumer disconnected mid-turn on session '%s' "
                     "(turn still running: %s)", session.id, not turn.done(),
                 )
+                if (
+                    not turn.done()
+                    and session.connection is not None
+                    and session.acp_session_id is not None
+                ):
+                    cancel_task = asyncio.create_task(
+                        session.connection.cancel(session.acp_session_id)
+                    )
+                    cancel_task.add_done_callback(_log_background_error)
                 raise
             except Exception as e:
                 # A bug here must surface as an error event, never as a
@@ -1139,6 +1336,12 @@ class AgentSessionManager:
             finally:
                 if not turn.done():
                     turn.cancel()
+                # asyncio.wait never cancels its awaitables — an abandoned
+                # event_queue.get() would survive as a parked getter and
+                # silently eat the next turn's first event (e.g. a
+                # permission_request, stalling it to the 300s timeout).
+                if queue_get is not None and not queue_get.done():
+                    queue_get.cancel()
                 session.status = "ready" if session.error is None else "error"
                 session.last_activity = time.monotonic()
 
@@ -1254,6 +1457,7 @@ class AgentSessionManager:
             user_id=session.user_id,
             agent_capabilities=session.agent_capabilities,
             msg_id_floor=session.msg_id_floor + 1_000_000,
+            credential_id=session.harness.agent_credential_id,
         )
         logger.info(
             "Parked %s runtime (sandbox=%s) for user '%s'",

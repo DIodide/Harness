@@ -3,6 +3,84 @@
 All notable changes to Harness are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); dates are `YYYY-MM-DD`.
 
+## [0.2.1] — 2026-06-10 · Hardening the Agent Gateway
+
+Fixes for all 25 findings from the 0.2.0 deep code review
+([PR #72 review](https://github.com/DIodide/Harness/pull/72)).
+
+### Security
+
+- **Sandbox attach ownership**: creating an agent session with a harness
+  sandbox now verifies the requesting user owns the Daytona sandbox id —
+  previously any authenticated user could attach their agent inside
+  another user's sandbox.
+- **Credential rotation integrity**: `agentCredentials.updateSecret`
+  rejects rotations whose stored row belongs to a different agent, so a
+  mismatched rotation can no longer rewrite a credential's kind (e.g. a
+  codex auth.json exported as `ANTHROPIC_API_KEY`).
+- **Sandbox cap enforced up front**: owned agent sandboxes check
+  `MAX_SANDBOXES_PER_USER` *before* the Daytona sandbox is created, not in
+  the fire-and-forget registration that swallowed the limit error.
+
+### Fixed — gateway
+
+- Regenerate, queued messages, and edit-resend now run on the configured
+  agent loop: the harness stream config is built by one shared helper
+  (`lib/harness-stream.ts`) that always carries `agent` /
+  `agent_credential_id` — these paths previously fell back silently to the
+  default OpenRouter loop.
+- Session lifecycle races: a turn now guards its whole startup (steal
+  protection from the generator's first statement); the abandoned
+  `event_queue.get()` waiter is cancelled on disconnect (it used to eat
+  the next turn's first event — often a permission request, stalling it
+  to the 300s timeout); SSE disconnects send `session/cancel` so the
+  agent stops producing output nobody will persist; one live session per
+  conversation (second tabs/reloads share it).
+- Attached sandboxes: a second conversation on the same sandbox-attached
+  harness takes the agent over deterministically (turn cancelled, stream
+  notified, runtime adopted) instead of killing the other session's shim
+  under it; teardown of attached shims no longer relies on `pkill`,
+  which doesn't exist in the sandbox images.
+- MCP relay: handler failures of any type now answer the shim instead of
+  stranding requests until the 120s timeout; relay endpoints are stamped
+  with a per-ACP-session generation so requests from a previous session's
+  MCP clients are rejected rather than misrouted after a harness switch;
+  the live-session switch key includes server name/auth so static-token
+  edits propagate.
+- Shim: signal-killed agents are now reported as exited
+  (`child.exitCode` stays null on signals — healthz said "running" and
+  prompts hung for 600s); replay-buffer eviction emits a `gap` event that
+  fails pending requests fast and triggers a revive instead of a silent
+  hang.
+- Aborted turns no longer persist twice (server skips the save on client
+  disconnect — the frontend's interrupted save is authoritative, matching
+  `/api/chat/stream`); status-only `tool_call_update`s no longer fabricate
+  a `"{}"` result that marked running tools as finished; sub-agent
+  reasoning keeps its parent linkage after reload; prompt `history` is
+  capped server-side.
+
+### Fixed — web app
+
+- Switching the agent loop in chat unlinks the old agent's credential on
+  the harness (resolution falls back to the newest credential for the new
+  agent) instead of failing every send with a 409.
+- The harness edit page now has the full agent-loop section (agent cards,
+  credential library with inline add, agent-aware model list) — the same
+  picker as creation, so the "no credential linked" badge and gateway
+  errors finally point somewhere that can fix them.
+- Duplicating a harness copies its agent, credential link, and suggested
+  prompts.
+- Concurrent agent permission/question requests queue per conversation
+  (FIFO) instead of clobbering each other into a silent deny; question
+  cards are keyed by request id so a new question never inherits the
+  previous stepper's state.
+- Users who chose session-scoped model switching before `chatConfigScope`
+  existed keep that behavior (legacy `modelSelectorMode` fallback).
+- Claude agent sessions merge `availableModels` into the sandbox's
+  existing `~/.claude/settings.json` instead of overwriting user-managed
+  hooks/permissions; stale Manage Sandboxes rows tolerate duplicate
+  records on cleanup.
+
 ## [0.2.0] — 2026-06-10 · ACP Agent Gateway
 
 Harness becomes the chat + tool control plane for the coding agents you

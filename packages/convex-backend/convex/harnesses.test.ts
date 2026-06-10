@@ -1,6 +1,6 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.*s");
@@ -145,5 +145,66 @@ describe("harnesses.remove", () => {
 		await expect(b.mutation(api.harnesses.remove, { id })).rejects.toThrow(
 			/Not found/,
 		);
+	});
+});
+
+describe("harnesses agent/credential integrity", () => {
+	it("duplicate copies the agent loop and its credential link", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("u-a");
+		const credId = await raw.mutation(internal.agentCredentials.create, {
+			userId: "u-a",
+			agent: "claude-code",
+			kind: "oauth_token" as const,
+			ciphertext: "sealed",
+		});
+		const id = await a.mutation(api.harnesses.create, {
+			...baseHarness({ name: "agentful" }),
+			agent: "claude-code",
+			agentCredentialId: credId,
+		});
+		const dupId = await a.mutation(api.harnesses.duplicate, { id });
+		const dup = await a.query(api.harnesses.get, { id: dupId });
+		expect(dup?.agent).toBe("claude-code");
+		expect(dup?.agentCredentialId).toBe(credId);
+	});
+
+	it("update clears a stale credential when the agent changes", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("u-a");
+		const credId = await raw.mutation(internal.agentCredentials.create, {
+			userId: "u-a",
+			agent: "claude-code",
+			kind: "oauth_token" as const,
+			ciphertext: "sealed",
+		});
+		const id = await a.mutation(api.harnesses.create, {
+			...baseHarness(),
+			agent: "claude-code",
+			agentCredentialId: credId,
+		});
+		await a.mutation(api.harnesses.update, { id, agent: "codex" });
+		const row = await a.query(api.harnesses.get, { id });
+		expect(row?.agent).toBe("codex");
+		expect(row?.agentCredentialId).toBeUndefined();
+	});
+
+	it("update keeps the credential when the agent is unchanged", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("u-a");
+		const credId = await raw.mutation(internal.agentCredentials.create, {
+			userId: "u-a",
+			agent: "claude-code",
+			kind: "oauth_token" as const,
+			ciphertext: "sealed",
+		});
+		const id = await a.mutation(api.harnesses.create, {
+			...baseHarness(),
+			agent: "claude-code",
+			agentCredentialId: credId,
+		});
+		await a.mutation(api.harnesses.update, { id, agent: "claude-code", name: "renamed" });
+		const row = await a.query(api.harnesses.get, { id });
+		expect(row?.agentCredentialId).toBe(credId);
 	});
 });

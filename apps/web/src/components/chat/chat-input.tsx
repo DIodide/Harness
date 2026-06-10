@@ -42,6 +42,7 @@ import {
 	CHAT_INPUT_MAX_LENGTH,
 } from "../../lib/chat-input";
 import { useChatStreamContext } from "../../lib/chat-stream-context";
+import { buildHarnessStreamConfig } from "../../lib/harness-stream";
 import type { McpAuthType, McpServerCommand } from "../../lib/mcp";
 import {
 	acceptString,
@@ -249,11 +250,12 @@ export function ChatInput({
 		pendingQuestions,
 		answerQuestion,
 	} = useChatStreamContext();
+	// Head of the per-conversation FIFO — answering it reveals the next.
 	const pendingPermission = conversationId
-		? pendingPermissions[conversationId]
+		? pendingPermissions[conversationId]?.[0]
 		: undefined;
 	const pendingQuestion = conversationId
-		? pendingQuestions[conversationId]
+		? pendingQuestions[conversationId]?.[0]
 		: undefined;
 	const { data: agentCatalog } = useAgentCatalog();
 	const agentAvailability = useMemo(() => {
@@ -463,38 +465,13 @@ export function ChatInput({
 
 		const resolvedSandboxId = sandboxEnabled ? sandboxId : undefined;
 
-		// Snapshot harness config at send time (convert to snake_case for FastAPI)
-		const harnessConfig = {
-			model: effectiveModel ?? activeHarness.model,
-			mcp_servers: activeHarness.mcpServers.map((s) => ({
-				name: s.name,
-				url: s.url,
-				auth_type: s.authType as McpAuthType,
-				auth_token: s.authToken,
-			})),
-			skills: activeHarness.skills ?? [],
-			name: activeHarness.name,
-			harness_id: activeHarness._id,
-			system_prompt: activeHarness.systemPrompt ?? undefined,
-			agent: agentMode !== "default" ? agentMode : undefined,
-			// Only pass the harness's credential when the active agent matches
-			// it — a session-level agent override falls back to the user's
-			// newest credential for that agent.
-			agent_credential_id:
-				agentMode !== "default" && agentMode === harnessAgent
-					? activeHarness.agentCredentialId
-					: undefined,
-			sandbox_enabled: Boolean(resolvedSandboxId),
-			sandbox_id: resolvedSandboxId,
-			sandbox_config: activeHarness.sandboxConfig
-				? {
-						persistent: activeHarness.sandboxConfig.persistent,
-						auto_start: activeHarness.sandboxConfig.autoStart,
-						default_language: activeHarness.sandboxConfig.defaultLanguage,
-						resource_tier: activeHarness.sandboxConfig.resourceTier,
-					}
-				: undefined,
-		};
+		// Snapshot harness config at send time (shared snake_case builder —
+		// the same one queued/regenerate/edit-resend paths use).
+		const harnessConfig = buildHarnessStreamConfig(activeHarness, {
+			model: effectiveModel,
+			agentOverride: sessionAgent,
+			sandboxId: resolvedSandboxId,
+		});
 
 		let convoId = conversationId;
 		if (!convoId) {
@@ -718,9 +695,12 @@ export function ChatInput({
 			/>
 
 			<div className="mx-auto max-w-xl">
-				{/* ACP agent question (AskUserQuestion) — blocks until answered */}
+				{/* ACP agent question (AskUserQuestion) — blocks until answered.
+				    Keyed by request_id: an in-place swap to the next queued
+				    question must remount the stepper, not inherit its state. */}
 				{pendingQuestion && conversationId && (
 					<AgentQuestionCard
+						key={pendingQuestion.request.request_id}
 						request={pendingQuestion.request}
 						onAnswer={(action, content) =>
 							answerQuestion(conversationId, action, content)
@@ -730,6 +710,7 @@ export function ChatInput({
 				{/* ACP agent approval — blocks the turn until answered */}
 				{pendingPermission && conversationId && (
 					<AgentPermissionCard
+						key={pendingPermission.request.request_id}
 						request={pendingPermission.request}
 						onAnswer={(optionId) => answerPermission(conversationId, optionId)}
 					/>

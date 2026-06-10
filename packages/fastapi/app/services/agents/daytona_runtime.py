@@ -125,6 +125,25 @@ class ProvisionedRuntime:
     owns_sandbox: bool = True
 
 
+def _kill_shim_command(agent: AgentDefinition) -> str:
+    """Kill any running shim for this agent — WITHOUT procps.
+
+    pkill/ps are not installed in the slim sandbox images (a bare
+    `pkill || true` is a silent no-op there), so kill via the pid file
+    plus a pure-/proc cmdline scan. Shared by the launcher (replace a
+    stale shim) and stop_agent_shim (teardown in attached sandboxes).
+    """
+    shim_name = _shim_remote_path(agent).rsplit("/", 1)[-1]
+    pidfile = f"/tmp/acp-shim-{agent.id}.pid"
+    return (
+        f'[ -f {pidfile} ] && kill "$(cat {pidfile})" 2>/dev/null || true; '
+        "for d in /proc/[0-9]*; do "
+        f'grep -q {shlex.quote(shim_name)} "$d/cmdline" 2>/dev/null '
+        '&& kill "${d#/proc/}" 2>/dev/null || true; '
+        "done"
+    )
+
+
 def _build_launcher(agent: AgentDefinition, shim_token: str) -> str:
     """Launcher script: exports NON-SECRET config and backgrounds the shim.
 
@@ -145,21 +164,13 @@ def _build_launcher(agent: AgentDefinition, shim_token: str) -> str:
         **agent.env,
     }
     shim_file = _shim_remote_path(agent)
-    shim_name = shim_file.rsplit("/", 1)[-1]
     pidfile = f"/tmp/acp-shim-{agent.id}.pid"
     lines = ["#!/bin/bash", "set -e"]
     # Replace any stale shim for this agent: the sandbox survives gateway
     # restarts with the old shim still bound to the port, and a port clash
     # means the NEW shim dies (EADDRINUSE) while the OLD one keeps answering
-    # healthz with the old token → endless 401s. procps (pkill/ps) is NOT
-    # in the slim images, so kill via the pid file plus a pure-/proc scan.
-    lines.append(f'[ -f {pidfile} ] && kill "$(cat {pidfile})" 2>/dev/null || true')
-    lines.append(
-        "for d in /proc/[0-9]*; do "
-        f'grep -q {shlex.quote(shim_name)} "$d/cmdline" 2>/dev/null '
-        '&& kill "${d#/proc/}" 2>/dev/null || true; '
-        "done"
-    )
+    # healthz with the old token → endless 401s.
+    lines.append(_kill_shim_command(agent))
     # Give the kernel a beat to release the listen socket.
     lines.append("sleep 0.3")
     lines += [f"export {key}={shlex.quote(value)}" for key, value in env.items()]
@@ -276,6 +287,31 @@ def provision_agent_sandbox(
             with contextlib.suppress(Exception):
                 sandbox.process.exec(f"chmod 600 {shlex.quote(remote_path)}", timeout=15)
 
+        # Config files merged key-by-key into whatever already exists —
+        # attached persistent sandboxes hold user-maintained config (e.g.
+        # ~/.claude/settings.json hooks) that a blind upload would destroy.
+        for remote_path, our_keys in creds.json_merge_files.items():
+            merged = dict(our_keys)
+            with contextlib.suppress(Exception):
+                raw = sandbox.fs.download_file(remote_path)
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="replace")
+                existing = json.loads(raw or "{}")
+                if isinstance(existing, dict):
+                    merged = {**existing, **our_keys}
+            parent = remote_path.rsplit("/", 1)[0]
+            if parent and parent != SANDBOX_HOME:
+                _with_retries(
+                    lambda parent=parent: sandbox.fs.create_folder(parent, "0755"),
+                    "create config dir",
+                )
+            _with_retries(
+                lambda remote_path=remote_path, merged=merged: sandbox.fs.upload_file(
+                    json.dumps(merged, indent=2).encode("utf-8"), remote_path,
+                ),
+                "upload merged config",
+            )
+
         # Shim + launcher.
         shim_token = secrets.token_urlsafe(24)
         _with_retries(
@@ -358,7 +394,7 @@ def stop_agent_shim(sandbox_id: str, agent: AgentDefinition) -> None:
     try:
         sandbox = get_daytona_service().get_sandbox(sandbox_id)
         sandbox.process.exec(
-            f"pkill -f {shlex.quote(_shim_remote_path(agent))} || true",
+            f"bash -c {shlex.quote(_kill_shim_command(agent))}",
             timeout=15,
         )
     except Exception:
@@ -432,17 +468,20 @@ def _collect_agent_stderr(
 
 
 def write_cursor_mcp_config(
-    sandbox_id: str, shim_port: int, servers: list,
+    sandbox_id: str, shim_port: int, servers: list, generation: str = "",
 ) -> None:
     """Write ~/.cursor/{mcp.json,permissions.json} for the cursor agent.
 
     Unlike codex/claude, `cursor-agent acp` does not connect to the MCP
     servers passed in `session/new` — it loads them from its config file.
     We point each at the same local relay endpoint (index-aligned with
-    session.relay_targets) and allowlist them so they load headlessly.
+    session.relay_targets, stamped with the session's relay generation)
+    and allowlist them so they load headlessly.
     """
     mcp_servers = {
-        server.name: {"url": f"http://127.0.0.1:{shim_port}/mcp/{index}"}
+        server.name: {
+            "url": f"http://127.0.0.1:{shim_port}/mcp/{generation}/{index}"
+        }
         for index, server in enumerate(servers)
     }
     allowlist = [f"{server.name}:*" for server in servers]

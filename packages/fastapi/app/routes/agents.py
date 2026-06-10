@@ -32,7 +32,10 @@ from app.services.agents.credentials import (
     validate_secret,
 )
 from app.services.agents.registry import AGENT_REGISTRY, AgentCredentialsError
-from app.services.agents.session_manager import get_session_manager
+from app.services.agents.session_manager import (
+    SandboxAccessError,
+    get_session_manager,
+)
 from app.services.convex import save_assistant_message
 from app.services.mcp_client import UserContext, resolve_princeton_netid
 
@@ -40,6 +43,11 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 USER_MESSAGE_MAX_LENGTH = 16000  # mirror /api/chat/stream
+
+# History is replay context only (the manager replays the last 40 entries,
+# truncated, after a harness switch) — cap what we parse and retain so an
+# oversized payload can't bypass the message-length guard.
+MAX_HISTORY_MESSAGES = 100
 
 
 async def _user_context(http_client: httpx.AsyncClient, user: dict) -> UserContext:
@@ -263,6 +271,8 @@ async def create_session(
         )
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown agent '{body.agent}'")
+    except SandboxAccessError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except AgentCredentialsError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return _session_payload(session)
@@ -307,7 +317,17 @@ async def prompt(
                 user["sub"],
                 body.message,
                 user_ctx,
-                history=[m.model_dump() for m in body.history or []],
+                history=[
+                    {
+                        **m.model_dump(),
+                        "content": (
+                            m.content[:USER_MESSAGE_MAX_LENGTH]
+                            if isinstance(m.content, str)
+                            else m.content
+                        ),
+                    }
+                    for m in (body.history or [])[-MAX_HISTORY_MESSAGES:]
+                ],
                 blocks=_validated_image_blocks(body.blocks),
             ):
                 if event["event"] in ("done", "error"):
@@ -331,10 +351,19 @@ async def prompt(
                     last_text_mid = mid
                 elif event["event"] == "thinking":
                     mid = event["data"].get("message_id")
+                    parent = event["data"].get("parent_id")
                     if parts and parts[-1]["type"] == "reasoning" and mid == last_reasoning_mid:
                         parts[-1]["content"] += event["data"]["content"]
                     else:
-                        parts.append({"type": "reasoning", "content": event["data"]["content"]})
+                        # parent_id persists sub-agent thinking nested under
+                        # its Task tool call — same as token/tool_call parts.
+                        parts.append(
+                            {
+                                "type": "reasoning",
+                                "content": event["data"]["content"],
+                                **({"parent_id": parent} if parent else {}),
+                            }
+                        )
                     last_reasoning_mid = mid
                 elif event["event"] == "tool_call":
                     parts.append(
@@ -378,24 +407,33 @@ async def prompt(
                     if diff and not result_text:
                         # Persist file edits readably even without text content.
                         result_text = _diff_to_text(diff)
-                    for part in reversed(parts):
-                        if (
-                            part["type"] == "tool_call"
-                            and part["call_id"] == event["data"]["call_id"]
-                        ):
-                            part["result"] = result_text
-                            break
+                    # Status-only progress updates carry no result — don't
+                    # blank out content an earlier update already delivered.
+                    if result_text or event["data"].get("status") in (
+                        "completed", "failed",
+                    ):
+                        for part in reversed(parts):
+                            if (
+                                part["type"] == "tool_call"
+                                and part["call_id"] == event["data"]["call_id"]
+                            ):
+                                part["result"] = result_text
+                                break
                 yield {"event": event["event"], "data": json.dumps(event["data"])}
         finally:
             if terminal_event is None:
-                # Stream ended without done/error: client disconnect, server
-                # reload, or proxy drop — the #1 cause of "it just stopped".
+                # Stream ended without done/error: the SSE consumer
+                # disconnected (tab close, reload, proxy drop). The frontend
+                # persists the interrupted partial in its onAbort handler —
+                # saving here too would double it (same invariant as
+                # /api/chat/stream).
                 logger.warning(
                     "Agent prompt stream for session '%s' (convo '%s') ended "
-                    "without a terminal event — SSE consumer disconnected?",
+                    "without a terminal event — SSE consumer disconnected; "
+                    "skipping server-side save",
                     session_id, session.conversation_id,
                 )
-            if content or parts:
+            elif content or parts:
                 interruption = _interruption_for_stop_reason(stop_reason)
                 await save_assistant_message(
                     http_client,

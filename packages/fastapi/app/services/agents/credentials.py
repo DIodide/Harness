@@ -121,6 +121,12 @@ async def store_user_credential(
                 {
                     "credentialId": credential_id,
                     "userId": user_id,
+                    # The mutation rejects rotation when the stored row
+                    # belongs to a different agent — `kind` is validated
+                    # against the REQUEST's agent, so a mismatch would
+                    # otherwise corrupt the row (e.g. a codex auth.json
+                    # exported as ANTHROPIC_API_KEY).
+                    "agent": agent_id,
                     "kind": kind,
                     "ciphertext": ciphertext,
                     **({"label": label} if label else {}),
@@ -161,7 +167,7 @@ def _to_agent_credentials(agent_id: str, kind: str, value: str) -> AgentCredenti
             )
         return AgentCredentials(env={"OPENAI_API_KEY": value.strip()})
     if agent_id == "claude-code":
-        files: dict[str, str] = {}
+        merge_files: dict[str, dict] = {}
         if settings.claude_available_models:
             models = [
                 m.strip()
@@ -170,15 +176,21 @@ def _to_agent_credentials(agent_id: str, kind: str, value: str) -> AgentCredenti
             ]
             # availableModels entries surface in ACP configOptions and pass
             # to setModel verbatim — exposes models (e.g. Fable) the
-            # headless SDK doesn't list by default.
-            files[f"{SANDBOX_HOME}/.claude/settings.json"] = json.dumps(
-                {"availableModels": models}
-            )
+            # headless SDK doesn't list by default. Merged, not replaced:
+            # attached persistent sandboxes may hold the user's own
+            # settings.json (hooks, permissions, env).
+            merge_files[f"{SANDBOX_HOME}/.claude/settings.json"] = {
+                "availableModels": models
+            }
         if kind == "oauth_token":
             return AgentCredentials(
-                files=files, env={"CLAUDE_CODE_OAUTH_TOKEN": value.strip()}
+                json_merge_files=merge_files,
+                env={"CLAUDE_CODE_OAUTH_TOKEN": value.strip()},
             )
-        return AgentCredentials(files=files, env={"ANTHROPIC_API_KEY": value.strip()})
+        return AgentCredentials(
+            json_merge_files=merge_files,
+            env={"ANTHROPIC_API_KEY": value.strip()},
+        )
     if agent_id == "cursor":
         if kind == "auth_json":
             # cursor-agent's file-based auth store on Linux

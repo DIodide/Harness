@@ -100,7 +100,12 @@ interface UseChatStreamCallbacks {
 	onToolCall: (conversationId: string, event: ToolCallEvent) => void;
 	onToolResult: (
 		conversationId: string,
-		event: { call_id: string; result: string; diff?: ToolDiff | null },
+		event: {
+			call_id: string;
+			result: string;
+			diff?: ToolDiff | null;
+			status?: string | null;
+		},
 	) => void;
 	onDone: (
 		conversationId: string,
@@ -343,6 +348,7 @@ async function runAgentStream(
 					call_id: data.call_id as string,
 					result: (data.result ?? "") as string,
 					diff: (data.diff ?? null) as ToolDiff | null,
+					status: (data.status ?? null) as string | null,
 				});
 				break;
 			case "permission_request":
