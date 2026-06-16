@@ -1,6 +1,7 @@
 import {
 	Bot,
 	Brain,
+	Check,
 	ChevronRight,
 	CircleX,
 	ClipboardCheck,
@@ -8,11 +9,13 @@ import {
 	FileDiff,
 	FileText,
 	Globe,
+	Loader2,
 	MessageCircleQuestion,
 	Search,
 	Sparkles,
 	SquareTerminal,
 	Trash2,
+	Waypoints,
 	Wrench,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -98,6 +101,8 @@ export function kindIcon(kind: string, className: string) {
 			return <Bot size={10} className={className} />;
 		case "tool_search":
 			return <Sparkles size={10} className={className} />;
+		case "workflow":
+			return <Waypoints size={10} className={className} />;
 		default:
 			return <Wrench size={10} className={className} />;
 	}
@@ -114,8 +119,17 @@ export const KIND_LABELS: Record<string, string> = {
 	fetch: "fetch",
 	subagent: "subagent",
 	tool_search: "tool search",
+	workflow: "workflow",
 	think: "step",
 };
+
+/** Shape of the parsed Workflow metadata folded into args.workflow. */
+export interface WorkflowMeta {
+	name?: string;
+	description?: string;
+	phases?: Array<{ title: string; detail?: string }>;
+	script?: string;
+}
 
 /** Parse Claude's "Tools found: a, b, c" tool-search result into names. */
 export function parseToolSearchResult(result: string): string[] {
@@ -192,6 +206,8 @@ function summaryText(
 		}
 		case "tool_search":
 			return firstString(args.query) ?? "Searching for tools";
+		case "workflow":
+			return (args.workflow as WorkflowMeta | undefined)?.name ?? title;
 		default:
 			return title;
 	}
@@ -333,6 +349,101 @@ function FetchView({ result }: { result: string }) {
 	);
 }
 
+/**
+ * Inspectable rendering of a Claude Workflow (multi-agent orchestration,
+ * triggered by the "ultracode" keyword). Shows the workflow's name +
+ * description, its DECLARED phases (from meta.phases) as a static ordinal
+ * timeline, one whole-workflow status, and the final synthesis.
+ *
+ * Honesty constraint: claude-agent-acp drops the SDK's per-task/per-phase
+ * events, so we can NOT show live per-phase progress — the phases are the
+ * declared plan, and there is exactly ONE running/completed/failed status.
+ */
+function WorkflowView({
+	workflow,
+	phases,
+	result,
+	status,
+	isStreaming,
+}: {
+	workflow: WorkflowMeta;
+	phases: Array<{ title: string; detail?: string }>;
+	result: string;
+	status?: string | null;
+	isStreaming: boolean;
+}) {
+	const running = isStreaming && status !== "completed" && status !== "failed";
+	return (
+		<div className="space-y-2">
+			{workflow.description && (
+				<p className="text-[11px] text-muted-foreground">
+					{workflow.description}
+				</p>
+			)}
+
+			{phases.length > 0 && (
+				<div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+					<div className="mb-1 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+						<Waypoints size={11} />
+						Phases
+						<span className="ml-auto flex items-center gap-1 normal-case tracking-normal">
+							{phases.length}
+							{status === "completed" ? (
+								<Check size={11} className="text-green-500" />
+							) : status === "failed" ? (
+								<CircleX size={11} className="text-destructive" />
+							) : running ? (
+								<Loader2 size={11} className="animate-spin" />
+							) : null}
+						</span>
+					</div>
+					<ol className="space-y-1">
+						{phases.map((phase, idx) => (
+							<li
+								key={`${idx}-${phase.title}`}
+								className="flex items-start gap-2 text-xs"
+							>
+								<span className="mt-0.5 w-4 shrink-0 text-center font-mono text-[10px] text-muted-foreground/70">
+									{idx + 1}
+								</span>
+								<div className="min-w-0">
+									<span className="text-foreground">{phase.title}</span>
+									{phase.detail && (
+										<span className="block text-[11px] text-muted-foreground line-clamp-2">
+											{phase.detail}
+										</span>
+									)}
+								</div>
+							</li>
+						))}
+					</ol>
+					{running && (
+						<p
+							className="mt-1.5 text-[10px] text-muted-foreground/70"
+							title="The agent doesn't report per-phase status; these are the declared plan, not live progress."
+						>
+							ⓘ declared plan — runs in the agent's sandbox; per-phase progress
+							isn't reported
+						</p>
+					)}
+				</div>
+			)}
+
+			{(result || isStreaming) && (
+				<div className="max-h-80 min-w-0 overflow-y-auto rounded-md border border-border bg-background px-3 py-2 text-sm">
+					{result ? (
+						<MarkdownMessage content={stripFences(result)} />
+					) : (
+						<span className="text-[11px] text-muted-foreground">
+							Launching in the background…
+						</span>
+					)}
+				</div>
+			)}
+		</div>
+	);
+}
+
 export function AgentToolCallBlock({
 	kind,
 	title,
@@ -364,6 +475,7 @@ export function AgentToolCallBlock({
 			kind === "tool_search",
 	);
 	const [showRaw, setShowRaw] = useState(false);
+	const [showScript, setShowScript] = useState(false);
 	const summary = summaryText(kind, title, args, locations);
 	const output = result ? stripFences(result) : "";
 	// ExitPlanMode-style calls carry the plan document as input — render it
@@ -374,6 +486,12 @@ export function AgentToolCallBlock({
 		: null;
 	// A subagent's brief — the actual instructions it was spawned with.
 	const brief = typeof args.prompt === "string" ? args.prompt : null;
+	// Workflow orchestration: structured metadata folded into args.workflow.
+	const workflow =
+		kind === "workflow"
+			? (args.workflow as WorkflowMeta | undefined)
+			: undefined;
+	const phases = workflow?.phases ?? [];
 	const failed = status === "failed" || (exitCode != null && exitCode !== 0);
 
 	return (
@@ -407,6 +525,11 @@ export function AgentToolCallBlock({
 				>
 					{summary}
 				</span>
+				{kind === "workflow" && phases.length > 0 && (
+					<span className="shrink-0 rounded bg-foreground/10 px-1 text-[9px] font-medium text-muted-foreground">
+						{phases.length} phases
+					</span>
+				)}
 				{exitCode != null && exitCode !== 0 && (
 					<span className="shrink-0 text-[9px] font-semibold text-destructive">
 						exit {exitCode}
@@ -430,7 +553,15 @@ export function AgentToolCallBlock({
 						className="overflow-hidden"
 					>
 						<div className="mt-1.5 ml-4 min-w-0 space-y-2">
-							{kind === "ask_user" && qa && qa.length > 0 ? (
+							{kind === "workflow" && workflow ? (
+								<WorkflowView
+									workflow={workflow}
+									phases={phases}
+									result={output}
+									status={status}
+									isStreaming={isStreaming}
+								/>
+							) : kind === "ask_user" && qa && qa.length > 0 ? (
 								<QaView qa={qa} />
 							) : plan !== null ? (
 								<div className="max-h-80 min-w-0 overflow-y-auto rounded-md border border-border bg-background px-3 py-2 text-sm">
@@ -470,16 +601,34 @@ export function AgentToolCallBlock({
 									{output || (isStreaming ? "running…" : "(no output)")}
 								</pre>
 							)}
-							<button
-								type="button"
-								onClick={() => setShowRaw((s) => !s)}
-								className="text-[10px] text-muted-foreground/70 transition-colors hover:text-foreground"
-							>
-								{showRaw ? "Hide raw input" : "Show raw input"}
-							</button>
+							<div className="flex flex-wrap gap-3">
+								<button
+									type="button"
+									onClick={() => setShowRaw((s) => !s)}
+									className="text-[10px] text-muted-foreground/70 transition-colors hover:text-foreground"
+								>
+									{showRaw ? "Hide raw input" : "Show raw input"}
+								</button>
+								{kind === "workflow" && workflow?.script && (
+									<button
+										type="button"
+										onClick={() => setShowScript((s) => !s)}
+										className="text-[10px] text-muted-foreground/70 transition-colors hover:text-foreground"
+									>
+										{showScript
+											? "Hide generated script"
+											: "Show generated script"}
+									</button>
+								)}
+							</div>
 							{showRaw && (
 								<pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[10px] text-muted-foreground">
 									{JSON.stringify(args, null, 2)}
+								</pre>
+							)}
+							{showScript && workflow?.script && (
+								<pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[10px] text-muted-foreground">
+									{workflow.script}
 								</pre>
 							)}
 						</div>

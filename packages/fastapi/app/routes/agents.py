@@ -446,6 +446,7 @@ async def prompt(
                     else:
                         result_text = d.get("result") or ""
                         diff = d.get("diff")
+                        refined_args = d.get("arguments")
                         if diff and not result_text:
                             # Persist file edits readably even without content.
                             result_text = _diff_to_text(diff)
@@ -460,6 +461,12 @@ async def prompt(
                                     part["result"] = result_text
                                 if status:
                                     part["status"] = status
+                                # Late-arriving full input (e.g. Workflow script).
+                                if isinstance(refined_args, dict) and refined_args:
+                                    part["arguments"] = {
+                                        **(part.get("arguments") or {}),
+                                        **refined_args,
+                                    }
                                 break
                 yield {"event": event["event"], "data": json.dumps(event["data"])}
         finally:

@@ -119,6 +119,8 @@ interface UseChatStreamCallbacks {
 			append?: boolean;
 			output_delta?: string;
 			exit_code?: number | null;
+			/** Late-arriving full tool input (e.g. Workflow script). */
+			arguments?: Record<string, unknown> | null;
 		},
 	) => void;
 	onDone: (
@@ -376,6 +378,7 @@ async function runAgentStream(
 					append: Boolean(data.append),
 					output_delta: (data.output_delta ?? "") as string,
 					exit_code: (data.exit_code ?? null) as number | null,
+					arguments: (data.arguments ?? null) as Record<string, unknown> | null,
 				});
 				break;
 			case "permission_request":

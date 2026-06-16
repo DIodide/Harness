@@ -246,6 +246,15 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 				(Boolean(event.result) ||
 					event.status === "completed" ||
 					event.status === "failed");
+			// Late-arriving full tool input (e.g. the Workflow script) merges
+			// onto the args the streaming tool_call didn't have yet.
+			const mergedArgs =
+				event.arguments && Object.keys(event.arguments).length > 0
+					? (p: StreamPart) => ({
+							...(p.arguments ?? {}),
+							...event.arguments,
+						})
+					: null;
 			const patchPart = (p: StreamPart): StreamPart => {
 				if (append) {
 					return {
@@ -257,6 +266,7 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 							? { exitCode: event.exit_code }
 							: {}),
 						...(event.status ? { status: event.status } : {}),
+						...(mergedArgs ? { arguments: mergedArgs(p) } : {}),
 					};
 				}
 				return {
@@ -264,6 +274,7 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 					...(overwrite ? { result: event.result } : {}),
 					diff: event.diff ?? p.diff,
 					...(event.status ? { status: event.status } : {}),
+					...(mergedArgs ? { arguments: mergedArgs(p) } : {}),
 				};
 			};
 			setStreamStates((prev) => {

@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -212,6 +213,91 @@ def _parse_mcp_title(title: str) -> tuple[str, str] | None:
     return server, tool.replace("_", " ").strip()
 
 
+def _extract_balanced(text: str, start: int, open_ch: str, close_ch: str) -> str | None:
+    """Return text[start:end] spanning a balanced open/close pair, or None."""
+    depth = 0
+    for i in range(start, len(text)):
+        c = text[i]
+        if c == open_ch:
+            depth += 1
+        elif c == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+_WF_NAME = re.compile(r"""name\s*:\s*["'`]([^"'`]+)""")
+_WF_DESC = re.compile(r"""description\s*:\s*["'`]([^"'`]*)""")
+_WF_TITLE = re.compile(r"""title\s*:\s*["'`]([^"'`]+)""")
+_WF_DETAIL = re.compile(r"""detail\s*:\s*["'`]([^"'`]*)""")
+
+
+def _parse_workflow_script(raw_input: dict) -> dict | None:
+    """Parse a Claude Workflow tool's script (JS) into {name, description,
+    phases:[{title,detail}], script}. Tolerant + string-only (the script is
+    untrusted agent output — never eval). Returns None when there is no
+    script; always preserves the raw script so the disclosure still works.
+    """
+    if not isinstance(raw_input, dict):
+        return None
+    script = raw_input.get("script")
+    if not isinstance(script, str) or not script.strip():
+        script = next(
+            (v for v in raw_input.values() if isinstance(v, str) and v.strip()),
+            None,
+        )
+    if not script:
+        return None
+    out: dict = {"script": script[:20000]}
+    try:
+        midx = script.find("meta")
+        brace = script.find("{", midx) if midx != -1 else -1
+        meta_block = (
+            _extract_balanced(script, brace, "{", "}") if brace != -1 else None
+        )
+        if meta_block:
+            m = _WF_NAME.search(meta_block)
+            if m:
+                out["name"] = m.group(1)
+            d = _WF_DESC.search(meta_block)
+            if d and d.group(1):
+                out["description"] = d.group(1)
+            pidx = meta_block.find("phases")
+            pbr = meta_block.find("[", pidx) if pidx != -1 else -1
+            arr = (
+                _extract_balanced(meta_block, pbr, "[", "]") if pbr != -1 else None
+            )
+            phases: list[dict] = []
+            if arr:
+                i = 0
+                while len(phases) < 40:
+                    ob = arr.find("{", i)
+                    if ob == -1:
+                        break
+                    obj = _extract_balanced(arr, ob, "{", "}")
+                    if not obj:
+                        break
+                    t = _WF_TITLE.search(obj)
+                    if t:
+                        ph = {"title": t.group(1)}
+                        de = _WF_DETAIL.search(obj)
+                        if de and de.group(1):
+                            ph["detail"] = de.group(1)
+                        phases.append(ph)
+                    i = ob + len(obj)
+            out["phases"] = phases
+    except Exception:
+        logger.debug("workflow meta parse failed", exc_info=True)
+    return out
+
+
+def _with_workflow(raw_input: dict) -> dict:
+    """Inject parsed workflow metadata into a tool's arguments when present."""
+    wf = _parse_workflow_script(raw_input)
+    return {**raw_input, "workflow": wf} if wf else raw_input
+
+
 def normalize_session_update(update: dict) -> dict | None:
     """Map an ACP session/update payload to a Harness SSE event."""
     kind = update.get("sessionUpdate")
@@ -245,7 +331,14 @@ def normalize_session_update(update: dict) -> dict | None:
         # Refine the kind so the UI can render each flow first-class. These
         # are synthetic kinds the frontend branches on; no ACP agent emits
         # them, but they are deterministic from title/rawInput.
-        if _is_subagent_call(tool_kind, title, raw_input):
+        if title == "Workflow":
+            # Claude's multi-agent orchestration tool (ultracode). The script
+            # (meta.name/description/phases) is usually empty on this initial
+            # tool_call and arrives on a later tool_call_update rawInput; parse
+            # whatever is here and let the update branch fill it in.
+            tool_kind = "workflow"
+            raw_input = _with_workflow(raw_input)
+        elif _is_subagent_call(tool_kind, title, raw_input):
             tool_kind = "subagent"
         elif _is_tool_search(title, raw_input):
             tool_kind = "tool_search"
@@ -325,6 +418,14 @@ def normalize_session_update(update: dict) -> dict | None:
             if raw_output and status in ("completed", "failed")
             else ""
         )
+        # The initial tool_call often streams with empty/partial rawInput
+        # (content_block_start); the COMPLETE input arrives here on the
+        # refining tool_call_update. Forward it so the UI can fill in args it
+        # didn't have yet — notably the Workflow tool's script (meta.phases),
+        # which we parse into a structured `workflow` field here.
+        refined_input = update.get("rawInput")
+        if isinstance(refined_input, dict) and refined_input.get("script"):
+            refined_input = _with_workflow(refined_input)
         return {
             "event": "tool_result",
             "data": {
@@ -332,6 +433,11 @@ def normalize_session_update(update: dict) -> dict | None:
                 "status": status,
                 "result": result_text or fallback,
                 **({"diff": diff} if diff else {}),
+                **(
+                    {"arguments": refined_input}
+                    if isinstance(refined_input, dict) and refined_input
+                    else {}
+                ),
             },
         }
     if kind == "config_option_update":
