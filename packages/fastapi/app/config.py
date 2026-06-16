@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     acp_parked_ttl_minutes: int = 60
     # Idle ACP sessions are parked after this many minutes.
     acp_session_idle_minutes: int = 60
+    # Hard ceiling on a cold sandbox provision: if Daytona wedges, awaiters
+    # of session.ready_event must not hang forever. On timeout the session
+    # is marked errored with an actionable message so the next send recreates.
+    acp_provision_timeout_seconds: int = 180
     # Encrypts per-user agent credentials (AES-256-GCM; key derived via
     # SHA-256). Required for users to connect their own agent accounts —
     # there is no server-level credential fallback.

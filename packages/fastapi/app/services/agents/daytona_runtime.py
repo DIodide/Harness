@@ -18,7 +18,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
-from daytona_sdk import CreateSandboxFromSnapshotParams
+from daytona_sdk import (
+    CreateSandboxFromSnapshotParams,
+    DaytonaError,
+    DaytonaNotFoundError,
+    DaytonaRateLimitError,
+    DaytonaTimeoutError,
+)
 
 from app.config import settings
 from app.services.agents.registry import (
@@ -90,25 +96,64 @@ echo runtime-ready
 """
 
 
+# HTTP status codes worth retrying when the SDK wraps them in a DaytonaError.
+_RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+def is_transient_daytona_error(e: BaseException) -> bool:
+    """True when a Daytona failure is worth retrying.
+
+    The SDK funnels every API failure through typed DaytonaError subclasses
+    (NOT OSError): rate limits, gateway timeouts, and 5xx control-plane
+    blips are transient; a missing resource (404) is permanent. Raw socket
+    resets surface as OSError (requests.ConnectionError) and are transient.
+    """
+    if isinstance(e, DaytonaNotFoundError):
+        return False
+    if isinstance(e, (DaytonaRateLimitError, DaytonaTimeoutError)):
+        return True
+    if isinstance(e, DaytonaError):
+        # status_code is None for network-level failures (no response) —
+        # treat those as transient too.
+        return e.status_code is None or e.status_code in _RETRYABLE_STATUS
+    return isinstance(e, OSError)
+
+
+def _retry_after_seconds(e: BaseException, fallback: float) -> float:
+    """Honor a Retry-After header on rate-limit errors; else fall back."""
+    if isinstance(e, DaytonaError):
+        raw = e.headers.get("Retry-After") or e.headers.get("retry-after")
+        if raw:
+            try:
+                return min(float(raw), 30.0)
+            except (TypeError, ValueError):
+                pass
+    return fallback
+
+
 def _with_retries(operation, what: str, attempts: int = 4):
-    """Run a Daytona toolbox call, retrying transient connection failures.
+    """Run a Daytona toolbox call, retrying transient failures.
 
     Freshly created sandboxes occasionally reset the first toolbox
-    connection ("Connection aborted / reset by peer"), and the SDK does not
-    retry non-idempotent requests itself. requests.ConnectionError is an
-    OSError subclass, so OSError covers the whole family.
+    connection ("Connection aborted / reset by peer"), and the control
+    plane intermittently returns 429/5xx under load — the SDK does not
+    retry these itself. Transient failures (see is_transient_daytona_error)
+    back off and retry; permanent ones (e.g. 404 not-found) re-raise
+    immediately so callers can react without waiting out the whole budget.
     """
     last: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
             return operation()
-        except OSError as e:
+        except (OSError, DaytonaError) as e:
+            if not is_transient_daytona_error(e):
+                raise
             last = e
             logger.warning(
                 "Daytona toolbox call '%s' failed (attempt %d/%d): %s",
                 what, attempt, attempts, e,
             )
-            time.sleep(1.5 * attempt)
+            time.sleep(_retry_after_seconds(e, 1.5 * attempt))
     raise RuntimeError(f"Daytona toolbox call '{what}' kept failing: {last}")
 
 
@@ -340,7 +385,12 @@ def provision_agent_sandbox(
             "start shim",
         )
 
-        preview = sandbox.get_preview_link(shim_port(agent))
+        # Preview tokens rotate across stop/start and the control plane can
+        # transiently 5xx right after a cold start — retry (idempotent).
+        preview = _with_retries(
+            lambda: sandbox.get_preview_link(shim_port(agent)),
+            "get preview link",
+        )
         base_url = preview.url.rstrip("/")
         headers = {"x-shim-token": shim_token}
         preview_token = getattr(preview, "token", None)
