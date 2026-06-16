@@ -78,25 +78,30 @@ function AgentActivityStrip({ parts }: { parts: RenderablePart[] }) {
 		flat.push(p);
 		flat.push(...(p as OrganizedPart).children);
 	}
-	const counts = new Map<string, number>();
+	// Bucket by display LABEL (not raw kind) so kinds that share a label —
+	// edit/move both read "edit" — collapse into one chip instead of two.
+	const counts = new Map<string, { kind: string; n: number }>();
 	for (const p of flat) {
 		if (p.type !== "tool_call") continue;
 		if (partFinished(p)) continue;
 		const kind = p.kind ?? "other";
-		counts.set(kind, (counts.get(kind) ?? 0) + 1);
+		const label = KIND_LABELS[kind] ?? "tool";
+		const cur = counts.get(label);
+		if (cur) cur.n += 1;
+		else counts.set(label, { kind, n: 1 });
 	}
 	if (counts.size === 0) return null;
 	const order = [
 		"subagent",
-		"execute",
+		"command",
 		"edit",
-		"move",
+		"delete",
 		"read",
 		"search",
 		"fetch",
-		"tool_search",
-		"think",
-		"other",
+		"tool search",
+		"workflow",
+		"step",
 	];
 	const entries = [...counts.entries()].sort(
 		(a, b) => order.indexOf(a[0]) - order.indexOf(b[0]),
@@ -107,19 +112,16 @@ function AgentActivityStrip({ parts }: { parts: RenderablePart[] }) {
 			<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
 				running
 			</span>
-			{entries.map(([kind, n]) => {
-				const label = KIND_LABELS[kind] ?? "tool";
-				return (
-					<span
-						key={kind}
-						className="flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] text-foreground"
-					>
-						{kindIcon(kind, "shrink-0 text-muted-foreground")}
-						{n} {label}
-						{n > 1 ? "s" : ""}
-					</span>
-				);
-			})}
+			{entries.map(([label, { kind, n }]) => (
+				<span
+					key={label}
+					className="flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] text-foreground"
+				>
+					{kindIcon(kind, "shrink-0 text-muted-foreground")}
+					{n} {label}
+					{n > 1 ? "s" : ""}
+				</span>
+			))}
 		</div>
 	);
 }

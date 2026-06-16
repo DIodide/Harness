@@ -30,6 +30,11 @@ import {
 	useChatStream,
 } from "./use-chat-stream";
 
+// Mirror of the backend cap (routes/agents.py _MAX_TOOL_RESULT_CHARS): keep a
+// runaway terminal stream from bloating the persisted message past Convex's
+// document limit.
+const MAX_TOOL_RESULT_CHARS = 256_000;
+
 export const EMPTY_STREAM_STATE: ConvoStreamState = {
 	content: null,
 	reasoning: null,
@@ -255,12 +260,16 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 							...event.arguments,
 						})
 					: null;
+			const capResult = (s: string) =>
+				s.length > MAX_TOOL_RESULT_CHARS
+					? `…[earlier output truncated]\n${s.slice(-MAX_TOOL_RESULT_CHARS)}`
+					: s;
 			const patchPart = (p: StreamPart): StreamPart => {
 				if (append) {
 					return {
 						...p,
 						result: event.output_delta
-							? (p.result ?? "") + event.output_delta
+							? capResult((p.result ?? "") + event.output_delta)
 							: p.result,
 						...(event.exit_code !== null && event.exit_code !== undefined
 							? { exitCode: event.exit_code }

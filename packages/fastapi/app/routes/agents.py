@@ -55,6 +55,11 @@ async def _user_context(http_client: httpx.AsyncClient, user: dict) -> UserConte
     return UserContext(user_id=user.get("sub"), princeton_netid=netid)
 
 
+# Cap on a single tool call's accumulated result (terminal output) kept in
+# the persisted message — Convex documents have a ~1MB ceiling, and the
+# whole message write fails if a pathologically verbose command blows it.
+_MAX_TOOL_RESULT_CHARS = 256_000
+
 # Combined base64 payload cap for image blocks (~15 MB of raw image data).
 MAX_IMAGE_BLOCK_BYTES = 20_000_000
 
@@ -435,9 +440,19 @@ async def prompt(
                                 and part["call_id"] == call_id
                             ):
                                 if d.get("output_delta"):
-                                    part["result"] = (part.get("result") or "") + d[
+                                    combined = (part.get("result") or "") + d[
                                         "output_delta"
                                     ]
+                                    # Cap accumulated output so a pathologically
+                                    # verbose command can't push the persisted
+                                    # message past Convex's document size limit
+                                    # (which would fail the whole write).
+                                    if len(combined) > _MAX_TOOL_RESULT_CHARS:
+                                        combined = (
+                                            "…[earlier output truncated]\n"
+                                            + combined[-_MAX_TOOL_RESULT_CHARS:]
+                                        )
+                                    part["result"] = combined
                                 if status:
                                     part["status"] = status
                                 if d.get("exit_code") is not None:

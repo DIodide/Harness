@@ -58,6 +58,12 @@ class TestKindSynthesis:
         assert d["server_name"] == "github"
         assert d["tool"] == "create issue"
 
+    def test_mcp_named_toolsearch_is_mcp_not_tool_search(self):
+        # An MCP tool literally named ToolSearch must keep MCP attribution.
+        d = tc(toolCallId="m", title="mcp__srv__ToolSearch", kind="other", rawInput={})
+        assert d["kind"] != "tool_search"
+        assert d["server_name"] == "srv"
+
 
 class TestToolCallUpdate:
     def test_terminal_output_append(self):
@@ -84,6 +90,20 @@ class TestToolCallUpdate:
         d = tcu(toolCallId="x", status="in_progress")
         assert d["result"] == ""
         assert d["status"] == "in_progress"
+
+    def test_content_completion_defaults_to_completed(self):
+        # A content-bearing update with no explicit status is a completion.
+        d = tcu(
+            toolCallId="x",
+            content=[{"type": "content", "content": {"type": "text", "text": "ok"}}],
+        )
+        assert d["result"] == "ok"
+        assert d["status"] == "completed"
+
+    def test_refined_input_only_update_stays_pending(self):
+        # The Workflow script arriving (no result) must NOT mark completed.
+        d = tcu(toolCallId="w", rawInput={"script": WORKFLOW_SCRIPT})
+        assert d["status"] is None
 
 
 class TestWorkflowParser:
@@ -115,3 +135,20 @@ class TestWorkflowParser:
     def test_malformed_never_raises(self):
         wf = _parse_workflow_script({"script": "export const meta = { name: 'x', phases:"})
         assert wf["script"].startswith("export const meta")
+
+    def test_braces_inside_string_literals(self):
+        # Braces inside meta string values must not break brace-matching.
+        script = (
+            "export const meta = { name: 'demo', "
+            "description: 'uses {curly} and }unbalanced', "
+            "phases: [ { title: 'P1', detail: 'do }this{ thing' } ] }"
+        )
+        wf = _parse_workflow_script({"script": script})
+        assert wf["name"] == "demo"
+        assert wf["description"] == "uses {curly} and }unbalanced"
+        assert wf["phases"] == [{"title": "P1", "detail": "do }this{ thing"}]
+
+    def test_oversized_script_capped(self):
+        big = "export const meta = { name: 'x' }\n" + ("a" * 50_000)
+        wf = _parse_workflow_script({"script": big})
+        assert len(wf["script"]) == 20_000

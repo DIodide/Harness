@@ -193,6 +193,8 @@ def _is_subagent_call(kind: str, title: str, raw_input: dict) -> bool:
 
 def _is_tool_search(title: str, raw_input: dict) -> bool:
     """True for a tool-discovery call (Claude's ToolSearch / server tool)."""
+    if (title or "").startswith("mcp__"):
+        return False  # an MCP tool named *ToolSearch* is still an MCP call
     t = (title or "").lower()
     return "toolsearch" in t or "tool search" in t or "tool_search" in t
 
@@ -214,11 +216,27 @@ def _parse_mcp_title(title: str) -> tuple[str, str] | None:
 
 
 def _extract_balanced(text: str, start: int, open_ch: str, close_ch: str) -> str | None:
-    """Return text[start:end] spanning a balanced open/close pair, or None."""
+    """Return text[start:end] spanning a balanced open/close pair, or None.
+
+    Skips braces inside JS string literals ('...', "...", `...`) so brace
+    characters in workflow meta values (e.g. a phase detail) aren't counted.
+    """
     depth = 0
+    quote: str | None = None
+    escaped = False
     for i in range(start, len(text)):
         c = text[i]
-        if c == open_ch:
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif c == "\\":
+                escaped = True
+            elif c == quote:
+                quote = None
+            continue
+        if c in ("'", '"', "`"):
+            quote = c
+        elif c == open_ch:
             depth += 1
         elif c == close_ch:
             depth -= 1
@@ -293,9 +311,19 @@ def _parse_workflow_script(raw_input: dict) -> dict | None:
 
 
 def _with_workflow(raw_input: dict) -> dict:
-    """Inject parsed workflow metadata into a tool's arguments when present."""
+    """Inject parsed workflow metadata into a tool's arguments when present.
+
+    Also caps the raw `script` (which is persisted with the tool call) to the
+    same bound as the parsed copy so a very large generated script can't bloat
+    the persisted message.
+    """
     wf = _parse_workflow_script(raw_input)
-    return {**raw_input, "workflow": wf} if wf else raw_input
+    if wf is None:
+        return raw_input
+    out = {**raw_input, "workflow": wf}
+    if isinstance(out.get("script"), str):
+        out["script"] = out["script"][:20000]
+    return out
 
 
 def normalize_session_update(update: dict) -> dict | None:
@@ -426,11 +454,16 @@ def normalize_session_update(update: dict) -> dict | None:
         refined_input = update.get("rawInput")
         if isinstance(refined_input, dict) and refined_input.get("script"):
             refined_input = _with_workflow(refined_input)
+        # A content-bearing update with no explicit status IS a completion —
+        # mark it so the UI stops showing it as "running" (notably execute
+        # calls, which the frontend won't treat truthy-result alone as done
+        # because their output also streams via the append path).
+        effective_status = status or ("completed" if (result_text or fallback) else None)
         return {
             "event": "tool_result",
             "data": {
                 "call_id": update.get("toolCallId", ""),
-                "status": status,
+                "status": effective_status,
                 "result": result_text or fallback,
                 **({"diff": diff} if diff else {}),
                 **(
