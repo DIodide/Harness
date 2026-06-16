@@ -18,6 +18,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 logging.basicConfig(level=logging.WARNING)
 
+from acp_e2e import seed_claude_credential
+
 from app.models import HarnessConfig
 from app.services.agents.session_manager import get_session_manager
 
@@ -31,6 +33,7 @@ QUEUED = "Separate question: what is 2+2? Reply with exactly QUEUED-ANSWER-4."
 
 async def main() -> None:
     user_id = sys.argv[1] if len(sys.argv) > 1 else "debug-user"
+    await seed_claude_credential(user_id)
     manager = get_session_manager()
     session = await manager.create(
         user_id=user_id, agent_id="claude-code",

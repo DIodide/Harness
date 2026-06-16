@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -171,6 +172,160 @@ def _claude_meta(update: dict) -> dict:
     return claude if isinstance(claude, dict) else {}
 
 
+def _is_subagent_call(kind: str, title: str, raw_input: dict) -> bool:
+    """True for an Agent/Task tool that spawns a background subagent.
+
+    claude-agent-acp maps Agent/Task to kind "think" (same as TodoWrite and
+    the Task* tools). It titles the call from `input.description`, falling
+    back to the literal "Task"/"Agent" when there is none — so we match
+    either that fallback title or the subagent brief signature (a `prompt`).
+    TodoWrite ("Update todos (N)") and TaskCreate ("Create task: X") have
+    neither and stay plain "think".
+    """
+    if kind != "think":
+        return False
+    if title in ("Task", "Agent"):
+        return True
+    return isinstance(raw_input, dict) and "prompt" in raw_input and (
+        "description" in raw_input or "subagent_type" in raw_input
+    )
+
+
+def _is_tool_search(title: str, raw_input: dict) -> bool:
+    """True for a tool-discovery call (Claude's ToolSearch / server tool)."""
+    if (title or "").startswith("mcp__"):
+        return False  # an MCP tool named *ToolSearch* is still an MCP call
+    t = (title or "").lower()
+    return "toolsearch" in t or "tool search" in t or "tool_search" in t
+
+
+def _parse_mcp_title(title: str) -> tuple[str, str] | None:
+    """Split an MCP tool title into (server, clean_tool).
+
+    Claude names MCP tools `mcp__<server>__<tool>`; this is the unambiguous
+    form. Returns None for non-MCP titles (slash/path forms are too risky to
+    parse — the frontend keeps its own light heuristic for those).
+    """
+    if not title or not title.startswith("mcp__"):
+        return None
+    rest = title[len("mcp__") :]
+    if "__" not in rest:
+        return None
+    server, tool = rest.split("__", 1)
+    return server, tool.replace("_", " ").strip()
+
+
+def _extract_balanced(text: str, start: int, open_ch: str, close_ch: str) -> str | None:
+    """Return text[start:end] spanning a balanced open/close pair, or None.
+
+    Skips braces inside JS string literals ('...', "...", `...`) so brace
+    characters in workflow meta values (e.g. a phase detail) aren't counted.
+    """
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif c == "\\":
+                escaped = True
+            elif c == quote:
+                quote = None
+            continue
+        if c in ("'", '"', "`"):
+            quote = c
+        elif c == open_ch:
+            depth += 1
+        elif c == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+_WF_NAME = re.compile(r"""name\s*:\s*["'`]([^"'`]+)""")
+_WF_DESC = re.compile(r"""description\s*:\s*["'`]([^"'`]*)""")
+_WF_TITLE = re.compile(r"""title\s*:\s*["'`]([^"'`]+)""")
+_WF_DETAIL = re.compile(r"""detail\s*:\s*["'`]([^"'`]*)""")
+
+
+def _parse_workflow_script(raw_input: dict) -> dict | None:
+    """Parse a Claude Workflow tool's script (JS) into {name, description,
+    phases:[{title,detail}], script}. Tolerant + string-only (the script is
+    untrusted agent output — never eval). Returns None when there is no
+    script; always preserves the raw script so the disclosure still works.
+    """
+    if not isinstance(raw_input, dict):
+        return None
+    script = raw_input.get("script")
+    if not isinstance(script, str) or not script.strip():
+        script = next(
+            (v for v in raw_input.values() if isinstance(v, str) and v.strip()),
+            None,
+        )
+    if not script:
+        return None
+    out: dict = {"script": script[:20000]}
+    try:
+        midx = script.find("meta")
+        brace = script.find("{", midx) if midx != -1 else -1
+        meta_block = (
+            _extract_balanced(script, brace, "{", "}") if brace != -1 else None
+        )
+        if meta_block:
+            m = _WF_NAME.search(meta_block)
+            if m:
+                out["name"] = m.group(1)
+            d = _WF_DESC.search(meta_block)
+            if d and d.group(1):
+                out["description"] = d.group(1)
+            pidx = meta_block.find("phases")
+            pbr = meta_block.find("[", pidx) if pidx != -1 else -1
+            arr = (
+                _extract_balanced(meta_block, pbr, "[", "]") if pbr != -1 else None
+            )
+            phases: list[dict] = []
+            if arr:
+                i = 0
+                while len(phases) < 40:
+                    ob = arr.find("{", i)
+                    if ob == -1:
+                        break
+                    obj = _extract_balanced(arr, ob, "{", "}")
+                    if not obj:
+                        break
+                    t = _WF_TITLE.search(obj)
+                    if t:
+                        ph = {"title": t.group(1)}
+                        de = _WF_DETAIL.search(obj)
+                        if de and de.group(1):
+                            ph["detail"] = de.group(1)
+                        phases.append(ph)
+                    i = ob + len(obj)
+            out["phases"] = phases
+    except Exception:
+        logger.debug("workflow meta parse failed", exc_info=True)
+    return out
+
+
+def _with_workflow(raw_input: dict) -> dict:
+    """Inject parsed workflow metadata into a tool's arguments when present.
+
+    Also caps the raw `script` (which is persisted with the tool call) to the
+    same bound as the parsed copy so a very large generated script can't bloat
+    the persisted message.
+    """
+    wf = _parse_workflow_script(raw_input)
+    if wf is None:
+        return raw_input
+    out = {**raw_input, "workflow": wf}
+    if isinstance(out.get("script"), str):
+        out["script"] = out["script"][:20000]
+    return out
+
+
 def normalize_session_update(update: dict) -> dict | None:
     """Map an ACP session/update payload to a Harness SSE event."""
     kind = update.get("sessionUpdate")
@@ -197,23 +352,72 @@ def normalize_session_update(update: dict) -> dict | None:
             },
         }
     if kind == "tool_call":
+        raw_input = update.get("rawInput") or {}
+        title = update.get("title") or update.get("kind") or "tool"
+        tool_kind = update.get("kind") or "other"
+        extra: dict = {}
+        # Refine the kind so the UI can render each flow first-class. These
+        # are synthetic kinds the frontend branches on; no ACP agent emits
+        # them, but they are deterministic from title/rawInput.
+        if title == "Workflow":
+            # Claude's multi-agent orchestration tool (ultracode). The script
+            # (meta.name/description/phases) is usually empty on this initial
+            # tool_call and arrives on a later tool_call_update rawInput; parse
+            # whatever is here and let the update branch fill it in.
+            tool_kind = "workflow"
+            raw_input = _with_workflow(raw_input)
+        elif _is_subagent_call(tool_kind, title, raw_input):
+            tool_kind = "subagent"
+        elif _is_tool_search(title, raw_input):
+            tool_kind = "tool_search"
+        else:
+            mcp = _parse_mcp_title(title)
+            if mcp is not None:
+                extra["server_name"] = mcp[0]
+                title = mcp[1]  # show the clean tool name; server in the badge
         return {
             "event": "tool_call",
             "data": {
                 "call_id": update.get("toolCallId", ""),
-                "tool": update.get("title") or update.get("kind") or "tool",
-                "arguments": update.get("rawInput") or {},
+                "tool": title,
+                "arguments": raw_input,
                 # ACP tool kind (execute|read|edit|delete|move|search|fetch|
-                # think|switch_mode|other) — drives first-class rendering.
-                "kind": update.get("kind") or "other",
+                # think|switch_mode|other) plus our synthetic subagent/
+                # tool_search — drives first-class rendering.
+                "kind": tool_kind,
                 "status": update.get("status"),
                 "locations": update.get("locations") or [],
+                **extra,
                 # Set for tool calls made by a background/sub agent — the UI
                 # nests these under the spawning Task tool call.
                 **({"parent_id": parent_id} if parent_id else {}),
             },
         }
     if kind == "tool_call_update":
+        status = update.get("status")
+        # Display-only live command output (codex exec deltas / claude bash).
+        # The agent ran the command in its own sandbox and streams output bytes
+        # via _meta.terminal_output (per-chunk) and _meta.terminal_exit (at end).
+        # These APPEND to the call's output instead of replacing it — and we
+        # must NOT fall through to the rawOutput fallback below, which would
+        # overwrite the streamed terminal with a JSON dump at completion.
+        meta = update.get("_meta") or {}
+        term_out = meta.get("terminal_output") or {}
+        term_exit = meta.get("terminal_exit") or {}
+        output_delta = term_out.get("data") if isinstance(term_out, dict) else None
+        exit_code = term_exit.get("exit_code") if isinstance(term_exit, dict) else None
+        if output_delta is not None or exit_code is not None:
+            data: dict = {
+                "call_id": update.get("toolCallId", ""),
+                "append": True,
+                "status": status,
+            }
+            if output_delta:
+                data["output_delta"] = output_delta
+            if exit_code is not None:
+                data["exit_code"] = exit_code
+            return {"event": "tool_result", "data": data}
+
         content = update.get("content") or []
         result_text = "\n".join(
             _content_block_text(c.get("content") or {})
@@ -233,7 +437,6 @@ def normalize_session_update(update: dict) -> dict | None:
             ),
             None,
         )
-        status = update.get("status")
         raw_output = update.get("rawOutput")
         # Only terminal updates may fabricate a result from rawOutput: a
         # truthy result marks the call finished in the UI, and ACP allows
@@ -243,13 +446,31 @@ def normalize_session_update(update: dict) -> dict | None:
             if raw_output and status in ("completed", "failed")
             else ""
         )
+        # The initial tool_call often streams with empty/partial rawInput
+        # (content_block_start); the COMPLETE input arrives here on the
+        # refining tool_call_update. Forward it so the UI can fill in args it
+        # didn't have yet — notably the Workflow tool's script (meta.phases),
+        # which we parse into a structured `workflow` field here.
+        refined_input = update.get("rawInput")
+        if isinstance(refined_input, dict) and refined_input.get("script"):
+            refined_input = _with_workflow(refined_input)
+        # A content-bearing update with no explicit status IS a completion —
+        # mark it so the UI stops showing it as "running" (notably execute
+        # calls, which the frontend won't treat truthy-result alone as done
+        # because their output also streams via the append path).
+        effective_status = status or ("completed" if (result_text or fallback) else None)
         return {
             "event": "tool_result",
             "data": {
                 "call_id": update.get("toolCallId", ""),
-                "status": status,
+                "status": effective_status,
                 "result": result_text or fallback,
                 **({"diff": diff} if diff else {}),
+                **(
+                    {"arguments": refined_input}
+                    if isinstance(refined_input, dict) and refined_input
+                    else {}
+                ),
             },
         }
     if kind == "config_option_update":
@@ -954,8 +1175,61 @@ class AgentSessionManager:
         if event is not None:
             await session.event_queue.put(event)
 
+    async def _handle_cursor_notification(
+        self, session: AgentSession, method: str, params: dict
+    ) -> bool:
+        """Best-effort mapping of Cursor's extension notifications onto our
+        existing event vocabulary. Schemas are inferred (Cursor is
+        closed-source and not live-verified here), so each path degrades to a
+        no-op on an unexpected shape rather than erroring."""
+        if method in ("cursor/update_todos", "cursor/updateTodos"):
+            todos = params.get("todos") or params.get("items") or []
+            entries = [
+                {
+                    "content": t.get("content") or t.get("title") or t.get("text") or "",
+                    "status": t.get("status") or "pending",
+                }
+                for t in todos
+                if isinstance(t, dict)
+            ]
+            await session.event_queue.put({"event": "plan", "data": {"entries": entries}})
+            return True
+        if method in ("cursor/task", "cursor/subagent"):
+            task = params.get("task") or params
+            call_id = str(task.get("id") or task.get("taskId") or uuid.uuid4().hex)
+            desc = task.get("description") or task.get("prompt") or "Subagent"
+            await session.event_queue.put(
+                {
+                    "event": "tool_call",
+                    "data": {
+                        "call_id": call_id,
+                        "tool": desc,
+                        "arguments": {"description": desc, "prompt": task.get("prompt")},
+                        "kind": "subagent",
+                        "status": task.get("status"),
+                        "locations": [],
+                    },
+                }
+            )
+            if task.get("status") in ("completed", "failed"):
+                await session.event_queue.put(
+                    {
+                        "event": "tool_result",
+                        "data": {
+                            "call_id": call_id,
+                            "status": task.get("status"),
+                            "result": task.get("result") or task.get("summary") or "",
+                        },
+                    }
+                )
+            return True
+        return False
+
     def _make_notification_handler(self, session: AgentSession):
         async def handle(method: str, params: dict) -> None:
+            if session.agent_id == "cursor" and method.startswith("cursor/"):
+                if await self._handle_cursor_notification(session, method, params):
+                    return
             if method != "session/update":
                 return
             if params.get("sessionId") != session.acp_session_id:
