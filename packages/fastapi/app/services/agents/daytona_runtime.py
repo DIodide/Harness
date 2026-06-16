@@ -125,7 +125,9 @@ def _retry_after_seconds(e: BaseException, fallback: float) -> float:
         raw = e.headers.get("Retry-After") or e.headers.get("retry-after")
         if raw:
             try:
-                return min(float(raw), 30.0)
+                # Floor at 0: a negative/garbage Retry-After must never reach
+                # time.sleep (which raises ValueError on a negative argument).
+                return min(max(float(raw), 0.0), 30.0)
             except (TypeError, ValueError):
                 pass
     return fallback
@@ -135,11 +137,13 @@ def _with_retries(operation, what: str, attempts: int = 4):
     """Run a Daytona toolbox call, retrying transient failures.
 
     Freshly created sandboxes occasionally reset the first toolbox
-    connection ("Connection aborted / reset by peer"), and the control
-    plane intermittently returns 429/5xx under load — the SDK does not
-    retry these itself. Transient failures (see is_transient_daytona_error)
-    back off and retry; permanent ones (e.g. 404 not-found) re-raise
-    immediately so callers can react without waiting out the whole budget.
+    connection, and the control plane intermittently returns 429/5xx under
+    load. The SDK wraps urllib3 connection errors (which are NOT OSError) and
+    HTTP errors into typed DaytonaError subclasses, so we catch both
+    OSError (raw socket failures) and DaytonaError. Transient failures (see
+    is_transient_daytona_error) back off and retry; permanent ones (e.g. 404
+    not-found, 4xx) re-raise immediately so callers can react without
+    waiting out the whole budget.
     """
     last: Exception | None = None
     for attempt in range(1, attempts + 1):

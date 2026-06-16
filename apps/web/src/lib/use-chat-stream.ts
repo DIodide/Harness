@@ -8,7 +8,6 @@ import {
 	type AgentQuestionRequest,
 	ensureAgentSession,
 	forgetAgentSession,
-	getCachedAgentSessionId,
 } from "./agent-mode";
 import { checkChatRateLimit } from "./chat-ratelimit";
 import { buildAcpImageBlocks } from "./multimodal";
@@ -322,12 +321,11 @@ async function runAgentStream(
 
 	// On a cold start the sandbox provision (~30s) happens BEFORE the prompt
 	// SSE opens, so the gateway's own "provisioning" status frame can't reach
-	// us yet. Surface the honest "Starting… up to ~30s" copy from t=0 (only
-	// when there's no warm session — a reused session shows the normal
-	// thinking spinner instead of a misleading cold-start message).
-	if (!getCachedAgentSessionId(convoId, agent)) {
+	// us yet. ensureAgentSession fires onProvisioning exactly when it's about
+	// to pay a cold start (a new OR recreated session) — surface the honest
+	// "Starting… up to ~30s" copy then; a warm reuse stays silent.
+	const onProvisioning = () =>
 		cb.onAgentStatus?.(convoId, { state: "provisioning", agent });
-	}
 
 	let sessionId = await ensureAgentSession(
 		token,
@@ -335,18 +333,19 @@ async function runAgentStream(
 		body.harness as never,
 		convoId,
 		controller.signal,
+		onProvisioning,
 	);
 	let response = await prompt(sessionId);
 	if (response.status === 404) {
 		// Session was reaped or the gateway restarted — recreate once.
 		forgetAgentSession(convoId, agent);
-		cb.onAgentStatus?.(convoId, { state: "provisioning", agent });
 		sessionId = await ensureAgentSession(
 			token,
 			agent,
 			body.harness as never,
 			convoId,
 			controller.signal,
+			onProvisioning,
 		);
 		response = await prompt(sessionId);
 	}

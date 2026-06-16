@@ -24,7 +24,7 @@ import uuid
 from dataclasses import dataclass, field
 
 import httpx
-from daytona_sdk import DaytonaError, DaytonaNotFoundError
+from daytona_sdk import DaytonaNotFoundError
 
 from app.config import settings
 from app.models import HarnessConfig, McpServer
@@ -63,10 +63,9 @@ class SessionProvisioningError(Exception):
     genericized by classify_agent_error.
     """
 
-    def __init__(self, user_message: str, *, retryable: bool = False):
+    def __init__(self, user_message: str):
         super().__init__(user_message)
         self.user_message = user_message
-        self.retryable = retryable
 
 
 def _log_background_error(task: asyncio.Task) -> None:
@@ -74,34 +73,35 @@ def _log_background_error(task: asyncio.Task) -> None:
         logger.warning("Background ACP task failed: %s", task.exception())
 
 
-def classify_agent_error(e: BaseException) -> tuple[str, bool]:
-    """Map a raw provisioning/transport exception to (user_message, retryable).
+def classify_agent_error(e: BaseException) -> str:
+    """Map a raw provisioning/transport exception to a user-facing message.
 
     The raw exception (ACP protocol codes, multi-line shim logs, Daytona
     stack traces) is kept in the server log; the user sees something
-    actionable. `retryable` lets the UI offer a one-click resend instead of
-    a dead end.
+    actionable instead.
     """
     if isinstance(e, SessionProvisioningError):
-        return (e.user_message, e.retryable)
+        return e.user_message
     if isinstance(e, DaytonaNotFoundError):
-        return ("Your agent sandbox no longer exists — starting a fresh one.", True)
+        return "Your agent sandbox no longer exists — starting a fresh one."
     if isinstance(e, asyncio.TimeoutError):
         return (
             "The agent sandbox is taking longer than usual to start. "
-            "Please try again.",
-            True,
+            "Please try again."
         )
-    if isinstance(e, (AcpTransportError, DaytonaError)) or is_transient_daytona_error(e):
+    # Only TRANSIENT failures get the "restarted, reconnect" copy — a
+    # permanent DaytonaError (e.g. 401/403/422) would mislead the user into
+    # resending something that will deterministically fail again.
+    if isinstance(e, AcpTransportError) or is_transient_daytona_error(e):
         return (
             "Lost connection to the agent sandbox — it may have restarted. "
-            "Send your message again to reconnect.",
-            True,
+            "Send your message again to reconnect."
         )
     if isinstance(e, AcpError):
-        return (f"The agent reported an error: {e}", False)
-    # Provisioning RuntimeError (shim never became healthy) and anything else.
-    return ("The agent failed to start in its sandbox. Please try again.", True)
+        return f"The agent reported an error: {e}"
+    # Permanent DaytonaError (non-404 4xx), provisioning RuntimeError (shim
+    # never became healthy), and anything else.
+    return "The agent failed to start in its sandbox. Please try again."
 
 
 # A session in one of these states is mid-flight, not idle — the reaper and
@@ -111,17 +111,25 @@ _ACTIVE_STATUSES = frozenset({"prompting", "provisioning", "reviving"})
 
 
 def _session_is_reapable(
-    status: str, turn_guard: int, last_activity: float, now: float, ttl: float
+    status: str,
+    turn_guard: int,
+    last_activity: float,
+    now: float,
+    ttl: float,
+    lock_held: bool,
 ) -> bool:
     """True when an idle session is safe to park/destroy.
 
     Provisioning/reviving sessions are NOT idle (last_activity isn't bumped
-    during a cold start, so a slow provision would otherwise look stale), and
-    a non-zero turn_guard means a turn is in its pre-lock awaits.
+    during a cold start, so a slow provision would otherwise look stale); a
+    non-zero turn_guard means a turn is in its pre-lock awaits; and a held
+    session.lock means mid-flight ACP work (e.g. switch_harness opening a new
+    ACP session under status 'ready') that a teardown would corrupt — the
+    same guard _claim_parked uses to avoid stealing a busy runtime.
     """
     if status in _ACTIVE_STATUSES:
         return False
-    if turn_guard > 0:
+    if turn_guard > 0 or lock_held:
         return False
     return now - last_activity > ttl
 
@@ -849,20 +857,20 @@ class AgentSessionManager:
             )
         except asyncio.TimeoutError:
             # to_thread can't truly cancel the underlying Daytona call, so a
-            # sandbox may still be created and orphaned — the per-user cap and
-            # idle reaper reclaim it. The win is that awaiters unblock now.
+            # sandbox may still be created and then orphaned (the session ends
+            # with runtime=None, so neither the reaper nor the per-user cap
+            # tracks it; Daytona only auto-stops it). The win here is purely
+            # that ready_event awaiters unblock now instead of hanging forever.
             logger.error(
                 "Provisioning for session '%s' exceeded %ss — marking errored",
                 session.id, settings.acp_provision_timeout_seconds,
             )
-            message, _ = classify_agent_error(asyncio.TimeoutError())
             session.status = "error"
-            session.error = message
+            session.error = classify_agent_error(asyncio.TimeoutError())
         except Exception as e:
             logger.exception("Provisioning failed for session '%s'", session.id)
-            message, _ = classify_agent_error(e)
             session.status = "error"
-            session.error = message
+            session.error = classify_agent_error(e)
         finally:
             session.ready_event.set()
 
@@ -1022,8 +1030,7 @@ class AgentSessionManager:
             raise SessionProvisioningError(
                 f"Sandbox limit reached ({count}/{MAX_SANDBOXES_PER_USER}) — "
                 "delete a sandbox in Manage Sandboxes before starting "
-                "another agent session.",
-                retryable=False,
+                "another agent session."
             )
 
     async def _register_sandbox_record(
@@ -1048,6 +1055,23 @@ class AgentSessionManager:
                 "Could not register agent sandbox '%s' in Convex: %s",
                 sandbox_id, e,
             )
+
+    async def _reregister_after_loss(
+        self, user_id: str, old_sandbox_id: str, new_sandbox_id: str,
+        agent_name: str,
+    ) -> None:
+        """Swap the Manage Sandboxes record when a gone sandbox is replaced
+        by a fresh one during revive — drop the dead id (frees the cap) then
+        register the new one."""
+        from app.services.convex import ConvexMutationError, run_convex_mutation
+
+        with contextlib.suppress(ConvexMutationError):
+            await run_convex_mutation(
+                self._http_client(),
+                "sandboxes:removeByDaytonaId",
+                {"daytonaSandboxId": old_sandbox_id},
+            )
+        await self._register_sandbox_record(user_id, new_sandbox_id, agent_name)
 
     async def _revive(self, session: AgentSession) -> None:
         """Re-provision a session whose runtime went stale.
@@ -1075,6 +1099,7 @@ class AgentSessionManager:
             credential_id=session.harness.agent_credential_id,
         )
         owns = session.runtime.owns_sandbox
+        old_sandbox_id = session.runtime.sandbox_id
         try:
             session.runtime = await asyncio.to_thread(
                 provision_agent_sandbox,
@@ -1104,6 +1129,17 @@ class AgentSessionManager:
                 None,
                 None,
             )
+            # The Manage Sandboxes record still points at the dead sandbox and
+            # counts against the per-user cap — drop it and register the fresh
+            # one. Best-effort: bookkeeping must not fail the revive.
+            if session.runtime.owns_sandbox:
+                reregister = asyncio.create_task(
+                    self._reregister_after_loss(
+                        session.user_id, old_sandbox_id,
+                        session.runtime.sandbox_id, agent.name,
+                    )
+                )
+                reregister.add_done_callback(_log_background_error)
         await self._rebuild_connection(session)
         session.pending_replay = bool(session.transcript)
         session.status = "ready"
@@ -1136,9 +1172,8 @@ class AgentSessionManager:
             return True
         except Exception as e:
             logger.exception("Revive failed for session '%s'", session.id)
-            message, _ = classify_agent_error(e)
             session.status = "error"
-            session.error = message
+            session.error = classify_agent_error(e)
             return False
 
     async def _open_acp_session(self, session: AgentSession, user_ctx) -> None:
@@ -1617,10 +1652,7 @@ class AgentSessionManager:
             # message is already user-friendly and the next send recreates.
             yield {
                 "event": "error",
-                "data": {
-                    "message": session.error or "session failed",
-                    "retryable": True,
-                },
+                "data": {"message": session.error or "session failed"},
             }
             return
         if session.status == "prompting":
@@ -1638,10 +1670,7 @@ class AgentSessionManager:
             if not await self._ensure_alive(session):
                 yield {
                     "event": "error",
-                    "data": {
-                        "message": session.error or "could not reconnect",
-                        "retryable": True,
-                    },
+                    "data": {"message": session.error or "could not reconnect"},
                 }
                 return
             yield {
@@ -1734,10 +1763,9 @@ class AgentSessionManager:
                     return
             except (AcpError, AcpTransportError) as e:
                 logger.warning("Prompt turn failed on session '%s': %s", session.id, e)
-                message, retryable = classify_agent_error(e)
                 yield {
                     "event": "error",
-                    "data": {"message": message, "retryable": retryable},
+                    "data": {"message": classify_agent_error(e)},
                 }
             except GeneratorExit:
                 # SSE client disconnected mid-turn (tab closed, dev-server
@@ -1929,6 +1957,7 @@ class AgentSessionManager:
                 if _session_is_reapable(
                     session.status, session.turn_guard,
                     session.last_activity, now, ttl,
+                    session.lock.locked(),
                 ):
                     logger.info("Parking idle ACP session '%s'", session.id)
                     with contextlib.suppress(Exception):

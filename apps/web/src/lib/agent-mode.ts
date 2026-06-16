@@ -209,6 +209,12 @@ export async function ensureAgentSession(
 	harness: AgentHarnessConfig,
 	conversationId: string,
 	signal?: AbortSignal,
+	// Fired right before a cold sandbox provision (POST /sessions) is about to
+	// happen — i.e. only when this call actually pays the ~30s cold start, not
+	// when a warm session is reused. Lets the caller show "Starting…" honestly,
+	// since the gateway's own provisioning status can't arrive until the prompt
+	// SSE opens (after the provision completes).
+	onProvisioning?: () => void,
 ): Promise<string> {
 	const key = cacheKey(conversationId, agent);
 	const wantedHarness = harnessKey(harness);
@@ -261,6 +267,8 @@ export async function ensureAgentSession(
 		sessionCache.delete(key);
 	}
 
+	// About to pay a real cold start — let the caller surface it.
+	onProvisioning?.();
 	const created = await api(token, "/sessions", {
 		method: "POST",
 		body: JSON.stringify({

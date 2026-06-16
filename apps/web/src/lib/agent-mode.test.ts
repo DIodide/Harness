@@ -119,22 +119,47 @@ describe("ensureAgentSession", () => {
 		expect(calls.some((c) => c.startsWith("DELETE"))).toBe(false);
 	});
 
-	it("forwards the abort signal to session requests", async () => {
+	it("forwards the abort signal to every session request on the recreate path", async () => {
+		// Seed a cached session, then force a dead-status recreate so GET →
+		// DELETE → POST all fire and each must carry the signal.
 		const convo = "c-signal";
 		forgetAgentSession(convo, "claude-code");
-		const seen: Array<AbortSignal | undefined> = [];
-		const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
-			seen.push(init?.signal ?? undefined);
+		const controller = new AbortController();
+		const seen: Array<{ method: string; signal: AbortSignal | undefined }> = [];
+		let posts = 0;
+		const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+			const method = init?.method ?? "GET";
+			seen.push({ method, signal: init?.signal ?? undefined });
+			if (String(url).endsWith("/sessions") && method === "POST") {
+				posts += 1;
+				return {
+					ok: true,
+					status: 200,
+					json: async () => ({ session_id: posts === 1 ? "s1" : "s2" }),
+					text: async () => "",
+				} as unknown as Response;
+			}
+			if (method === "GET") {
+				return {
+					ok: true,
+					status: 200,
+					json: async () => ({ session_id: "s1", status: "error" }),
+					text: async () => "",
+				} as unknown as Response;
+			}
 			return {
 				ok: true,
 				status: 200,
-				json: async () => ({ session_id: "s1" }),
+				json: async () => ({}),
 				text: async () => "",
 			} as unknown as Response;
 		});
 		vi.stubGlobal("fetch", fetchMock);
 
-		const controller = new AbortController();
+		// First call seeds the cache (create POST).
+		await ensureAgentSession(null, "claude-code", HARNESS, convo);
+		seen.length = 0;
+		// Second call: dead session → GET, DELETE, POST — all with the signal.
 		await ensureAgentSession(
 			null,
 			"claude-code",
@@ -142,7 +167,51 @@ describe("ensureAgentSession", () => {
 			convo,
 			controller.signal,
 		);
-		expect(seen[0]).toBe(controller.signal);
+		const methods = seen.map((s) => s.method);
+		expect(methods).toEqual(["GET", "DELETE", "POST"]);
+		expect(seen.every((s) => s.signal === controller.signal)).toBe(true);
+	});
+
+	it("fires onProvisioning only when a cold start is actually paid", async () => {
+		const convo = "c-prov";
+		forgetAgentSession(convo, "claude-code");
+		let posts = 0;
+		installFetch((url, method) => {
+			if (url.endsWith("/sessions") && method === "POST") {
+				posts += 1;
+				return { json: { session_id: "s1" } };
+			}
+			if (method === "GET" && url.includes("/sessions/s1")) {
+				return { json: { session_id: "s1", status: "ready" } };
+			}
+			return { json: {} };
+		});
+
+		let provisioningCalls = 0;
+		const onProvisioning = () => {
+			provisioningCalls += 1;
+		};
+		// Cold start (empty cache) → fires once.
+		await ensureAgentSession(
+			null,
+			"claude-code",
+			HARNESS,
+			convo,
+			undefined,
+			onProvisioning,
+		);
+		expect(provisioningCalls).toBe(1);
+		// Warm reuse → must NOT fire again.
+		await ensureAgentSession(
+			null,
+			"claude-code",
+			HARNESS,
+			convo,
+			undefined,
+			onProvisioning,
+		);
+		expect(provisioningCalls).toBe(1);
+		expect(posts).toBe(1);
 	});
 });
 
