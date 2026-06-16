@@ -338,6 +338,13 @@ class AcpConnection:
                     # AskUserQuestion as a structured question instead of a
                     # generic permission prompt.
                     "elicitation": {"form": {}},
+                    # Display-only live command output: codex-acp and
+                    # claude-agent-acp gate per-chunk stdout/stderr streaming on
+                    # this custom flag (_meta.terminal_output). It is NOT the
+                    # standard `terminal` capability — the agent streams output
+                    # of commands it ran in its OWN sandbox and never asks us to
+                    # create/run a terminal, so we keep terminal:false.
+                    "_meta": {"terminal_output": True},
                 },
                 "clientInfo": {"name": client_name, "version": "0.1.0"},
             },

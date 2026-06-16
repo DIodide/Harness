@@ -1,18 +1,23 @@
 import {
+	Bot,
 	Brain,
 	ChevronRight,
+	CircleX,
 	ClipboardCheck,
+	ExternalLink,
 	FileDiff,
 	FileText,
 	Globe,
 	MessageCircleQuestion,
 	Search,
+	Sparkles,
 	SquareTerminal,
 	Trash2,
 	Wrench,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
+import { cn } from "../lib/utils";
 import { MarkdownMessage } from "./markdown-message";
 import { RoseCurveSpinner } from "./rose-curve-spinner";
 
@@ -89,9 +94,54 @@ export function kindIcon(kind: string, className: string) {
 			return <ClipboardCheck size={10} className={className} />;
 		case "ask_user":
 			return <MessageCircleQuestion size={10} className={className} />;
+		case "subagent":
+			return <Bot size={10} className={className} />;
+		case "tool_search":
+			return <Sparkles size={10} className={className} />;
 		default:
 			return <Wrench size={10} className={className} />;
 	}
+}
+
+/** Human label for the at-a-glance activity strip, keyed by tool kind. */
+export const KIND_LABELS: Record<string, string> = {
+	execute: "command",
+	read: "read",
+	edit: "edit",
+	move: "edit",
+	delete: "delete",
+	search: "search",
+	fetch: "fetch",
+	subagent: "subagent",
+	tool_search: "tool search",
+	think: "step",
+};
+
+/** Parse Claude's "Tools found: a, b, c" tool-search result into names. */
+export function parseToolSearchResult(result: string): string[] {
+	const m = result.match(/tools? found:\s*(.+)/i);
+	if (!m) return [];
+	return m[1]
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s && s.toLowerCase() !== "none");
+}
+
+/** Parse web-fetch/search result lines into {title, url} cards. */
+export function parseFetchResult(
+	result: string,
+): Array<{ title: string; url: string }> {
+	const out: Array<{ title: string; url: string }> = [];
+	for (const line of result.split("\n")) {
+		const m = line.match(/^(.*?)\s*\((https?:\/\/[^)]+)\)\s*$/);
+		if (m) {
+			out.push({ title: m[1].trim() || m[2], url: m[2] });
+			continue;
+		}
+		const f = line.match(/^(?:Fetched:\s*)?(https?:\/\/\S+)\s*$/);
+		if (f) out.push({ title: f[1], url: f[1] });
+	}
+	return out;
 }
 
 /** Q→A rows for an answered agent question (kind "ask_user"). */
@@ -128,6 +178,20 @@ function summaryText(
 			return firstString(args.query, args.pattern, location) ?? title;
 		case "fetch":
 			return firstString(args.url) ?? title;
+		case "subagent": {
+			// Prefer the description; else the brief's first line; else title.
+			const prompt =
+				typeof args.prompt === "string" ? args.prompt.split("\n")[0] : null;
+			return (
+				firstString(
+					args.description,
+					title !== "Task" ? title : null,
+					prompt,
+				) ?? "Subagent"
+			);
+		}
+		case "tool_search":
+			return firstString(args.query) ?? "Searching for tools";
 		default:
 			return title;
 	}
@@ -173,20 +237,98 @@ function TerminalView({
 	command,
 	output,
 	isStreaming,
+	exitCode,
 }: {
 	command: string;
 	output: string;
 	isStreaming: boolean;
+	exitCode?: number | null;
 }) {
+	const running = isStreaming && exitCode === null;
 	return (
 		<div className="overflow-hidden rounded-md bg-zinc-900 font-mono text-[10px]">
-			<div className="flex gap-1.5 border-b border-zinc-700/60 px-2 py-1 text-zinc-300">
+			<div className="flex items-center gap-1.5 border-b border-zinc-700/60 px-2 py-1 text-zinc-300">
 				<span className="select-none text-zinc-500">$</span>
-				<span className="whitespace-pre-wrap break-all">{command}</span>
+				<span className="min-w-0 flex-1 whitespace-pre-wrap break-all">
+					{command}
+				</span>
+				{exitCode !== null && exitCode !== undefined && (
+					<span
+						className={cn(
+							"shrink-0 rounded px-1 text-[9px] font-semibold",
+							exitCode === 0
+								? "bg-green-500/20 text-green-400"
+								: "bg-red-500/20 text-red-400",
+						)}
+					>
+						exit {exitCode}
+					</span>
+				)}
 			</div>
 			<pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all px-2 py-1.5 text-zinc-100">
-				{output || (isStreaming ? "running…" : "(no output)")}
+				{output || (running ? "running…" : "(no output)")}
+				{running && output && (
+					<span className="ml-0.5 inline-block h-2.5 w-1 animate-pulse bg-zinc-400 align-middle" />
+				)}
 			</pre>
+		</div>
+	);
+}
+
+/** Tool-search result: the discovered tool names as chips. */
+function ToolSearchView({
+	result,
+	isStreaming,
+}: {
+	result: string;
+	isStreaming: boolean;
+}) {
+	const tools = parseToolSearchResult(result);
+	if (tools.length === 0) {
+		return (
+			<p className="text-[11px] text-muted-foreground">
+				{isStreaming ? "Discovering tools…" : "No tools found"}
+			</p>
+		);
+	}
+	return (
+		<div className="flex flex-wrap gap-1">
+			{tools.map((t) => (
+				<span
+					key={t}
+					className="rounded border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-foreground"
+				>
+					{t}
+				</span>
+			))}
+		</div>
+	);
+}
+
+/** Web fetch/search result: clickable source cards. */
+function FetchView({ result }: { result: string }) {
+	const sources = parseFetchResult(result);
+	if (sources.length === 0) {
+		return (
+			<pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/50 p-2 font-mono text-[10px] text-muted-foreground">
+				{result || "(no result)"}
+			</pre>
+		);
+	}
+	return (
+		<div className="space-y-1">
+			{sources.map((s) => (
+				<a
+					key={s.url}
+					href={s.url}
+					target="_blank"
+					rel="noreferrer"
+					className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-[11px] text-foreground transition-colors hover:border-foreground/40"
+				>
+					<ExternalLink size={11} className="shrink-0 text-muted-foreground" />
+					<span className="min-w-0 flex-1 truncate">{s.title}</span>
+				</a>
+			))}
 		</div>
 	);
 }
@@ -199,6 +341,9 @@ export function AgentToolCallBlock({
 	diff,
 	locations,
 	isStreaming,
+	status,
+	exitCode,
+	serverName,
 }: {
 	kind: string;
 	title: string;
@@ -207,11 +352,16 @@ export function AgentToolCallBlock({
 	diff?: AgentToolDiff | null;
 	locations?: Array<{ path?: string }>;
 	isStreaming: boolean;
+	status?: string | null;
+	exitCode?: number | null;
+	serverName?: string | null;
 }) {
-	// Diffs and answered questions are their own payload — show them
-	// without an extra click.
+	// Diffs, answered questions, and tool-search results are their own
+	// payload — show them without an extra click.
 	const [open, setOpen] = useState(
-		(kind === "edit" && Boolean(diff)) || kind === "ask_user",
+		(kind === "edit" && Boolean(diff)) ||
+			kind === "ask_user" ||
+			kind === "tool_search",
 	);
 	const [showRaw, setShowRaw] = useState(false);
 	const summary = summaryText(kind, title, args, locations);
@@ -222,6 +372,9 @@ export function AgentToolCallBlock({
 	const qa = Array.isArray(args.qa)
 		? (args.qa as Array<{ q: string; a: string }>)
 		: null;
+	// A subagent's brief — the actual instructions it was spawned with.
+	const brief = typeof args.prompt === "string" ? args.prompt : null;
+	const failed = status === "failed" || (exitCode != null && exitCode !== 0);
 
 	return (
 		<div className="mb-1.5">
@@ -237,12 +390,33 @@ export function AgentToolCallBlock({
 				>
 					<ChevronRight size={10} />
 				</motion.span>
-				{isStreaming ? (
+				{isStreaming && !failed ? (
 					<RoseCurveSpinner size={10} />
+				) : failed ? (
+					<CircleX size={10} className="shrink-0 text-destructive" />
 				) : (
 					kindIcon(kind, "shrink-0 text-emerald-500")
 				)}
-				<span className="truncate font-mono">{summary}</span>
+				{serverName && (
+					<span className="shrink-0 rounded bg-foreground/10 px-1 text-[9px] font-medium text-muted-foreground">
+						{serverName}
+					</span>
+				)}
+				<span
+					className={cn("truncate font-mono", failed && "text-destructive")}
+				>
+					{summary}
+				</span>
+				{exitCode != null && exitCode !== 0 && (
+					<span className="shrink-0 text-[9px] font-semibold text-destructive">
+						exit {exitCode}
+					</span>
+				)}
+				{failed && exitCode == null && (
+					<span className="shrink-0 text-[9px] font-medium text-destructive">
+						failed
+					</span>
+				)}
 				{isStreaming && <span className="shrink-0">…</span>}
 			</button>
 
@@ -262,11 +436,32 @@ export function AgentToolCallBlock({
 								<div className="max-h-80 min-w-0 overflow-y-auto rounded-md border border-border bg-background px-3 py-2 text-sm">
 									<MarkdownMessage content={plan} />
 								</div>
+							) : kind === "subagent" ? (
+								<div className="space-y-1.5">
+									{brief && (
+										<div className="rounded-md border border-border bg-background px-3 py-2 text-[11px]">
+											<p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+												Brief
+											</p>
+											<MarkdownMessage content={brief} />
+										</div>
+									)}
+									{output && (
+										<pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/50 p-2 font-mono text-[10px] text-muted-foreground">
+											{output}
+										</pre>
+									)}
+								</div>
+							) : kind === "tool_search" ? (
+								<ToolSearchView result={output} isStreaming={isStreaming} />
+							) : kind === "fetch" ? (
+								<FetchView result={output} />
 							) : kind === "execute" ? (
 								<TerminalView
 									command={summary}
 									output={output}
 									isStreaming={isStreaming}
+									exitCode={exitCode}
 								/>
 							) : diff ? (
 								<DiffView diff={diff} />

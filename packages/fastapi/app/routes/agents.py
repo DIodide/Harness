@@ -173,6 +173,9 @@ def _diff_to_text(diff: dict) -> str:
 
 
 def _session_payload(session) -> dict:
+    caps = session.agent_capabilities or {}
+    prompt_caps = caps.get("promptCapabilities") or {}
+    mcp_caps = caps.get("mcpCapabilities") or {}
     return {
         "session_id": session.id,
         "agent": session.agent_id,
@@ -185,6 +188,18 @@ def _session_payload(session) -> dict:
         "config_options": session.config_options,
         # Agent-advertised slash commands for the composer's slash menu.
         "available_commands": session.available_commands,
+        # The harness's MCP servers (names) — shown as an at-a-glance context
+        # chip; the ACP startup notifications are too unreliable across agents
+        # to drive a live per-server panel.
+        "mcp_servers": [s.name for s in session.harness.mcp_servers],
+        # Live feature surface, so the UI can explain why images/queueing/MCP
+        # behave as they do (shown in developer display mode).
+        "capabilities": {
+            "image": bool(prompt_caps.get("image")),
+            "mcp_http": bool(mcp_caps.get("http")),
+            "prompt_queueing": session.supports_prompt_queueing,
+            "terminal_output": True,
+        },
     }
 
 
@@ -366,17 +381,24 @@ async def prompt(
                         )
                     last_reasoning_mid = mid
                 elif event["event"] == "tool_call":
+                    d = event["data"]
                     parts.append(
                         {
                             "type": "tool_call",
-                            "tool": event["data"]["tool"],
-                            "arguments": event["data"]["arguments"],
-                            "call_id": event["data"]["call_id"],
+                            "tool": d["tool"],
+                            "arguments": d["arguments"],
+                            "call_id": d["call_id"],
                             "result": "",
-                            "kind": event["data"].get("kind") or "other",
+                            "kind": d.get("kind") or "other",
+                            **({"status": d["status"]} if d.get("status") else {}),
                             **(
-                                {"parent_id": event["data"]["parent_id"]}
-                                if event["data"].get("parent_id")
+                                {"server_name": d["server_name"]}
+                                if d.get("server_name")
+                                else {}
+                            ),
+                            **(
+                                {"parent_id": d["parent_id"]}
+                                if d.get("parent_id")
                                 else {}
                             ),
                         }
@@ -402,22 +424,42 @@ async def prompt(
                         }
                     )
                 elif event["event"] == "tool_result":
-                    result_text = event["data"].get("result") or ""
-                    diff = event["data"].get("diff")
-                    if diff and not result_text:
-                        # Persist file edits readably even without text content.
-                        result_text = _diff_to_text(diff)
-                    # Status-only progress updates carry no result — don't
-                    # blank out content an earlier update already delivered.
-                    if result_text or event["data"].get("status") in (
-                        "completed", "failed",
-                    ):
+                    d = event["data"]
+                    call_id = d["call_id"]
+                    status = d.get("status")
+                    if d.get("append"):
+                        # Live terminal stream: append the delta, record exit.
                         for part in reversed(parts):
                             if (
                                 part["type"] == "tool_call"
-                                and part["call_id"] == event["data"]["call_id"]
+                                and part["call_id"] == call_id
                             ):
-                                part["result"] = result_text
+                                if d.get("output_delta"):
+                                    part["result"] = (part.get("result") or "") + d[
+                                        "output_delta"
+                                    ]
+                                if status:
+                                    part["status"] = status
+                                if d.get("exit_code") is not None:
+                                    part["exit_code"] = d["exit_code"]
+                                break
+                    else:
+                        result_text = d.get("result") or ""
+                        diff = d.get("diff")
+                        if diff and not result_text:
+                            # Persist file edits readably even without content.
+                            result_text = _diff_to_text(diff)
+                        # Status-only progress updates carry no result — don't
+                        # blank content an earlier update already delivered.
+                        for part in reversed(parts):
+                            if (
+                                part["type"] == "tool_call"
+                                and part["call_id"] == call_id
+                            ):
+                                if result_text or status in ("completed", "failed"):
+                                    part["result"] = result_text
+                                if status:
+                                    part["status"] = status
                                 break
                 yield {"event": event["event"], "data": json.dumps(event["data"])}
         finally:

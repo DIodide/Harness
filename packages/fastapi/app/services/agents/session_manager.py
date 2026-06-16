@@ -171,6 +171,47 @@ def _claude_meta(update: dict) -> dict:
     return claude if isinstance(claude, dict) else {}
 
 
+def _is_subagent_call(kind: str, title: str, raw_input: dict) -> bool:
+    """True for an Agent/Task tool that spawns a background subagent.
+
+    claude-agent-acp maps Agent/Task to kind "think" (same as TodoWrite and
+    the Task* tools). It titles the call from `input.description`, falling
+    back to the literal "Task"/"Agent" when there is none — so we match
+    either that fallback title or the subagent brief signature (a `prompt`).
+    TodoWrite ("Update todos (N)") and TaskCreate ("Create task: X") have
+    neither and stay plain "think".
+    """
+    if kind != "think":
+        return False
+    if title in ("Task", "Agent"):
+        return True
+    return isinstance(raw_input, dict) and "prompt" in raw_input and (
+        "description" in raw_input or "subagent_type" in raw_input
+    )
+
+
+def _is_tool_search(title: str, raw_input: dict) -> bool:
+    """True for a tool-discovery call (Claude's ToolSearch / server tool)."""
+    t = (title or "").lower()
+    return "toolsearch" in t or "tool search" in t or "tool_search" in t
+
+
+def _parse_mcp_title(title: str) -> tuple[str, str] | None:
+    """Split an MCP tool title into (server, clean_tool).
+
+    Claude names MCP tools `mcp__<server>__<tool>`; this is the unambiguous
+    form. Returns None for non-MCP titles (slash/path forms are too risky to
+    parse — the frontend keeps its own light heuristic for those).
+    """
+    if not title or not title.startswith("mcp__"):
+        return None
+    rest = title[len("mcp__") :]
+    if "__" not in rest:
+        return None
+    server, tool = rest.split("__", 1)
+    return server, tool.replace("_", " ").strip()
+
+
 def normalize_session_update(update: dict) -> dict | None:
     """Map an ACP session/update payload to a Harness SSE event."""
     kind = update.get("sessionUpdate")
@@ -197,23 +238,65 @@ def normalize_session_update(update: dict) -> dict | None:
             },
         }
     if kind == "tool_call":
+        raw_input = update.get("rawInput") or {}
+        title = update.get("title") or update.get("kind") or "tool"
+        tool_kind = update.get("kind") or "other"
+        extra: dict = {}
+        # Refine the kind so the UI can render each flow first-class. These
+        # are synthetic kinds the frontend branches on; no ACP agent emits
+        # them, but they are deterministic from title/rawInput.
+        if _is_subagent_call(tool_kind, title, raw_input):
+            tool_kind = "subagent"
+        elif _is_tool_search(title, raw_input):
+            tool_kind = "tool_search"
+        else:
+            mcp = _parse_mcp_title(title)
+            if mcp is not None:
+                extra["server_name"] = mcp[0]
+                title = mcp[1]  # show the clean tool name; server in the badge
         return {
             "event": "tool_call",
             "data": {
                 "call_id": update.get("toolCallId", ""),
-                "tool": update.get("title") or update.get("kind") or "tool",
-                "arguments": update.get("rawInput") or {},
+                "tool": title,
+                "arguments": raw_input,
                 # ACP tool kind (execute|read|edit|delete|move|search|fetch|
-                # think|switch_mode|other) — drives first-class rendering.
-                "kind": update.get("kind") or "other",
+                # think|switch_mode|other) plus our synthetic subagent/
+                # tool_search — drives first-class rendering.
+                "kind": tool_kind,
                 "status": update.get("status"),
                 "locations": update.get("locations") or [],
+                **extra,
                 # Set for tool calls made by a background/sub agent — the UI
                 # nests these under the spawning Task tool call.
                 **({"parent_id": parent_id} if parent_id else {}),
             },
         }
     if kind == "tool_call_update":
+        status = update.get("status")
+        # Display-only live command output (codex exec deltas / claude bash).
+        # The agent ran the command in its own sandbox and streams output bytes
+        # via _meta.terminal_output (per-chunk) and _meta.terminal_exit (at end).
+        # These APPEND to the call's output instead of replacing it — and we
+        # must NOT fall through to the rawOutput fallback below, which would
+        # overwrite the streamed terminal with a JSON dump at completion.
+        meta = update.get("_meta") or {}
+        term_out = meta.get("terminal_output") or {}
+        term_exit = meta.get("terminal_exit") or {}
+        output_delta = term_out.get("data") if isinstance(term_out, dict) else None
+        exit_code = term_exit.get("exit_code") if isinstance(term_exit, dict) else None
+        if output_delta is not None or exit_code is not None:
+            data: dict = {
+                "call_id": update.get("toolCallId", ""),
+                "append": True,
+                "status": status,
+            }
+            if output_delta:
+                data["output_delta"] = output_delta
+            if exit_code is not None:
+                data["exit_code"] = exit_code
+            return {"event": "tool_result", "data": data}
+
         content = update.get("content") or []
         result_text = "\n".join(
             _content_block_text(c.get("content") or {})
@@ -233,7 +316,6 @@ def normalize_session_update(update: dict) -> dict | None:
             ),
             None,
         )
-        status = update.get("status")
         raw_output = update.get("rawOutput")
         # Only terminal updates may fabricate a result from rawOutput: a
         # truthy result marks the call finished in the UI, and ACP allows
@@ -954,8 +1036,61 @@ class AgentSessionManager:
         if event is not None:
             await session.event_queue.put(event)
 
+    async def _handle_cursor_notification(
+        self, session: AgentSession, method: str, params: dict
+    ) -> bool:
+        """Best-effort mapping of Cursor's extension notifications onto our
+        existing event vocabulary. Schemas are inferred (Cursor is
+        closed-source and not live-verified here), so each path degrades to a
+        no-op on an unexpected shape rather than erroring."""
+        if method in ("cursor/update_todos", "cursor/updateTodos"):
+            todos = params.get("todos") or params.get("items") or []
+            entries = [
+                {
+                    "content": t.get("content") or t.get("title") or t.get("text") or "",
+                    "status": t.get("status") or "pending",
+                }
+                for t in todos
+                if isinstance(t, dict)
+            ]
+            await session.event_queue.put({"event": "plan", "data": {"entries": entries}})
+            return True
+        if method in ("cursor/task", "cursor/subagent"):
+            task = params.get("task") or params
+            call_id = str(task.get("id") or task.get("taskId") or uuid.uuid4().hex)
+            desc = task.get("description") or task.get("prompt") or "Subagent"
+            await session.event_queue.put(
+                {
+                    "event": "tool_call",
+                    "data": {
+                        "call_id": call_id,
+                        "tool": desc,
+                        "arguments": {"description": desc, "prompt": task.get("prompt")},
+                        "kind": "subagent",
+                        "status": task.get("status"),
+                        "locations": [],
+                    },
+                }
+            )
+            if task.get("status") in ("completed", "failed"):
+                await session.event_queue.put(
+                    {
+                        "event": "tool_result",
+                        "data": {
+                            "call_id": call_id,
+                            "status": task.get("status"),
+                            "result": task.get("result") or task.get("summary") or "",
+                        },
+                    }
+                )
+            return True
+        return False
+
     def _make_notification_handler(self, session: AgentSession):
         async def handle(method: str, params: dict) -> None:
+            if session.agent_id == "cursor" and method.startswith("cursor/"):
+                if await self._handle_cursor_notification(session, method, params):
+                    return
             if method != "session/update":
                 return
             if params.get("sessionId") != session.acp_session_id:

@@ -1,5 +1,5 @@
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
-import { ChevronDown, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronRight, Sparkles } from "lucide-react";
 import { motion } from "motion/react";
 import React, {
 	useCallback,
@@ -18,11 +18,12 @@ import type {
 } from "../../lib/use-chat-stream";
 import { cn } from "../../lib/utils";
 import { AgentPlanCard } from "../agent-plan-card";
-import { AgentToolCallBlock } from "../agent-tool-call";
+import { AgentToolCallBlock, KIND_LABELS, kindIcon } from "../agent-tool-call";
 import { MarkdownMessage } from "../markdown-message";
 import { type DisplayMode, MessageActions } from "../message-actions";
 import { MessageAttachments } from "../message-attachments";
 import { PendingResponseIndicator } from "../pending-response-indicator";
+import { RoseCurveSpinner } from "../rose-curve-spinner";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { StreamingUsage, ThinkingBlock, ToolCallBlock } from "./message-blocks";
 
@@ -44,6 +45,99 @@ interface RenderablePart {
 	messageId?: string | null;
 	parentId?: string | null; // stream shape
 	parent_id?: string | null; // persisted shape
+	status?: string | null;
+	exitCode?: number | null; // stream shape
+	exit_code?: number | null; // persisted shape
+	serverName?: string | null; // stream shape
+	server_name?: string | null; // persisted shape
+}
+
+/** A tool call is finished once it has a result, a terminal status, or an
+ *  exit code — terminal calls accumulate output while still running, so a
+ *  truthy result alone is NOT a completion signal. */
+function partFinished(part: RenderablePart): boolean {
+	return (
+		part.status === "completed" ||
+		part.status === "failed" ||
+		(part.exitCode ?? part.exit_code) != null ||
+		(Boolean(part.result) && part.status == null && part.kind !== "execute")
+	);
+}
+
+/**
+ * At-a-glance summary of in-flight agent work, shown atop the streaming
+ * bubble: a chip per running tool kind (e.g. "1 command, 2 edits, 1
+ * subagent"). Lets the user see what's running — including background
+ * subagents and long commands — without scanning the timeline. Counts
+ * nested subagent steps too. Hidden when nothing is running.
+ */
+function AgentActivityStrip({ parts }: { parts: RenderablePart[] }) {
+	// Flatten top-level + nested subagent calls.
+	const flat: RenderablePart[] = [];
+	for (const p of organizeParts(parts)) {
+		flat.push(p);
+		flat.push(...(p as OrganizedPart).children);
+	}
+	const counts = new Map<string, number>();
+	for (const p of flat) {
+		if (p.type !== "tool_call") continue;
+		if (partFinished(p)) continue;
+		const kind = p.kind ?? "other";
+		counts.set(kind, (counts.get(kind) ?? 0) + 1);
+	}
+	if (counts.size === 0) return null;
+	const order = [
+		"subagent",
+		"execute",
+		"edit",
+		"move",
+		"read",
+		"search",
+		"fetch",
+		"tool_search",
+		"think",
+		"other",
+	];
+	const entries = [...counts.entries()].sort(
+		(a, b) => order.indexOf(a[0]) - order.indexOf(b[0]),
+	);
+	return (
+		<div className="mb-2 flex flex-wrap items-center gap-1.5">
+			<RoseCurveSpinner size={11} />
+			<span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+				running
+			</span>
+			{entries.map(([kind, n]) => {
+				const label = KIND_LABELS[kind] ?? "tool";
+				return (
+					<span
+						key={kind}
+						className="flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] text-foreground"
+					>
+						{kindIcon(kind, "shrink-0 text-muted-foreground")}
+						{n} {label}
+						{n > 1 ? "s" : ""}
+					</span>
+				);
+			})}
+		</div>
+	);
+}
+
+/** Props common to both AgentToolCallBlock call sites. */
+function agentBlockProps(part: RenderablePart, activelyStreaming: boolean) {
+	return {
+		kind: part.kind ?? "other",
+		title: part.tool ?? "",
+		arguments: (part.arguments ?? {}) as Record<string, unknown>,
+		result: part.result,
+		diff: part.diff,
+		locations: part.locations,
+		status: part.status,
+		exitCode: part.exitCode ?? part.exit_code ?? null,
+		serverName: part.serverName ?? part.server_name ?? null,
+		isStreaming: activelyStreaming && !partFinished(part),
+	};
 }
 
 interface OrganizedPart extends RenderablePart {
@@ -73,7 +167,8 @@ function organizeParts(parts: RenderablePart[]): OrganizedPart[] {
 	return top;
 }
 
-/** Indented rendering of a background agent's work under its Task block. */
+/** A background subagent's nested timeline, with a live step count.
+ *  Collapsible as a unit so a long subagent run doesn't flood the thread. */
 function SubagentActivity({
 	parts,
 	isStreaming,
@@ -81,42 +176,55 @@ function SubagentActivity({
 	parts: RenderablePart[];
 	isStreaming: boolean;
 }) {
+	const [open, setOpen] = useState(true);
+	const stepCount = parts.filter((p) => p.type === "tool_call").length;
 	return (
-		<div className="mt-1 mb-1.5 ml-4 space-y-1 border-l-2 border-muted-foreground/15 pl-3">
-			{parts.map((part, idx) => {
-				const key = part.call_id ?? `sub-${part.type}-${idx}`;
-				if (part.type === "tool_call" && part.tool) {
-					return (
-						<AgentToolCallBlock
-							key={key}
-							kind={part.kind ?? "other"}
-							title={part.tool}
-							arguments={part.arguments ?? {}}
-							result={part.result}
-							diff={part.diff}
-							locations={part.locations}
-							isStreaming={isStreaming && !part.result}
-						/>
-					);
-				}
-				if (part.type === "reasoning" && part.content) {
-					return (
-						<ThinkingBlock
-							key={key}
-							content={part.content}
-							isStreaming={false}
-						/>
-					);
-				}
-				if (part.type === "text" && part.content) {
-					return (
-						<div key={key} className="text-[11px] text-muted-foreground">
-							<MarkdownMessage content={part.content} />
-						</div>
-					);
-				}
-				return null;
-			})}
+		<div className="mt-1 mb-1.5 ml-4 border-l-2 border-muted-foreground/15 pl-3">
+			<button
+				type="button"
+				onClick={() => setOpen((o) => !o)}
+				className="mb-1 flex items-center gap-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+			>
+				<ChevronRight
+					size={9}
+					className={cn("transition-transform", open && "rotate-90")}
+				/>
+				<span>
+					subagent activity{stepCount > 0 ? ` · ${stepCount} steps` : ""}
+				</span>
+			</button>
+			{open && (
+				<div className="space-y-1">
+					{parts.map((part, idx) => {
+						const key = part.call_id ?? `sub-${part.type}-${idx}`;
+						if (part.type === "tool_call" && part.tool) {
+							return (
+								<AgentToolCallBlock
+									key={key}
+									{...agentBlockProps(part, isStreaming)}
+								/>
+							);
+						}
+						if (part.type === "reasoning" && part.content) {
+							return (
+								<ThinkingBlock
+									key={key}
+									content={part.content}
+									isStreaming={false}
+								/>
+							);
+						}
+						if (part.type === "text" && part.content) {
+							return (
+								<div key={key} className="text-[11px] text-muted-foreground">
+									<MarkdownMessage content={part.content} />
+								</div>
+							);
+						}
+						return null;
+					})}
+				</div>
+			)}
 		</div>
 	);
 }
@@ -569,16 +677,7 @@ export function ChatMessages({
 														const block = part.kind ? (
 															// biome-ignore lint/correctness/useJsxKeyInIterable: rendered inside a keyed fragment below
 															<AgentToolCallBlock
-																kind={part.kind}
-																title={part.tool}
-																arguments={
-																	(part.arguments ?? {}) as Record<
-																		string,
-																		unknown
-																	>
-																}
-																result={part.result}
-																isStreaming={false}
+																{...agentBlockProps(part, false)}
 															/>
 														) : (
 															// biome-ignore lint/correctness/useJsxKeyInIterable: rendered inside a keyed fragment below
@@ -821,6 +920,9 @@ export function ChatMessages({
 							{streamPlan && streamPlan.length > 0 && (
 								<AgentPlanCard entries={streamPlan} />
 							)}
+							{isActivelyStreaming && (
+								<AgentActivityStrip parts={streamParts as RenderablePart[]} />
+							)}
 							<div className="text-sm leading-relaxed text-foreground">
 								{streamParts.length > 0
 									? (() => {
@@ -851,13 +953,7 @@ export function ChatMessages({
 													const block = part.kind ? (
 														// biome-ignore lint/correctness/useJsxKeyInIterable: rendered inside a keyed fragment below
 														<AgentToolCallBlock
-															kind={part.kind}
-															title={part.tool}
-															arguments={part.arguments ?? {}}
-															result={part.result}
-															diff={part.diff}
-															locations={part.locations}
-															isStreaming={!part.result}
+															{...agentBlockProps(part, isActivelyStreaming)}
 														/>
 													) : (
 														// biome-ignore lint/correctness/useJsxKeyInIterable: rendered inside a keyed fragment below

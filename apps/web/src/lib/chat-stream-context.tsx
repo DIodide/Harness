@@ -225,6 +225,8 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 								kind: event.kind,
 								locations: event.locations,
 								parentId: event.parentId ?? null,
+								status: event.status ?? null,
+								serverName: event.serverName ?? null,
 							},
 						],
 						agentStatus: null,
@@ -233,13 +235,37 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 			});
 		},
 		onToolResult: (convoId, event) => {
-			// Status-only progress updates (in_progress, no content) must not
-			// blank a result an earlier update already delivered — and a
-			// truthy result is what marks the call finished in the UI.
+			// Two modes:
+			// - append: live terminal stream — concatenate output_delta onto
+			//   the call's result, record exit_code/status, never replace.
+			// - replace: status-only progress must not blank a result an
+			//   earlier update delivered; a truthy result marks it finished.
+			const append = Boolean(event.append);
 			const overwrite =
-				Boolean(event.result) ||
-				event.status === "completed" ||
-				event.status === "failed";
+				!append &&
+				(Boolean(event.result) ||
+					event.status === "completed" ||
+					event.status === "failed");
+			const patchPart = (p: StreamPart): StreamPart => {
+				if (append) {
+					return {
+						...p,
+						result: event.output_delta
+							? (p.result ?? "") + event.output_delta
+							: p.result,
+						...(event.exit_code !== null && event.exit_code !== undefined
+							? { exitCode: event.exit_code }
+							: {}),
+						...(event.status ? { status: event.status } : {}),
+					};
+				}
+				return {
+					...p,
+					...(overwrite ? { result: event.result } : {}),
+					diff: event.diff ?? p.diff,
+					...(event.status ? { status: event.status } : {}),
+				};
+			};
 			setStreamStates((prev) => {
 				const state = prev[convoId] ?? EMPTY_STREAM_STATE;
 				return {
@@ -253,11 +279,7 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 						),
 						parts: state.parts.map((p) =>
 							p.type === "tool_call" && p.call_id === event.call_id
-								? {
-										...p,
-										...(overwrite ? { result: event.result } : {}),
-										diff: event.diff ?? p.diff,
-									}
+								? patchPart(p)
 								: p,
 						),
 					},
@@ -340,13 +362,30 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 			}));
 		},
 		onPlan: (convoId, entries) => {
-			setStreamStates((prev) => ({
-				...prev,
-				[convoId]: {
-					...(prev[convoId] ?? EMPTY_STREAM_STATE),
-					plan: entries,
-				},
-			}));
+			setStreamStates((prev) => {
+				// Claude (TodoWrite) and Codex re-emit the full plan repeatedly,
+				// often unchanged — skip the setState when it's identical to
+				// avoid redundant re-renders of the plan card.
+				const current = prev[convoId]?.plan;
+				if (
+					current &&
+					current.length === entries.length &&
+					current.every(
+						(e, i) =>
+							e.content === entries[i].content &&
+							e.status === entries[i].status,
+					)
+				) {
+					return prev;
+				}
+				return {
+					...prev,
+					[convoId]: {
+						...(prev[convoId] ?? EMPTY_STREAM_STATE),
+						plan: entries,
+					},
+				};
+			});
 		},
 		onAgentUsage: (convoId, usage) => {
 			setStreamStates((prev) => ({
