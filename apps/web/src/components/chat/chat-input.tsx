@@ -16,6 +16,7 @@ import {
 	Shield,
 	SlidersHorizontal,
 	Square,
+	Waypoints,
 	X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -75,6 +76,20 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+
+/** Static fallback descriptions for effort levels (the live ACP effort
+ *  option rarely carries rich per-level descriptions). */
+const EFFORT_DESCRIPTIONS: Record<string, string> = {
+	low: "Faster, shallower reasoning",
+	medium: "Balanced",
+	high: "Deep reasoning (default)",
+	xhigh: "Deeper (Opus 4.7+)",
+	max: "Maximum — most likely to plan via Workflow",
+	default: "Model default",
+};
+
+const isEffortOption = (id: string) =>
+	id === "effort" || id === "reasoning_effort";
 
 /** Icon for an ACP config option chip, keyed by conventional option ids. */
 function agentOptionIcon(optionId: string) {
@@ -941,7 +956,17 @@ export function ChatInput({
 														className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
 													>
 														{agentOptionIcon(option.id)}
-														<span className="max-w-[100px] truncate">
+														<span
+															className={cn(
+																"max-w-[100px] truncate",
+																// Elevated reasoning reads at a glance without
+																// opening the dropdown (mirrors the model chip).
+																isEffortOption(option.id) &&
+																	(option.currentValue === "max" ||
+																		option.currentValue === "xhigh") &&
+																	"text-foreground",
+															)}
+														>
 															{current?.name ??
 																option.currentValue ??
 																option.name}
@@ -996,18 +1021,56 @@ export function ChatInput({
 														<span className="truncate">
 															{choice.name ?? choice.value}
 														</span>
-														{choice.description && (
+														{(choice.description ??
+															(isEffortOption(option.id)
+																? EFFORT_DESCRIPTIONS[choice.value]
+																: undefined)) && (
 															<span className="max-w-[200px] truncate text-[10px] text-muted-foreground">
-																{choice.description}
+																{choice.description ??
+																	EFFORT_DESCRIPTIONS[choice.value]}
 															</span>
 														)}
 													</div>
 												</DropdownMenuItem>
 											))}
+											{isEffortOption(option.id) && (
+												<p className="border-t border-border px-2 py-1.5 text-[10px] text-muted-foreground">
+													Type{" "}
+													<span className="font-mono text-foreground">
+														ultracode
+													</span>{" "}
+													in a message to plan that turn as a Workflow.
+												</p>
+											)}
 										</DropdownMenuContent>
 									</DropdownMenu>
 								);
 							})}
+						{/* One-shot ultracode affordance: ultracode is a per-turn
+							    keyword (not a sticky mode), so this just seeds the draft
+							    text — its one-turn nature stays literally visible. */}
+						{activeHarness &&
+							agentMode !== "default" &&
+							!/\bultracode\b/i.test(text) && (
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<button
+											type="button"
+											onClick={() =>
+												setText((t) => (t ? `ultracode ${t}` : "ultracode "))
+											}
+											className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+										>
+											<Waypoints size={11} className="shrink-0" />
+											<span>Workflow</span>
+										</button>
+									</TooltipTrigger>
+									<TooltipContent>
+										Plan this turn as a Workflow (adds “ultracode”). Best with
+										effort: max.
+									</TooltipContent>
+								</Tooltip>
+							)}
 						{activeHarness && agentMode === "default" && (
 							<DropdownMenu>
 								<Tooltip>

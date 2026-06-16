@@ -34,6 +34,17 @@ async def seed_codex_credential(user_id: str) -> None:
         await store_user_credential(http, user_id, "codex", "auth_json", auth_json)
     print(f"Seeded encrypted codex credential for '{user_id}'")
 
+
+async def seed_claude_credential(user_id: str) -> None:
+    """Store a Claude Code OAuth token (from $CLAUDE_CODE_OAUTH_TOKEN) through
+    the real encrypted path. Token is read from env, never hardcoded."""
+    token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if not token:
+        raise SystemExit("Set CLAUDE_CODE_OAUTH_TOKEN to seed a claude-code credential")
+    async with httpx.AsyncClient() as http:
+        await store_user_credential(http, user_id, "claude-code", "oauth_token", token)
+    print(f"Seeded encrypted claude-code credential for '{user_id}'")
+
 HARNESS_A = HarnessConfig(
     model="acp",
     name="Research (DeepWiki)",

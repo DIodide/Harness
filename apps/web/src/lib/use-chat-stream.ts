@@ -24,6 +24,10 @@ export interface ToolCallEvent {
 	locations?: Array<{ path?: string }>;
 	/** Set when a background/sub agent made this call (nest under parent). */
 	parentId?: string | null;
+	/** Tool-call status (in_progress|completed|failed). */
+	status?: string | null;
+	/** MCP server this tool belongs to (parsed from mcp__server__tool). */
+	serverName?: string | null;
 }
 
 /** Message-boundary metadata on agent text/thought chunks. */
@@ -65,6 +69,12 @@ export interface StreamPart {
 	diff?: ToolDiff | null;
 	messageId?: string | null;
 	parentId?: string | null;
+	/** Tool-call status; "failed" drives destructive styling. */
+	status?: string | null;
+	/** Process exit code for command/terminal tool calls. */
+	exitCode?: number | null;
+	/** MCP server attribution. */
+	serverName?: string | null;
 }
 
 export interface ConvoStreamState {
@@ -105,6 +115,12 @@ interface UseChatStreamCallbacks {
 			result: string;
 			diff?: ToolDiff | null;
 			status?: string | null;
+			/** Live terminal stream: append output_delta instead of replacing. */
+			append?: boolean;
+			output_delta?: string;
+			exit_code?: number | null;
+			/** Late-arriving full tool input (e.g. Workflow script). */
+			arguments?: Record<string, unknown> | null;
 		},
 	) => void;
 	onDone: (
@@ -202,6 +218,9 @@ export function toPersistableParts(parts: StreamPart[]): Array<{
 	result?: string;
 	kind?: string;
 	parent_id?: string;
+	status?: string;
+	exit_code?: number;
+	server_name?: string;
 }> {
 	return parts.map((part) => ({
 		type: part.type,
@@ -212,6 +231,11 @@ export function toPersistableParts(parts: StreamPart[]): Array<{
 		...(part.result !== undefined ? { result: part.result } : {}),
 		...(part.kind !== undefined ? { kind: part.kind } : {}),
 		...(part.parentId ? { parent_id: part.parentId } : {}),
+		...(part.status ? { status: part.status } : {}),
+		...(part.exitCode !== undefined && part.exitCode !== null
+			? { exit_code: part.exitCode }
+			: {}),
+		...(part.serverName ? { server_name: part.serverName } : {}),
 	}));
 }
 
@@ -341,6 +365,8 @@ async function runAgentStream(
 					kind: (data.kind ?? "other") as string,
 					locations: (data.locations ?? []) as Array<{ path?: string }>,
 					parentId: (data.parent_id ?? null) as string | null,
+					status: (data.status ?? null) as string | null,
+					serverName: (data.server_name ?? null) as string | null,
 				});
 				break;
 			case "tool_result":
@@ -349,6 +375,10 @@ async function runAgentStream(
 					result: (data.result ?? "") as string,
 					diff: (data.diff ?? null) as ToolDiff | null,
 					status: (data.status ?? null) as string | null,
+					append: Boolean(data.append),
+					output_delta: (data.output_delta ?? "") as string,
+					exit_code: (data.exit_code ?? null) as number | null,
+					arguments: (data.arguments ?? null) as Record<string, unknown> | null,
 				});
 				break;
 			case "permission_request":

@@ -158,6 +158,11 @@ export default defineSchema({
 					// absent for MCP/default-agent tool calls.
 					kind: v.optional(v.string()),
 					parent_id: v.optional(v.string()),
+					// Tool-call status (completed|failed|in_progress) and, for
+					// commands, the process exit code; MCP server attribution.
+					status: v.optional(v.string()),
+					exit_code: v.optional(v.number()),
+					server_name: v.optional(v.string()),
 				}),
 			),
 		),
