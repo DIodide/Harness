@@ -83,7 +83,9 @@ def classify_agent_error(e: BaseException) -> str:
     if isinstance(e, SessionProvisioningError):
         return e.user_message
     if isinstance(e, DaytonaNotFoundError):
-        return "Your agent sandbox no longer exists — starting a fresh one."
+        # Owned session sandboxes auto re-provision (this message isn't shown);
+        # an attached harness sandbox can't be fabricated, so stay neutral.
+        return "Your agent sandbox is no longer available. Start a new session to continue."
     if isinstance(e, asyncio.TimeoutError):
         return (
             "The agent sandbox is taking longer than usual to start. "
@@ -1121,6 +1123,12 @@ class AgentSessionManager:
                 "Sandbox for session '%s' is gone — provisioning a fresh one",
                 session.id,
             )
+            # If the old sandbox still EXISTS on Daytona but is wedged in an
+            # error state (vs. truly deleted), tear down the tombstone so it
+            # doesn't linger against the user's quota. Best-effort: a 404 here
+            # (truly gone) is fine.
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(teardown_sandbox, old_sandbox_id)
             session.runtime = await asyncio.to_thread(
                 provision_agent_sandbox,
                 session.user_id,

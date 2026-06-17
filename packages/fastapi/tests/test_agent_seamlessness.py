@@ -129,7 +129,9 @@ class TestWithRetries:
 
 class TestClassifyAgentError:
     def test_not_found_is_friendly(self):
-        assert "no longer exists" in classify_agent_error(DaytonaNotFoundError("gone"))
+        assert "no longer available" in classify_agent_error(
+            DaytonaNotFoundError("gone")
+        )
 
     def test_timeout_is_friendly(self):
         assert "longer than usual" in classify_agent_error(asyncio.TimeoutError())
@@ -289,6 +291,10 @@ class TestReviveReprovision:
             )
 
         monkeypatch.setattr(sm, "provision_agent_sandbox", fake_provision)
+        # Patch teardown so the test never hits the live Daytona API, and so we
+        # can assert the dead tombstone is cleaned up with the OLD id.
+        torn = []
+        monkeypatch.setattr(sm, "teardown_sandbox", lambda sid: torn.append(sid))
         reregistered = []
 
         async def fake_reregister(_uid, old, new, _name):
@@ -303,6 +309,7 @@ class TestReviveReprovision:
         asyncio.run(drive())
 
         assert calls == ["reuse", "fresh"]
+        assert torn == ["old"]  # the wedged tombstone was torn down (by old id)
         assert session.runtime.sandbox_id == "new"
         assert session.status == "ready"
         assert session.pending_replay is True
