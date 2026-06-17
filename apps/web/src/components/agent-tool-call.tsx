@@ -373,6 +373,10 @@ function WorkflowView({
 	isStreaming: boolean;
 }) {
 	const running = isStreaming && status !== "completed" && status !== "failed";
+	// The workflow "brief" (final synthesis / launch banner) is often a raw
+	// text blob, not nicely styled — keep it out of the card by default and
+	// gate it behind a toggle, like the raw-input/script toggles below.
+	const [showBrief, setShowBrief] = useState(false);
 	return (
 		<div className="space-y-2">
 			{workflow.description && (
@@ -429,17 +433,26 @@ function WorkflowView({
 				</div>
 			)}
 
-			{(result || isStreaming) && (
-				<div className="max-h-80 min-w-0 overflow-y-auto rounded-md border border-border bg-background px-3 py-2 text-sm">
-					{result ? (
-						<MarkdownMessage content={stripFences(result)} />
-					) : (
-						<span className="text-[11px] text-muted-foreground">
-							Launching in the background…
-						</span>
+			{result ? (
+				<div className="min-w-0">
+					<button
+						type="button"
+						onClick={() => setShowBrief((s) => !s)}
+						className="text-[10px] text-muted-foreground/70 transition-colors hover:text-foreground"
+					>
+						{showBrief ? "Hide raw content" : "View raw content"}
+					</button>
+					{showBrief && (
+						<pre className="mt-1.5 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/40 p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+							{result}
+						</pre>
 					)}
 				</div>
-			)}
+			) : isStreaming ? (
+				<span className="text-[11px] text-muted-foreground">
+					Launching in the background…
+				</span>
+			) : null}
 		</div>
 	);
 }

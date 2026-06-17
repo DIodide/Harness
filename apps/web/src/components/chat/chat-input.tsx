@@ -10,13 +10,13 @@ import {
 	ChevronDown,
 	Cpu,
 	Gauge,
+	Layers,
 	Mic,
 	Paperclip,
 	RotateCcw,
 	Shield,
 	SlidersHorizontal,
 	Square,
-	Waypoints,
 	X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -76,17 +76,7 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-
-/** Static fallback descriptions for effort levels (the live ACP effort
- *  option rarely carries rich per-level descriptions). */
-const EFFORT_DESCRIPTIONS: Record<string, string> = {
-	low: "Faster, shallower reasoning",
-	medium: "Balanced",
-	high: "Deep reasoning (default)",
-	xhigh: "Deeper (Opus 4.7+)",
-	max: "Maximum — most likely to plan via Workflow",
-	default: "Model default",
-};
+import { EffortSlider } from "./effort-slider";
 
 const isEffortOption = (id: string) =>
 	id === "effort" || id === "reasoning_effort";
@@ -129,6 +119,9 @@ export function ChatInput({
 	pendingPrompt,
 	onPendingPromptConsumed,
 	budgetExceeded,
+	agentsPanelOpen = false,
+	onToggleAgentsPanel,
+	agentActivityCount = 0,
 	disabled = false,
 	placeholder = "Send a message...",
 }: {
@@ -215,6 +208,9 @@ export function ChatInput({
 	onSessionModelChange: (model: string | null) => void;
 	onPendingPromptConsumed?: () => void;
 	budgetExceeded?: boolean;
+	agentsPanelOpen?: boolean;
+	onToggleAgentsPanel?: () => void;
+	agentActivityCount?: number;
 	disabled?: boolean;
 	placeholder?: string;
 }) {
@@ -287,6 +283,7 @@ export function ChatInput({
 		setOption: setAgentOption,
 	} = useAgentSessionConfig(conversationId, agentMode);
 	const agentModeActive = agentMode !== "default";
+	const effortOption = agentConfigOptions.find((o) => isEffortOption(o.id));
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
@@ -709,7 +706,7 @@ export function ChatInput({
 				}}
 			/>
 
-			<div className="mx-auto max-w-xl">
+			<div className="mx-auto max-w-3xl">
 				{/* ACP agent question (AskUserQuestion) — blocks until answered.
 				    Keyed by request_id: an in-place swap to the next queued
 				    question must remount the stepper, not inherit its state. */}
@@ -844,6 +841,24 @@ export function ChatInput({
 							className="max-h-[200px] min-h-[24px] w-full resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
 						/>
 					</div>
+					{/* Reasoning effort as a boxed slider (agent mode) — its own
+					    full-width row so the controls bar below stays uncluttered;
+					    the rightmost stop is Ultracode. */}
+					{activeHarness && agentMode !== "default" && effortOption && (
+						<div className="flex px-2 pt-1.5">
+							<EffortSlider
+								effortOption={effortOption}
+								onSetEffort={(value) =>
+									setAgentOption.mutate(
+										{ configId: effortOption.id, value },
+										{ onError: (error) => toast.error(error.message) },
+									)
+								}
+								text={text}
+								onSetText={setText}
+							/>
+						</div>
+					)}
 					{/* Controls bar */}
 					<div className="flex items-center gap-0.5 px-2 pb-1.5">
 						{supportsAnyAttachment && (
@@ -937,137 +952,125 @@ export function ChatInput({
 							</DropdownMenu>
 						)}
 						{/* Agent session options — one labeled selector per option
-					    (model, mode, effort, ...), straight from ACP configOptions. */}
+					    (model, mode, ...). Effort is rendered as the slider above. */}
 						{activeHarness &&
 							agentMode !== "default" &&
-							agentConfigOptions.map((option) => {
-								const choices = flattenConfigChoices(option);
-								if (choices.length === 0) return null;
-								const current = choices.find(
-									(c) => c.value === option.currentValue,
-								);
-								return (
-									<DropdownMenu key={option.id}>
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<DropdownMenuTrigger asChild>
-													<button
-														type="button"
-														className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
-													>
-														{agentOptionIcon(option.id)}
-														<span
-															className={cn(
-																"max-w-[100px] truncate",
-																// Elevated reasoning reads at a glance without
-																// opening the dropdown (mirrors the model chip).
-																isEffortOption(option.id) &&
-																	(option.currentValue === "max" ||
-																		option.currentValue === "xhigh") &&
-																	"text-foreground",
-															)}
+							agentConfigOptions
+								.filter((option) => !isEffortOption(option.id))
+								.map((option) => {
+									const choices = flattenConfigChoices(option);
+									if (choices.length === 0) return null;
+									const current = choices.find(
+										(c) => c.value === option.currentValue,
+									);
+									return (
+										<DropdownMenu key={option.id}>
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<DropdownMenuTrigger asChild>
+														<button
+															type="button"
+															className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
 														>
-															{current?.name ??
-																option.currentValue ??
-																option.name}
-														</span>
-														<ChevronDown size={10} />
-													</button>
-												</DropdownMenuTrigger>
-											</TooltipTrigger>
-											<TooltipContent>
-												{option.name} — applies to this agent session
-											</TooltipContent>
-										</Tooltip>
-										<DropdownMenuContent
-											align="end"
-											className="max-h-72 w-52 overflow-y-auto"
-										>
-											<DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-												{option.name}
-											</DropdownMenuLabel>
-											{choices.map((choice) => (
-												<DropdownMenuItem
-													key={choice.value}
-													onClick={() => {
-														setAgentOption.mutate(
-															{ configId: option.id, value: choice.value },
-															{
-																onError: (error) => toast.error(error.message),
-															},
-														);
-														// Harness-scope chat changes persist the model
-														// to the harness itself (session opt-out only).
-														if (
-															option.id === "model" &&
-															modelSelectorMode === "harness" &&
-															activeHarness &&
-															choice.value !== activeHarness.model
-														) {
-															updateHarnessAgent.mutate({
-																id: activeHarness._id,
-																model: choice.value,
-															});
-														}
-													}}
-													className="flex items-center gap-2"
-												>
-													{choice.value === option.currentValue ? (
-														<Check size={12} className="shrink-0" />
-													) : (
-														<span className="w-3 shrink-0" />
-													)}
-													<div className="flex min-w-0 flex-col">
-														<span className="truncate">
-															{choice.name ?? choice.value}
-														</span>
-														{(choice.description ??
-															(isEffortOption(option.id)
-																? EFFORT_DESCRIPTIONS[choice.value]
-																: undefined)) && (
-															<span className="max-w-[200px] truncate text-[10px] text-muted-foreground">
-																{choice.description ??
-																	EFFORT_DESCRIPTIONS[choice.value]}
+															{agentOptionIcon(option.id)}
+															<span className="max-w-[100px] truncate">
+																{current?.name ??
+																	option.currentValue ??
+																	option.name}
 															</span>
+															<ChevronDown size={10} />
+														</button>
+													</DropdownMenuTrigger>
+												</TooltipTrigger>
+												<TooltipContent>
+													{option.name} — applies to this agent session
+												</TooltipContent>
+											</Tooltip>
+											<DropdownMenuContent
+												align="end"
+												className="max-h-72 w-52 overflow-y-auto"
+											>
+												<DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+													{option.name}
+												</DropdownMenuLabel>
+												{choices.map((choice) => (
+													<DropdownMenuItem
+														key={choice.value}
+														onClick={() => {
+															setAgentOption.mutate(
+																{ configId: option.id, value: choice.value },
+																{
+																	onError: (error) =>
+																		toast.error(error.message),
+																},
+															);
+															// Harness-scope chat changes persist the model
+															// to the harness itself (session opt-out only).
+															if (
+																option.id === "model" &&
+																modelSelectorMode === "harness" &&
+																activeHarness &&
+																choice.value !== activeHarness.model
+															) {
+																updateHarnessAgent.mutate({
+																	id: activeHarness._id,
+																	model: choice.value,
+																});
+															}
+														}}
+														className="flex items-center gap-2"
+													>
+														{choice.value === option.currentValue ? (
+															<Check size={12} className="shrink-0" />
+														) : (
+															<span className="w-3 shrink-0" />
 														)}
-													</div>
-												</DropdownMenuItem>
-											))}
-											{isEffortOption(option.id) && (
-												<p className="border-t border-border px-2 py-1.5 text-[10px] text-muted-foreground">
-													Type{" "}
-													<span className="font-mono text-foreground">
-														ultracode
-													</span>{" "}
-													in a message to plan that turn as a Workflow.
-												</p>
-											)}
-										</DropdownMenuContent>
-									</DropdownMenu>
-								);
-							})}
-						{/* One-shot ultracode affordance: ultracode is a per-turn
-							    keyword (not a sticky mode), so this just seeds the draft
-							    text — its one-turn nature stays literally visible. */}
+														<div className="flex min-w-0 flex-col">
+															<span className="truncate">
+																{choice.name ?? choice.value}
+															</span>
+															{choice.description && (
+																<span className="max-w-[200px] truncate text-[10px] text-muted-foreground">
+																	{choice.description}
+																</span>
+															)}
+														</div>
+													</DropdownMenuItem>
+												))}
+											</DropdownMenuContent>
+										</DropdownMenu>
+									);
+								})}
+						{/* Background agents panel toggle — view live subagent /
+						    workflow / command activity for this turn. Only where the
+						    host route wired the panel (avoids a dead control). */}
 						{activeHarness &&
 							agentMode !== "default" &&
-							!/\bultracode\b/i.test(text) && (
+							onToggleAgentsPanel && (
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<button
 											type="button"
-											onClick={() =>
-												setText((t) => (t ? `ultracode ${t}` : "ultracode "))
-											}
-											className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+											onClick={() => onToggleAgentsPanel()}
+											className={cn(
+												"flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors hover:bg-foreground/10 hover:text-foreground",
+												agentsPanelOpen
+													? "text-foreground"
+													: "text-muted-foreground",
+											)}
 										>
-											<Waypoints size={11} className="shrink-0" />
-											<span>Workflow</span>
+											<Layers size={12} className="shrink-0" />
+											<span>Agents</span>
+											{agentActivityCount > 0 && (
+												<span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-semibold text-primary-foreground tabular-nums">
+													{agentActivityCount}
+												</span>
+											)}
 										</button>
 									</TooltipTrigger>
 									<TooltipContent>
-										Plan this turn as a Workflow (adds “ultracode”). Best with
-										effort: max.
+										Background agents — live subagent, workflow &amp; command
+										activity
 									</TooltipContent>
 								</Tooltip>
 							)}
