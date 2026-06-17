@@ -12,6 +12,7 @@ import mimetypes
 import shlex
 
 import httpx
+from daytona_sdk import DaytonaNotFoundError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from app.dependencies import get_current_user
@@ -33,6 +34,7 @@ from app.services.convex import (
 from app.services.daytona_service import (
     RESOURCE_TIERS,
     DaytonaService,
+    _sandbox_state,
     get_daytona_service,
 )
 
@@ -128,9 +130,12 @@ async def get_sandbox(
     service = _get_service()
     try:
         sandbox = service.get_sandbox(sandbox_id)
+        # The SDK object exposes `state` (a SandboxState enum), not `status`;
+        # _sandbox_state normalizes it (the old `sandbox.status` read always
+        # fell through to "unknown").
         return {
             "id": sandbox.id,
-            "status": str(sandbox.status) if hasattr(sandbox, 'status') else "unknown",
+            "status": _sandbox_state(sandbox) or "unknown",
         }
     except Exception as e:
         logger.error("Failed to get sandbox '%s': %s", sandbox_id, e)
@@ -164,6 +169,17 @@ async def start_sandbox(
     try:
         service.start_sandbox(sandbox_id)
         return {"success": True, "status": "running"}
+    except DaytonaNotFoundError as e:
+        # Errored/vanished sandbox: it can't be started — tell the user to
+        # recreate it rather than surfacing the opaque Daytona error.
+        logger.warning("Cannot start sandbox '%s': %s", sandbox_id, e)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This sandbox is in an unrecoverable error state (its "
+                "container no longer exists). Delete it and create a new one."
+            ),
+        )
     except Exception as e:
         logger.error("Failed to start sandbox '%s': %s", sandbox_id, e)
         raise HTTPException(status_code=500, detail=str(e))

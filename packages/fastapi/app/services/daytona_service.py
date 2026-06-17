@@ -12,14 +12,72 @@ from dataclasses import dataclass
 from typing import Any
 
 from daytona_sdk import (
+    CreateSandboxFromSnapshotParams,
     Daytona,
     DaytonaConfig,
-    CreateSandboxFromSnapshotParams,
+    DaytonaError,
+    DaytonaNotFoundError,
 )
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+# Daytona's two terminal error states; the SDK's own wait loops gate failure
+# on exactly this set. A sandbox here cannot be start()ed (start() raises).
+_TERMINAL_ERROR_STATES = frozenset({"error", "build_failed"})
+
+
+def _sandbox_state(sandbox: Any) -> str:
+    """Lowercased lifecycle state of a sandbox.
+
+    The SDK Sandbox object exposes `state` (a SandboxState str-enum); older
+    code/objects used `status`, so fall back to it defensively. Returns "" if
+    neither is present.
+    """
+    raw = getattr(sandbox, "state", None)
+    if raw is None:
+        raw = getattr(sandbox, "status", None)
+    return (raw.value if hasattr(raw, "value") else str(raw or "")).lower()
+
+
+def _sandbox_in_error_state(sandbox: Any) -> bool:
+    """True when a sandbox is in a Daytona error state.
+
+    Keys on `state` exactly like the SDK's own wait loops (which fail only on
+    state in {error, build_failed}); a populated `error_reason` is honored
+    ONLY when the state can't be resolved, so a healthy/started sandbox that
+    happens to carry a stale error_reason is never misclassified.
+    """
+    state = _sandbox_state(sandbox)
+    if state in _TERMINAL_ERROR_STATES:
+        return True
+    return not state and bool(getattr(sandbox, "error_reason", None))
+
+
+def _sandbox_error_reason(sandbox: Any) -> str | None:
+    """Return a message if a sandbox is wedged in an UNRECOVERABLE error state.
+
+    A sandbox whose container vanished out-of-band (Daytona infra hiccup,
+    docker prune) lands in 'error'/'build_failed' and can never be started —
+    client.start() rejects it with "Sandbox is in an errored state". Daytona
+    distinguishes these from RECOVERABLE errors via the `recoverable` flag
+    (those are revived with recover(), preserving the workspace), so a
+    recoverable error returns None here — only the unrecoverable ones are
+    treated as gone. Returns None for a healthy/startable sandbox.
+    """
+    if not _sandbox_in_error_state(sandbox) or getattr(sandbox, "recoverable", False):
+        return None
+    reason = getattr(sandbox, "error_reason", None)
+    return reason or f"sandbox is in an unrecoverable '{_sandbox_state(sandbox) or 'error'}' state"
+
+
+def _sandbox_is_recoverable_error(sandbox: Any) -> bool:
+    """True when a sandbox is in an error state that recover() can revive."""
+    return _sandbox_in_error_state(sandbox) and bool(
+        getattr(sandbox, "recoverable", False)
+    )
 
 # Resource tier presets
 RESOURCE_TIERS = {
@@ -152,41 +210,83 @@ class DaytonaService:
                 return sandbox
 
         client = self._get_client()
-        sandbox = client.get(sandbox_id)
-        raw = getattr(sandbox, "status", None)
-        status = (raw.value if hasattr(raw, "value") else str(raw)).lower()
-        logger.info(
-            "Sandbox '%s' status: %s (raw: %r)", sandbox_id, status, raw,
-        )
-        if status not in ("started",):
+        sandbox = self._resolve_error_state(client, sandbox_id, client.get(sandbox_id))
+        state = _sandbox_state(sandbox)
+        logger.info("Sandbox '%s' state: %s", sandbox_id, state)
+        if state not in ("started",):
             # Archiving moves the whole filesystem to object storage, so a
             # restore is materially slower than waking a merely-stopped
             # sandbox — give it a much larger budget before timing out.
-            start_timeout = 180 if status == "archived" else 60
+            start_timeout = 180 if state == "archived" else 60
             logger.info(
                 "Sandbox '%s' is %s — auto-starting (timeout=%ds)",
-                sandbox_id, status, start_timeout,
+                sandbox_id, state, start_timeout,
             )
             client.start(sandbox, timeout=start_timeout)
             sandbox = client.get(sandbox_id)
-            new_raw = getattr(sandbox, "status", None)
-            new_status = (
-                new_raw.value if hasattr(new_raw, "value") else str(new_raw)
-            ).lower()
             logger.info(
-                "Auto-started sandbox '%s', now %s", sandbox_id, new_status,
+                "Auto-started sandbox '%s', now %s",
+                sandbox_id, _sandbox_state(sandbox),
             )
 
         self._running_cache[sandbox_id] = (sandbox, time.time())
+        return sandbox
+
+    def _resolve_error_state(self, client: Daytona, sandbox_id: str, sandbox: Any) -> Any:
+        """Handle a sandbox sitting in a Daytona error state.
+
+        - recoverable error  → recover() it in place (preserves the workspace)
+          and return the revived sandbox.
+        - unrecoverable error → raise DaytonaNotFoundError so callers treat it
+          as gone (re-provision) instead of looping on the opaque "Sandbox is
+          in an errored state" that client.start() would raise.
+        - healthy             → return unchanged.
+        """
+        if _sandbox_is_recoverable_error(sandbox):
+            logger.warning(
+                "Sandbox '%s' is in a recoverable error state — recovering",
+                sandbox_id,
+            )
+            try:
+                sandbox.recover()
+            except DaytonaError as e:
+                # recover() itself failed (it re-raises if the box lands back
+                # in error). Fall through to the 'gone' path so callers
+                # re-provision uniformly instead of hard-failing.
+                self._invalidate_running_cache(sandbox_id)
+                raise DaytonaNotFoundError(
+                    f"Sandbox {sandbox_id} failed to recover: {e}"
+                ) from e
+            return client.get(sandbox_id)
+        err = _sandbox_error_reason(sandbox)
+        if err:
+            self._invalidate_running_cache(sandbox_id)
+            logger.warning(
+                "Sandbox '%s' is in an unrecoverable error state (%s) — "
+                "treating as gone", sandbox_id, err,
+            )
+            raise DaytonaNotFoundError(
+                f"Sandbox {sandbox_id} is in an unrecoverable error state: {err}"
+            )
         return sandbox
 
     def _invalidate_running_cache(self, sandbox_id: str) -> None:
         self._running_cache.pop(sandbox_id, None)
 
     def start_sandbox(self, sandbox_id: str) -> None:
-        """Start a stopped sandbox."""
+        """Start a stopped sandbox.
+
+        A recoverable error sandbox is recover()ed; an unrecoverable one
+        raises DaytonaNotFoundError (so the route can tell the user to
+        recreate it) rather than firing client.start() at a sandbox that can
+        only answer with the opaque "Sandbox is in an errored state".
+        """
         client = self._get_client()
-        sandbox = client.get(sandbox_id)
+        sandbox = self._resolve_error_state(client, sandbox_id, client.get(sandbox_id))
+        if _sandbox_state(sandbox) == "started":
+            self._invalidate_running_cache(sandbox_id)
+            logger.info("Sandbox '%s' already started", sandbox_id)
+            return
         client.start(sandbox)
         self._invalidate_running_cache(sandbox_id)
         logger.info("Started sandbox '%s'", sandbox_id)
