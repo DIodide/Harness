@@ -192,6 +192,12 @@ async function api(
 	return response;
 }
 
+/** A session whose runtime failed or was closed is unusable — recreate it
+ *  rather than handing back a dead id the next prompt will only error on. */
+function isDeadStatus(status: string | undefined): boolean {
+	return status === "error" || status === "closed";
+}
+
 /**
  * Ensure a live agent session for this conversation, creating it or
  * switching its harness (MCP quick-switch) as needed.
@@ -202,6 +208,13 @@ export async function ensureAgentSession(
 	agent: AgentMode,
 	harness: AgentHarnessConfig,
 	conversationId: string,
+	signal?: AbortSignal,
+	// Fired right before a cold sandbox provision (POST /sessions) is about to
+	// happen — i.e. only when this call actually pays the ~30s cold start, not
+	// when a warm session is reused. Lets the caller show "Starting…" honestly,
+	// since the gateway's own provisioning status can't arrive until the prompt
+	// SSE opens (after the provision completes).
+	onProvisioning?: () => void,
 ): Promise<string> {
 	const key = cacheKey(conversationId, agent);
 	const wantedHarness = harnessKey(harness);
@@ -210,19 +223,33 @@ export async function ensureAgentSession(
 
 	if (cached) {
 		// Verify the session is still alive server-side (reaper, restarts).
-		const status = await api(token, `/sessions/${cached.sessionId}`);
+		const status = await api(token, `/sessions/${cached.sessionId}`, {
+			signal,
+		});
 		if (status.ok) {
-			if (cached.identityKey !== wantedIdentity) {
+			// A session whose runtime errored or was closed is dead even
+			// though the GET succeeds (it lingers in memory) — recreate
+			// instead of looping the user back onto the same failure.
+			const info = (await status
+				.json()
+				.catch(() => null)) as AgentSessionInfo | null;
+			if (info && isDeadStatus(info.status)) {
+				await api(token, `/sessions/${cached.sessionId}`, {
+					method: "DELETE",
+					signal,
+				});
+			} else if (cached.identityKey !== wantedIdentity) {
 				// Credential (or agent) changed: a switch can't re-inject
 				// secrets into the running process — close and recreate.
 				await api(token, `/sessions/${cached.sessionId}`, {
 					method: "DELETE",
+					signal,
 				});
 			} else if (cached.harnessKey !== wantedHarness) {
 				const switched = await api(
 					token,
 					`/sessions/${cached.sessionId}/harness`,
-					{ method: "POST", body: JSON.stringify({ harness }) },
+					{ method: "POST", body: JSON.stringify({ harness }), signal },
 				);
 				if (switched.ok) {
 					sessionCache.set(key, {
@@ -240,6 +267,8 @@ export async function ensureAgentSession(
 		sessionCache.delete(key);
 	}
 
+	// About to pay a real cold start — let the caller surface it.
+	onProvisioning?.();
 	const created = await api(token, "/sessions", {
 		method: "POST",
 		body: JSON.stringify({
@@ -247,6 +276,7 @@ export async function ensureAgentSession(
 			harness,
 			conversation_id: conversationId,
 		}),
+		signal,
 	});
 	if (!created.ok) {
 		const detail = await created.text();
@@ -411,5 +441,13 @@ export async function cancelAgentTurn(
 	token: string | null,
 	sessionId: string,
 ): Promise<void> {
-	await api(token, `/sessions/${sessionId}/cancel`, { method: "POST" });
+	const response = await api(token, `/sessions/${sessionId}/cancel`, {
+		method: "POST",
+	});
+	if (!response.ok) {
+		// Cancel didn't reach the agent (session gone, gateway error) — throw
+		// so the caller falls back to aborting the local stream instead of
+		// leaving the spinner running forever.
+		throw new Error(`Failed to stop the agent (HTTP ${response.status})`);
+	}
 }

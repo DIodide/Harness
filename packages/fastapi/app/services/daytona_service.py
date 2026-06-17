@@ -159,10 +159,15 @@ class DaytonaService:
             "Sandbox '%s' status: %s (raw: %r)", sandbox_id, status, raw,
         )
         if status not in ("started",):
+            # Archiving moves the whole filesystem to object storage, so a
+            # restore is materially slower than waking a merely-stopped
+            # sandbox — give it a much larger budget before timing out.
+            start_timeout = 180 if status == "archived" else 60
             logger.info(
-                "Sandbox '%s' is %s — auto-starting", sandbox_id, status,
+                "Sandbox '%s' is %s — auto-starting (timeout=%ds)",
+                sandbox_id, status, start_timeout,
             )
-            client.start(sandbox, timeout=60)
+            client.start(sandbox, timeout=start_timeout)
             sandbox = client.get(sandbox_id)
             new_raw = getattr(sandbox, "status", None)
             new_status = (
