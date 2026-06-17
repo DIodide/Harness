@@ -22,15 +22,16 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
 
 import httpx
+from daytona_sdk import DaytonaNotFoundError
 
 from app.config import settings
 from app.models import HarnessConfig, McpServer
 from app.services.agents.acp_client import AcpConnection, AcpError, AcpTransportError
 from app.services.agents.daytona_runtime import (
     ProvisionedRuntime,
+    is_transient_daytona_error,
     provision_agent_sandbox,
     shim_port,
     stop_agent_shim,
@@ -56,9 +57,81 @@ class SandboxAccessError(Exception):
     """Client-supplied sandbox id that the requesting user does not own."""
 
 
+class SessionProvisioningError(Exception):
+    """A provisioning failure whose message is already user-actionable and
+    should be surfaced verbatim (e.g. the per-user sandbox cap), rather than
+    genericized by classify_agent_error.
+    """
+
+    def __init__(self, user_message: str):
+        super().__init__(user_message)
+        self.user_message = user_message
+
+
 def _log_background_error(task: asyncio.Task) -> None:
     if not task.cancelled() and task.exception() is not None:
         logger.warning("Background ACP task failed: %s", task.exception())
+
+
+def classify_agent_error(e: BaseException) -> str:
+    """Map a raw provisioning/transport exception to a user-facing message.
+
+    The raw exception (ACP protocol codes, multi-line shim logs, Daytona
+    stack traces) is kept in the server log; the user sees something
+    actionable instead.
+    """
+    if isinstance(e, SessionProvisioningError):
+        return e.user_message
+    if isinstance(e, DaytonaNotFoundError):
+        return "Your agent sandbox no longer exists — starting a fresh one."
+    if isinstance(e, asyncio.TimeoutError):
+        return (
+            "The agent sandbox is taking longer than usual to start. "
+            "Please try again."
+        )
+    # Only TRANSIENT failures get the "restarted, reconnect" copy — a
+    # permanent DaytonaError (e.g. 401/403/422) would mislead the user into
+    # resending something that will deterministically fail again.
+    if isinstance(e, AcpTransportError) or is_transient_daytona_error(e):
+        return (
+            "Lost connection to the agent sandbox — it may have restarted. "
+            "Send your message again to reconnect."
+        )
+    if isinstance(e, AcpError):
+        return f"The agent reported an error: {e}"
+    # Permanent DaytonaError (non-404 4xx), provisioning RuntimeError (shim
+    # never became healthy), and anything else.
+    return "The agent failed to start in its sandbox. Please try again."
+
+
+# A session in one of these states is mid-flight, not idle — the reaper and
+# runtime-stealing must never touch it (tearing down a provisioning/reviving
+# session races its setup coroutine and corrupts runtime/connection state).
+_ACTIVE_STATUSES = frozenset({"prompting", "provisioning", "reviving"})
+
+
+def _session_is_reapable(
+    status: str,
+    turn_guard: int,
+    last_activity: float,
+    now: float,
+    ttl: float,
+    lock_held: bool,
+) -> bool:
+    """True when an idle session is safe to park/destroy.
+
+    Provisioning/reviving sessions are NOT idle (last_activity isn't bumped
+    during a cold start, so a slow provision would otherwise look stale); a
+    non-zero turn_guard means a turn is in its pre-lock awaits; and a held
+    session.lock means mid-flight ACP work (e.g. switch_harness opening a new
+    ACP session under status 'ready') that a teardown would corrupt — the
+    same guard _claim_parked uses to avoid stealing a busy runtime.
+    """
+    if status in _ACTIVE_STATUSES:
+        return False
+    if turn_guard > 0 or lock_held:
+        return False
+    return now - last_activity > ttl
 
 
 @dataclass
@@ -68,7 +141,7 @@ class AgentSession:
     agent_id: str
     harness: HarnessConfig
     conversation_id: str
-    status: str = "provisioning"  # provisioning|ready|prompting|error|closed
+    status: str = "provisioning"  # provisioning|reviving|ready|prompting|error|closed
     error: str | None = None
     runtime: ProvisionedRuntime | None = None
     connection: AcpConnection | None = None
@@ -769,82 +842,129 @@ class AgentSessionManager:
             return False
 
     async def _provision(self, session: AgentSession, creds, user_ctx) -> None:
+        """Bring a session to 'ready', bounded and transient-retrying.
+
+        A cold Daytona provision can wedge (slow control plane) or blip
+        (429/5xx/connection reset). Cap the whole attempt with a wall-clock
+        timeout so awaiters of ready_event never hang forever, and retry a
+        transient cold-start once before giving up. Either way the user gets
+        an actionable message, not a raw stack trace.
+        """
         try:
-            agent = get_agent(session.agent_id)
-            # Deeper unification: harnesses with a sandbox run the agent
-            # INSIDE that sandbox (user's real files, persistent), instead
-            # of a session-owned scratch sandbox.
-            attach_sandbox_id = (
-                session.harness.sandbox_id
-                if session.harness.sandbox_enabled and session.harness.sandbox_id
-                else None
+            await asyncio.wait_for(
+                self._provision_with_retry(session, creds, user_ctx),
+                timeout=settings.acp_provision_timeout_seconds,
             )
-
-            # Warm path: adopt a parked runtime (or steal an idle session's)
-            # before paying for a cold sandbox.
-            session.user_ctx = user_ctx  # revive-during-adopt opens with it
-            adopted = False
-            claim = self._claim_parked(session, attach_sandbox_id)
-            if isinstance(claim, tuple):
-                victim, key = claim
-                await self._teardown(victim, park=True)
-                claim = self._parked.pop(key, None)
-            if claim is None and attach_sandbox_id is not None:
-                claim = await self._take_over_attached(session, attach_sandbox_id)
-            if claim is not None:
-                adopted = await self._adopt(session, claim)
-                if adopted and session.acp_session_id is None:
-                    # Warm adopt skips _revive's open — open the ACP session.
-                    await self._open_acp_session(session, user_ctx)
-
-            if not adopted:
-                if attach_sandbox_id is None:
-                    await self._check_sandbox_cap(session.user_id)
-                session.runtime = await asyncio.to_thread(
-                    provision_agent_sandbox,
-                    session.user_id,
-                    agent,
-                    creds,
-                    attach_sandbox_id,
-                )
-                conn = AcpConnection(
-                    session.runtime.base_url, session.runtime.headers,
-                )
-                session.connection = conn
-                conn.on_notification = self._make_notification_handler(session)
-                conn.on_request = self._make_request_handler(session)
-                conn.on_relay_request = self._make_relay_handler(session)
-                await conn.start()
-
-                init = await conn.initialize()
-                session.agent_capabilities = init.get("agentCapabilities") or {}
-                await self._open_acp_session(session, user_ctx)
-
-            # Register in the sandboxes table so the agent's sandbox shows up
-            # in Manage Sandboxes and the existing terminal/file tooling works
-            # against it (attached harness sandboxes are already registered).
-            # Best-effort: a cap or Convex hiccup must not block the session.
-            if not adopted and session.runtime.owns_sandbox:
-                # Fire-and-forget: registration is bookkeeping, not part of
-                # the user's cold-start wait. Adopted runtimes are already
-                # registered from their first provisioning.
-                asyncio.create_task(
-                    self._register_sandbox_record(
-                        session.user_id, session.runtime.sandbox_id, agent.name,
-                    )
-                )
-
-            session.status = "ready"
-            logger.info(
-                "ACP session '%s' ready (agent=%s, acp_session=%s)",
-                session.id, session.agent_id, session.acp_session_id,
+        except asyncio.TimeoutError:
+            # to_thread can't truly cancel the underlying Daytona call, so a
+            # sandbox may still be created and then orphaned (the session ends
+            # with runtime=None, so neither the reaper nor the per-user cap
+            # tracks it; Daytona only auto-stops it). The win here is purely
+            # that ready_event awaiters unblock now instead of hanging forever.
+            logger.error(
+                "Provisioning for session '%s' exceeded %ss — marking errored",
+                session.id, settings.acp_provision_timeout_seconds,
             )
+            session.status = "error"
+            session.error = classify_agent_error(asyncio.TimeoutError())
         except Exception as e:
             logger.exception("Provisioning failed for session '%s'", session.id)
             session.status = "error"
-            session.error = str(e)
+            session.error = classify_agent_error(e)
         finally:
             session.ready_event.set()
+
+    async def _provision_with_retry(self, session, creds, user_ctx) -> None:
+        attempts = 2
+        for attempt in range(1, attempts + 1):
+            try:
+                await self._provision_once(session, creds, user_ctx)
+                return
+            except Exception as e:
+                if attempt >= attempts or not is_transient_daytona_error(e):
+                    raise
+                logger.warning(
+                    "Transient cold-start failure for session '%s' "
+                    "(attempt %d/%d): %s — retrying",
+                    session.id, attempt, attempts, e,
+                )
+                # Drop any half-open connection before a fresh attempt.
+                if session.connection is not None:
+                    with contextlib.suppress(Exception):
+                        await session.connection.close()
+                    session.connection = None
+                await asyncio.sleep(1.0 * attempt)
+
+    async def _provision_once(self, session: AgentSession, creds, user_ctx) -> None:
+        agent = get_agent(session.agent_id)
+        # Deeper unification: harnesses with a sandbox run the agent
+        # INSIDE that sandbox (user's real files, persistent), instead
+        # of a session-owned scratch sandbox.
+        attach_sandbox_id = (
+            session.harness.sandbox_id
+            if session.harness.sandbox_enabled and session.harness.sandbox_id
+            else None
+        )
+
+        # Warm path: adopt a parked runtime (or steal an idle session's)
+        # before paying for a cold sandbox.
+        session.user_ctx = user_ctx  # revive-during-adopt opens with it
+        adopted = False
+        claim = self._claim_parked(session, attach_sandbox_id)
+        if isinstance(claim, tuple):
+            victim, key = claim
+            await self._teardown(victim, park=True)
+            claim = self._parked.pop(key, None)
+        if claim is None and attach_sandbox_id is not None:
+            claim = await self._take_over_attached(session, attach_sandbox_id)
+        if claim is not None:
+            adopted = await self._adopt(session, claim)
+            if adopted and session.acp_session_id is None:
+                # Warm adopt skips _revive's open — open the ACP session.
+                await self._open_acp_session(session, user_ctx)
+
+        if not adopted:
+            if attach_sandbox_id is None:
+                await self._check_sandbox_cap(session.user_id)
+            session.runtime = await asyncio.to_thread(
+                provision_agent_sandbox,
+                session.user_id,
+                agent,
+                creds,
+                attach_sandbox_id,
+            )
+            conn = AcpConnection(
+                session.runtime.base_url, session.runtime.headers,
+            )
+            session.connection = conn
+            conn.on_notification = self._make_notification_handler(session)
+            conn.on_request = self._make_request_handler(session)
+            conn.on_relay_request = self._make_relay_handler(session)
+            await conn.start()
+
+            init = await conn.initialize()
+            session.agent_capabilities = init.get("agentCapabilities") or {}
+            await self._open_acp_session(session, user_ctx)
+
+        # Register in the sandboxes table so the agent's sandbox shows up
+        # in Manage Sandboxes and the existing terminal/file tooling works
+        # against it (attached harness sandboxes are already registered).
+        # Best-effort: a cap or Convex hiccup must not block the session.
+        if not adopted and session.runtime.owns_sandbox:
+            # Fire-and-forget: registration is bookkeeping, not part of
+            # the user's cold-start wait. Adopted runtimes are already
+            # registered from their first provisioning.
+            asyncio.create_task(
+                self._register_sandbox_record(
+                    session.user_id, session.runtime.sandbox_id, agent.name,
+                )
+            )
+
+        session.status = "ready"
+        logger.info(
+            "ACP session '%s' ready (agent=%s, acp_session=%s)",
+            session.id, session.agent_id, session.acp_session_id,
+        )
 
 
     async def _take_over_attached(
@@ -907,7 +1027,7 @@ class AgentSessionManager:
 
         count = await count_user_sandboxes(self._http_client(), user_id)
         if count is not None and count >= MAX_SANDBOXES_PER_USER:
-            raise RuntimeError(
+            raise SessionProvisioningError(
                 f"Sandbox limit reached ({count}/{MAX_SANDBOXES_PER_USER}) — "
                 "delete a sandbox in Manage Sandboxes before starting "
                 "another agent session."
@@ -936,6 +1056,23 @@ class AgentSessionManager:
                 sandbox_id, e,
             )
 
+    async def _reregister_after_loss(
+        self, user_id: str, old_sandbox_id: str, new_sandbox_id: str,
+        agent_name: str,
+    ) -> None:
+        """Swap the Manage Sandboxes record when a gone sandbox is replaced
+        by a fresh one during revive — drop the dead id (frees the cap) then
+        register the new one."""
+        from app.services.convex import ConvexMutationError, run_convex_mutation
+
+        with contextlib.suppress(ConvexMutationError):
+            await run_convex_mutation(
+                self._http_client(),
+                "sandboxes:removeByDaytonaId",
+                {"daytonaSandboxId": old_sandbox_id},
+            )
+        await self._register_sandbox_record(user_id, new_sandbox_id, agent_name)
+
     async def _revive(self, session: AgentSession) -> None:
         """Re-provision a session whose runtime went stale.
 
@@ -947,6 +1084,7 @@ class AgentSessionManager:
         ACP session — the transcript replays on the next prompt.
         """
         assert session.runtime is not None
+        session.status = "reviving"
         logger.info(
             "Reviving stale runtime for session '%s' (agent=%s, sandbox=%s)",
             session.id, session.agent_id, session.runtime.sandbox_id,
@@ -960,14 +1098,60 @@ class AgentSessionManager:
             self._http_client(), session.agent_id, session.user_id,
             credential_id=session.harness.agent_credential_id,
         )
-        session.runtime = await asyncio.to_thread(
-            provision_agent_sandbox,
-            session.user_id,
-            agent,
-            creds,
-            None,
-            session.runtime,
+        owns = session.runtime.owns_sandbox
+        old_sandbox_id = session.runtime.sandbox_id
+        try:
+            session.runtime = await asyncio.to_thread(
+                provision_agent_sandbox,
+                session.user_id,
+                agent,
+                creds,
+                None,
+                session.runtime,
+            )
+        except DaytonaNotFoundError:
+            # The sandbox was garbage-collected/deleted out from under us.
+            # For an owned session sandbox the workspace was scratch anyway,
+            # so provision a brand-new one and replay the transcript rather
+            # than dead-ending. An attached harness sandbox can't be
+            # fabricated — surface the loss.
+            if not owns:
+                raise
+            logger.warning(
+                "Sandbox for session '%s' is gone — provisioning a fresh one",
+                session.id,
+            )
+            session.runtime = await asyncio.to_thread(
+                provision_agent_sandbox,
+                session.user_id,
+                agent,
+                creds,
+                None,
+                None,
+            )
+            # The Manage Sandboxes record still points at the dead sandbox and
+            # counts against the per-user cap — drop it and register the fresh
+            # one. Best-effort: bookkeeping must not fail the revive.
+            if session.runtime.owns_sandbox:
+                reregister = asyncio.create_task(
+                    self._reregister_after_loss(
+                        session.user_id, old_sandbox_id,
+                        session.runtime.sandbox_id, agent.name,
+                    )
+                )
+                reregister.add_done_callback(_log_background_error)
+        await self._rebuild_connection(session)
+        session.pending_replay = bool(session.transcript)
+        session.status = "ready"
+        session.error = None
+        logger.info(
+            "Session '%s' revived (acp_session=%s)",
+            session.id, session.acp_session_id,
         )
+
+    async def _rebuild_connection(self, session: AgentSession) -> None:
+        """Open a fresh ACP connection over session.runtime and re-init."""
+        assert session.runtime is not None
         conn = AcpConnection(session.runtime.base_url, session.runtime.headers)
         session.connection = conn
         conn.on_notification = self._make_notification_handler(session)
@@ -977,13 +1161,6 @@ class AgentSessionManager:
         init = await conn.initialize()
         session.agent_capabilities = init.get("agentCapabilities") or {}
         await self._open_acp_session(session, session.user_ctx)
-        session.pending_replay = bool(session.transcript)
-        session.status = "ready"
-        session.error = None
-        logger.info(
-            "Session '%s' revived (acp_session=%s)",
-            session.id, session.acp_session_id,
-        )
 
     async def _ensure_alive(self, session: AgentSession) -> bool:
         """Health-check the runtime; revive if stale. False on hard failure."""
@@ -996,7 +1173,7 @@ class AgentSessionManager:
         except Exception as e:
             logger.exception("Revive failed for session '%s'", session.id)
             session.status = "error"
-            session.error = f"Could not reconnect to the agent sandbox: {e}"
+            session.error = classify_agent_error(e)
             return False
 
     async def _open_acp_session(self, session: AgentSession, user_ctx) -> None:
@@ -1471,7 +1648,12 @@ class AgentSessionManager:
                     "data": {"state": "ready", "agent": session.agent_id},
                 }
         if session.status == "error":
-            yield {"event": "error", "data": {"message": session.error or "session failed"}}
+            # Provisioning failed (or a prior turn errored the session): the
+            # message is already user-friendly and the next send recreates.
+            yield {
+                "event": "error",
+                "data": {"message": session.error or "session failed"},
+            }
             return
         if session.status == "prompting":
             yield {"event": "error", "data": {"message": "A turn is already in progress"}}
@@ -1581,7 +1763,10 @@ class AgentSessionManager:
                     return
             except (AcpError, AcpTransportError) as e:
                 logger.warning("Prompt turn failed on session '%s': %s", session.id, e)
-                yield {"event": "error", "data": {"message": str(e)}}
+                yield {
+                    "event": "error",
+                    "data": {"message": classify_agent_error(e)},
+                }
             except GeneratorExit:
                 # SSE client disconnected mid-turn (tab closed, dev-server
                 # reload, proxy drop). Stop the now-headless turn agent-side
@@ -1769,9 +1954,11 @@ class AgentSessionManager:
             parked_ttl = settings.acp_parked_ttl_minutes * 60
             now = time.monotonic()
             for session in list(self._sessions.values()):
-                if session.status == "prompting":
-                    continue
-                if now - session.last_activity > ttl:
+                if _session_is_reapable(
+                    session.status, session.turn_guard,
+                    session.last_activity, now, ttl,
+                    session.lock.locked(),
+                ):
                     logger.info("Parking idle ACP session '%s'", session.id)
                     with contextlib.suppress(Exception):
                         await self._teardown(session, park=True)

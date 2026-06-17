@@ -319,11 +319,21 @@ async function runAgentStream(
 			signal: controller.signal,
 		});
 
+	// On a cold start the sandbox provision (~30s) happens BEFORE the prompt
+	// SSE opens, so the gateway's own "provisioning" status frame can't reach
+	// us yet. ensureAgentSession fires onProvisioning exactly when it's about
+	// to pay a cold start (a new OR recreated session) — surface the honest
+	// "Starting… up to ~30s" copy then; a warm reuse stays silent.
+	const onProvisioning = () =>
+		cb.onAgentStatus?.(convoId, { state: "provisioning", agent });
+
 	let sessionId = await ensureAgentSession(
 		token,
 		agent,
 		body.harness as never,
 		convoId,
+		controller.signal,
+		onProvisioning,
 	);
 	let response = await prompt(sessionId);
 	if (response.status === 404) {
@@ -334,6 +344,8 @@ async function runAgentStream(
 			agent,
 			body.harness as never,
 			convoId,
+			controller.signal,
+			onProvisioning,
 		);
 		response = await prompt(sessionId);
 	}
@@ -460,12 +472,16 @@ async function runAgentStream(
 	});
 
 	// The connection closed without the turn concluding (server restart,
-	// proxy drop, network blip). Say so instead of silently stopping.
+	// proxy drop, network blip). Say so instead of silently stopping. We
+	// can't re-attach to the still-running turn yet, so don't promise it —
+	// if the agent is still working, the next send may report "a turn is
+	// already in progress"; otherwise it starts fresh.
 	if (!finished) {
 		cb.onError(
 			convoId,
-			"The connection to the agent dropped mid-turn. The agent may still " +
-				"be working in its sandbox — send another message to reattach.",
+			"The connection to the agent dropped before its turn finished. " +
+				"It may still be working in its sandbox — wait a moment, or press " +
+				"Stop and try again.",
 		);
 	}
 }
