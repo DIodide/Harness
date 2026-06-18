@@ -9,8 +9,7 @@ function makeT() {
 	const raw = convexTest(schema, modules);
 	return {
 		raw,
-		asUser: (uid: string) =>
-			raw.withIdentity({ subject: uid, issuer: "test" }),
+		asUser: (uid: string) => raw.withIdentity({ subject: uid, issuer: "test" }),
 	};
 }
 
@@ -50,6 +49,7 @@ describe("mcpOAuthTokens.getStatus", () => {
 			connected: true,
 			expiresAt: 9999,
 			scopes: "read write",
+			refreshable: true,
 		});
 		expect(JSON.stringify(res)).not.toContain("secret-access");
 	});
@@ -74,9 +74,18 @@ describe("mcpOAuthTokens.listStatuses", () => {
 			scopes: "",
 			authServerUrl: "https://auth",
 		});
-		const aList = await asUser("u-a").query(api.mcpOAuthTokens.listStatuses, {});
+		const aList = await asUser("u-a").query(
+			api.mcpOAuthTokens.listStatuses,
+			{},
+		);
 		expect(aList).toEqual([
-			{ mcpServerUrl: SERVER, connected: true, expiresAt: 1, scopes: "" },
+			{
+				mcpServerUrl: SERVER,
+				connected: true,
+				expiresAt: 1,
+				scopes: "",
+				refreshable: false,
+			},
 		]);
 	});
 });
