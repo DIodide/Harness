@@ -301,6 +301,70 @@ function ChatPage() {
 		mutationFn: useConvexMutation(api.messages.send),
 	});
 
+	// Persist a turn that ended without a clean "done" — a user Stop (onAbort)
+	// OR an agent connection drop that surfaces as onError — so the
+	// streamed-so-far content isn't lost. No-op if onDone already saved it.
+	const persistInterruptedTurn = (convoId: string) => {
+		const state = streamStatesRef.current[convoId];
+		if (state?.pendingDoneContent != null) return; // onDone already saved
+		if (
+			!state ||
+			(!state.content && !state.reasoning && state.toolCalls.length === 0)
+		) {
+			clearStreamState(convoId);
+			return;
+		}
+		const completedToolCalls = state.toolCalls.filter(
+			(tc) => tc.result,
+		) as Array<{
+			tool: string;
+			arguments: Record<string, unknown>;
+			call_id: string;
+			result: string;
+		}>;
+		const cleanedParts = state.parts.filter(
+			(p) => p.type !== "tool_call" || p.result,
+		);
+		const partialContent = state.content ?? "";
+		const model = state.model ?? sessionModel ?? activeHarness?.model ?? null;
+		saveInterruptedMsg.mutate(
+			{
+				conversationId: convoId as Id<"conversations">,
+				content: partialContent,
+				...(state.reasoning ? { reasoning: state.reasoning } : {}),
+				...(completedToolCalls.length > 0
+					? { toolCalls: completedToolCalls }
+					: {}),
+				...(cleanedParts.length > 0
+					? { parts: toPersistableParts(cleanedParts) }
+					: {}),
+				...(state.usage ? { usage: state.usage } : {}),
+				...(model ? { model } : {}),
+			},
+			{
+				// If the write fails, clear the bubble so it doesn't wedge.
+				onError: () => {
+					clearStreamState(convoId);
+					toast.error("Couldn't save the interrupted response.");
+				},
+			},
+		);
+		setStreamState(convoId, () => ({
+			...state,
+			toolCalls: completedToolCalls,
+			parts: cleanedParts,
+			pendingDoneContent: partialContent,
+			model,
+		}));
+	};
+
+	const drainQueueAfterTurn = (convoId: string) => {
+		if (!pendingQueueSendRef.current && messageQueueRef.current.length > 0) {
+			const next = shiftQueue();
+			if (next) pendingQueueSendRef.current = { convoId, content: next };
+		}
+	};
+
 	useChatStreamSideEffects({
 		onMcpError: (_convoId, event) => {
 			setMcpFailures((prev) => [
@@ -320,89 +384,17 @@ function ChatPage() {
 				`${which.charAt(0).toUpperCase() + which.slice(1)} usage limit reached`,
 			);
 		},
-		onError: (_convoId, error) => {
+		onError: (convoId, error, kind) => {
 			toast.error(error);
+			// Persist the streamed-so-far turn ONLY on a connection drop, where
+			// the backend skipped its own save. A server-emitted error frame was
+			// already persisted backend-side — saving here too would duplicate
+			// the assistant row.
+			if (kind === "disconnect") persistInterruptedTurn(convoId);
 		},
 		onAbort: (convoId) => {
-			const state = streamStatesRef.current[convoId];
-
-			// If onDone already fired (pendingDoneContent is set), the backend already
-			// saved the message — don't save a duplicate interrupted copy.
-			if (
-				state?.pendingDoneContent !== null &&
-				state?.pendingDoneContent !== undefined
-			) {
-				// Just process queued messages if any
-				if (
-					!pendingQueueSendRef.current &&
-					messageQueueRef.current.length > 0
-				) {
-					const next = shiftQueue();
-					if (next) {
-						pendingQueueSendRef.current = { convoId, content: next };
-					}
-				}
-				return;
-			}
-
-			if (
-				!state ||
-				(!state.content && !state.reasoning && state.toolCalls.length === 0)
-			) {
-				// Nothing accumulated — just clear state
-				clearStreamState(convoId);
-			} else {
-				// Filter: only keep completed tool calls (those with results)
-				const completedToolCalls = state.toolCalls.filter(
-					(tc) => tc.result,
-				) as Array<{
-					tool: string;
-					arguments: Record<string, unknown>;
-					call_id: string;
-					result: string;
-				}>;
-				const cleanedParts = state.parts.filter(
-					(p) => p.type !== "tool_call" || p.result,
-				);
-
-				const partialContent = state.content ?? "";
-				// model is only sent in the "done" event which doesn't fire on abort,
-				// so fall back to the session model, then the harness model
-				const model =
-					state.model ?? sessionModel ?? activeHarness?.model ?? null;
-
-				saveInterruptedMsg.mutate({
-					conversationId: convoId as Id<"conversations">,
-					content: partialContent,
-					...(state.reasoning ? { reasoning: state.reasoning } : {}),
-					...(completedToolCalls.length > 0
-						? { toolCalls: completedToolCalls }
-						: {}),
-					...(cleanedParts.length > 0
-						? { parts: toPersistableParts(cleanedParts) }
-						: {}),
-					...(state.usage ? { usage: state.usage } : {}),
-					...(model ? { model } : {}),
-				});
-
-				// Keep streaming bubble visible until Convex syncs the interrupted message
-				// (same pattern as onDone — set pendingDoneContent so convexHasMessage can match)
-				setStreamState(convoId, () => ({
-					...state,
-					toolCalls: completedToolCalls,
-					parts: cleanedParts,
-					pendingDoneContent: partialContent,
-					model,
-				}));
-			}
-
-			// Process next queued message if any (skip if handleSendNow already set one)
-			if (!pendingQueueSendRef.current && messageQueueRef.current.length > 0) {
-				const next = shiftQueue();
-				if (next) {
-					pendingQueueSendRef.current = { convoId, content: next };
-				}
-			}
+			persistInterruptedTurn(convoId);
+			drainQueueAfterTurn(convoId);
 		},
 	});
 
