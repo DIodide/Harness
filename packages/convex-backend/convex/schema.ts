@@ -14,7 +14,12 @@ export default defineSchema({
 			v.object({
 				name: v.string(),
 				url: v.string(),
-				authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth"), v.literal("tiger_junction")),
+				authType: v.union(
+					v.literal("none"),
+					v.literal("bearer"),
+					v.literal("oauth"),
+					v.literal("tiger_junction"),
+				),
 				authToken: v.optional(v.string()),
 				commandIds: v.optional(v.array(v.id("commands"))),
 			}),
@@ -53,12 +58,19 @@ export default defineSchema({
 	}).index("by_user", ["userId"]),
 
 	commands: defineTable({
+		// Owner. Optional for backward-compat with rows created before commands
+		// were user-scoped; new rows always set it. Command names collide across
+		// users (e.g. "GitHub__create_issue"), so without this an upsert from one
+		// user would overwrite another's row and getByIds would leak it.
+		userId: v.optional(v.string()),
 		name: v.string(),
 		server: v.string(),
 		tool: v.string(),
 		description: v.string(),
 		parametersJson: v.string(),
-	}).index("by_name", ["name"]),
+	})
+		.index("by_name", ["name"])
+		.index("by_user_and_name", ["userId", "name"]),
 
 	sandboxes: defineTable({
 		userId: v.string(),
@@ -191,9 +203,8 @@ export default defineSchema({
 		.index("by_conversation", ["conversationId"])
 		.searchIndex("search_content", {
 			searchField: "content",
-			filterFields: ["conversationId", "userId", "workspaceId"]
+			filterFields: ["conversationId", "userId", "workspaceId"],
 		}),
-
 
 	// Per-user credentials for external ACP agents (Codex CLI, Claude Code).
 	// Values are AES-256-GCM ciphertext produced by the FastAPI backend —
@@ -256,11 +267,7 @@ export default defineSchema({
 		userId: v.string(),
 		autoSwitchHarness: v.boolean(),
 		displayMode: v.optional(
-			v.union(
-				v.literal("zen"),
-				v.literal("standard"),
-				v.literal("developer"),
-			),
+			v.union(v.literal("zen"), v.literal("standard"), v.literal("developer")),
 		),
 		// Controls whether the in-chat model selector changes only the current
 		// session ("session") or persists the change to the harness ("harness").
@@ -274,10 +281,7 @@ export default defineSchema({
 		),
 		// Control whether or not we are in basic models or workspaces modes
 		workspacesMode: v.optional(
-			v.union(
-				v.literal("basic"),
-				v.literal("workspaces")
-			)
+			v.union(v.literal("basic"), v.literal("workspaces")),
 		),
 	}).index("by_user", ["userId"]),
 
@@ -335,7 +339,7 @@ export default defineSchema({
 		completionTokens: v.number(),
 		totalTokens: v.number(),
 		cost: v.number(),
-		day: v.string(),  // "2026-04-08"
+		day: v.string(), // "2026-04-08"
 		week: v.string(), // "2026-W15"
 		recordedAt: v.number(),
 	})
