@@ -1,5 +1,10 @@
 import { v } from "convex/values";
-import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import {
+	internalMutation,
+	internalQuery,
+	mutation,
+	query,
+} from "./_generated/server";
 
 /**
  * Get OAuth token status for a specific MCP server (frontend use).
@@ -21,6 +26,9 @@ export const getStatus = query({
 			connected: true,
 			expiresAt: token.expiresAt,
 			scopes: token.scopes,
+			// The gateway auto-refreshes on relay when a refresh token exists, so
+			// an expired-but-refreshable token is not actually disconnected.
+			refreshable: Boolean(token.refreshToken),
 		};
 	},
 });
@@ -41,6 +49,7 @@ export const listStatuses = query({
 			connected: true,
 			expiresAt: t.expiresAt,
 			scopes: t.scopes,
+			refreshable: Boolean(t.refreshToken),
 		}));
 	},
 });

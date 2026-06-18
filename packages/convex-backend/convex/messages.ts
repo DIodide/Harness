@@ -52,7 +52,10 @@ export const send = mutation({
 				: {}),
 		});
 
-		const patch: { lastMessageAt: number; lastHarnessId?: typeof args.harnessId } = {
+		const patch: {
+			lastMessageAt: number;
+			lastHarnessId?: typeof args.harnessId;
+		} = {
 			lastMessageAt: Date.now(),
 		};
 		if (args.harnessId) {
@@ -79,6 +82,40 @@ export const remove = mutation({
 		}
 
 		await ctx.db.delete(args.id);
+	},
+});
+
+/**
+ * Delete a message and every later message in its conversation. Used by
+ * regenerate: regenerating a (possibly mid-conversation) assistant message
+ * must truncate the conversation at that point, otherwise the messages after
+ * it are orphaned when the new response is appended at the end.
+ */
+export const removeFrom = mutation({
+	args: { id: v.id("messages") },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+
+		const message = await ctx.db.get(args.id);
+		if (!message) throw new Error("Not found");
+
+		const convo = await ctx.db.get(message.conversationId);
+		if (!convo || convo.userId !== identity.subject) {
+			throw new Error("Not found");
+		}
+
+		const inConvo = await ctx.db
+			.query("messages")
+			.withIndex("by_conversation", (q) =>
+				q.eq("conversationId", message.conversationId),
+			)
+			.collect();
+		for (const m of inConvo) {
+			if (m._creationTime >= message._creationTime) {
+				await ctx.db.delete(m._id);
+			}
+		}
 	},
 });
 
@@ -136,7 +173,8 @@ export const saveInterruptedMessage = mutation({
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
 		const convo = await ctx.db.get(args.conversationId);
-		if (!convo || convo.userId !== identity.subject) throw new Error("Not found");
+		if (!convo || convo.userId !== identity.subject)
+			throw new Error("Not found");
 
 		await ctx.db.insert("messages", {
 			conversationId: args.conversationId,
@@ -149,9 +187,7 @@ export const saveInterruptedMessage = mutation({
 			...(args.toolCalls && args.toolCalls.length > 0
 				? { toolCalls: args.toolCalls }
 				: {}),
-			...(args.parts && args.parts.length > 0
-				? { parts: args.parts }
-				: {}),
+			...(args.parts && args.parts.length > 0 ? { parts: args.parts } : {}),
 			...(args.usage ? { usage: args.usage } : {}),
 			...(args.model ? { model: args.model } : {}),
 		});
@@ -228,9 +264,7 @@ export const saveAssistantMessage = internalMutation({
 			...(args.toolCalls && args.toolCalls.length > 0
 				? { toolCalls: args.toolCalls }
 				: {}),
-			...(args.parts && args.parts.length > 0
-				? { parts: args.parts }
-				: {}),
+			...(args.parts && args.parts.length > 0 ? { parts: args.parts } : {}),
 			...(args.usage ? { usage: args.usage } : {}),
 			...(args.model ? { model: args.model } : {}),
 			...(args.interrupted ? { interrupted: true } : {}),
