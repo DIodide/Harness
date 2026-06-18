@@ -817,8 +817,10 @@ function ChatPage() {
 		[handleSelectConversation],
 	);
 
-	const removeMessage = useMutation({
-		mutationFn: useConvexMutation(api.messages.remove),
+	// removeFrom (not remove): regenerating a mid-conversation message must
+	// truncate the conversation there, or the messages after it are orphaned.
+	const truncateFromMessage = useMutation({
+		mutationFn: useConvexMutation(api.messages.removeFrom),
 	});
 
 	const handleRegenerate = useCallback(
@@ -827,8 +829,14 @@ function ChatPage() {
 			history: Array<{ role: string; content: string }>,
 		) => {
 			if (!activeHarness || !activeConvoId) return;
+			if (
+				chatStream.streamingConvoIds.has(activeConvoId) ||
+				streamStatesRef.current[activeConvoId]?.pendingDoneContent != null
+			) {
+				return;
+			}
 
-			await removeMessage.mutateAsync({ id: messageId });
+			await truncateFromMessage.mutateAsync({ id: messageId });
 
 			const harnessConfig = buildHarnessConfig();
 			if (!harnessConfig) return;
@@ -844,8 +852,9 @@ function ChatPage() {
 			activeHarness,
 			activeConvoId,
 			chatStream,
-			removeMessage,
+			truncateFromMessage,
 			buildHarnessConfig,
+			streamStatesRef,
 		],
 	);
 

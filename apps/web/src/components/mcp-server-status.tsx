@@ -139,6 +139,7 @@ function getServerStatus(
 		connected: boolean;
 		expiresAt: number;
 		scopes: string;
+		refreshable?: boolean;
 	}>,
 	healthStatus?: HealthStatus,
 ): ServerStatus {
@@ -151,7 +152,15 @@ function getServerStatus(
 			(s) => s.mcpServerUrl === server.url,
 		);
 		if (!tokenStatus || !tokenStatus.connected) return "disconnected";
-		if (tokenStatus.expiresAt < Date.now() / 1000 + 60) return "expired";
+		// An expired access token with a refresh token is NOT disconnected —
+		// the gateway refreshes it on the next relayed request. Only surface
+		// "expired"/Reconnect when there's no way to refresh.
+		if (
+			tokenStatus.expiresAt < Date.now() / 1000 + 60 &&
+			!tokenStatus.refreshable
+		) {
+			return "expired";
+		}
 		// Token valid — also check health if available
 		if (healthStatus === "unreachable") return "disconnected";
 		if (healthStatus === "auth_required") return "expired";

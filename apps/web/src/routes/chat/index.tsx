@@ -781,8 +781,11 @@ function ChatPage() {
 		[handleSelectConversation],
 	);
 
-	const removeMessage = useMutation({
-		mutationFn: useConvexMutation(api.messages.remove),
+	// removeFrom (not remove): regenerating a mid-conversation message must
+	// truncate the conversation there, or the messages after it are orphaned
+	// once the new response is appended at the end.
+	const truncateFromMessage = useMutation({
+		mutationFn: useConvexMutation(api.messages.removeFrom),
 	});
 
 	const handleRegenerate = useCallback(
@@ -791,8 +794,17 @@ function ChatPage() {
 			history: Array<{ role: string; content: string }>,
 		) => {
 			if (!activeHarness || !activeConvoId) return;
+			// Don't regenerate while a turn is in flight, or while a just-finished
+			// turn's bubble hasn't synced yet (the action buttons briefly reappear
+			// in that window) — it would race the streaming state.
+			if (
+				chatStream.streamingConvoIds.has(activeConvoId) ||
+				streamStatesRef.current[activeConvoId]?.pendingDoneContent != null
+			) {
+				return;
+			}
 
-			await removeMessage.mutateAsync({ id: messageId });
+			await truncateFromMessage.mutateAsync({ id: messageId });
 
 			const harnessConfig = buildHarnessConfig();
 			if (!harnessConfig) return;
@@ -808,8 +820,9 @@ function ChatPage() {
 			activeHarness,
 			activeConvoId,
 			chatStream,
-			removeMessage,
+			truncateFromMessage,
 			buildHarnessConfig,
+			streamStatesRef,
 		],
 	);
 

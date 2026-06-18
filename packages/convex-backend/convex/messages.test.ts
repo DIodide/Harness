@@ -9,8 +9,7 @@ function makeT() {
 	const raw = convexTest(schema, modules);
 	return {
 		raw,
-		asUser: (uid: string) =>
-			raw.withIdentity({ subject: uid, issuer: "test" }),
+		asUser: (uid: string) => raw.withIdentity({ subject: uid, issuer: "test" }),
 	};
 }
 
@@ -23,10 +22,7 @@ const baseHarness = (o = {}) => ({
 	...o,
 });
 
-async function seedConversation(
-	t: ReturnType<typeof makeT>,
-	userId: string,
-) {
+async function seedConversation(t: ReturnType<typeof makeT>, userId: string) {
 	const u = t.asUser(userId);
 	const h = await u.mutation(api.harnesses.create, baseHarness());
 	const c = await u.mutation(api.conversations.create, {
@@ -40,9 +36,9 @@ describe("messages.list", () => {
 	it("returns [] when unauthenticated", async () => {
 		const t = makeT();
 		const { conversationId } = await seedConversation(t, "u-a");
-		expect(
-			await t.raw.query(api.messages.list, { conversationId }),
-		).toEqual([]);
+		expect(await t.raw.query(api.messages.list, { conversationId })).toEqual(
+			[],
+		);
 	});
 
 	it("returns [] for a conversation owned by another user", async () => {
@@ -145,6 +141,47 @@ describe("messages.remove", () => {
 		const b = t.asUser("u-b");
 		await expect(
 			b.mutation(api.messages.remove, { id: msgId }),
+		).rejects.toThrow(/Not found/);
+	});
+});
+
+describe("messages.removeFrom", () => {
+	it("deletes the target message and every later message", async () => {
+		const t = makeT();
+		const { user, conversationId } = await seedConversation(t, "u-a");
+		const ids: string[] = [];
+		for (const [role, content] of [
+			["user", "q1"],
+			["assistant", "a1"],
+			["user", "q2"],
+			["assistant", "a2"],
+		] as const) {
+			ids.push(
+				await user.mutation(api.messages.send, {
+					conversationId,
+					role,
+					content,
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 2)); // distinct _creationTime
+		}
+		// Regenerate a1 → truncate from a1 onward, keeping only q1.
+		await user.mutation(api.messages.removeFrom, { id: ids[1] });
+		const left = await user.query(api.messages.list, { conversationId });
+		expect(left.map((m) => m.content)).toEqual(["q1"]);
+	});
+
+	it("rejects when the conversation isn't owned by the caller", async () => {
+		const t = makeT();
+		const { user, conversationId } = await seedConversation(t, "u-a");
+		const msgId = await user.mutation(api.messages.send, {
+			conversationId,
+			role: "assistant",
+			content: "r",
+		});
+		const b = t.asUser("u-b");
+		await expect(
+			b.mutation(api.messages.removeFrom, { id: msgId }),
 		).rejects.toThrow(/Not found/);
 	});
 });
