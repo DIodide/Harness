@@ -632,12 +632,19 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 					cbRef.current.onError(convoId, err.message);
 				}
 			} finally {
-				abortControllers.current.delete(convoId);
-				setStreamingConvoIds((prev) => {
-					const next = new Set(prev);
-					next.delete(convoId);
-					return next;
-				});
+				// Only tear down if a newer stream for the same conversation
+				// hasn't already replaced this one (regenerate / send-now abort
+				// the old stream and start a new one synchronously — the old
+				// finally must NOT delete the new stream's controller, which
+				// would break Stop, nor clear its streaming flag).
+				if (abortControllers.current.get(convoId) === controller) {
+					abortControllers.current.delete(convoId);
+					setStreamingConvoIds((prev) => {
+						const next = new Set(prev);
+						next.delete(convoId);
+						return next;
+					});
+				}
 			}
 		},
 		[getToken, user?.id],
