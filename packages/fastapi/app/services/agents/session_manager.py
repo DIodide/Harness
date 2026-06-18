@@ -1168,7 +1168,8 @@ class AgentSessionManager:
         await conn.start()
         init = await conn.initialize()
         session.agent_capabilities = init.get("agentCapabilities") or {}
-        await self._open_acp_session(session, session.user_ctx)
+        # Revive opens a fresh ACP session — keep the user's live config picks.
+        await self._open_acp_session(session, session.user_ctx, preserve_config=True)
 
     async def _ensure_alive(self, session: AgentSession) -> bool:
         """Health-check the runtime; revive if stale. False on hard failure."""
@@ -1184,8 +1185,22 @@ class AgentSessionManager:
             session.error = classify_agent_error(e)
             return False
 
-    async def _open_acp_session(self, session: AgentSession, user_ctx) -> None:
+    async def _open_acp_session(
+        self, session: AgentSession, user_ctx, preserve_config: bool = False,
+    ) -> None:
         assert session.connection is not None
+        # session/new resets config to the agent's defaults. On a harness
+        # switch or a revive we restore the user's live picks (model, effort,
+        # mode) instead of resetting them — snapshot before opening.
+        prior_config: dict[str, str] = {}
+        if preserve_config:
+            prior_config = {
+                o["id"]: o["currentValue"]
+                for o in session.config_options
+                if isinstance(o, dict)
+                and o.get("id")
+                and isinstance(o.get("currentValue"), str)
+            }
         mcp_caps = session.agent_capabilities.get("mcpCapabilities") or {}
         servers = session.harness.mcp_servers
         if servers and not mcp_caps.get("http", False):
@@ -1235,7 +1250,56 @@ class AgentSessionManager:
         for params in early:
             if params.get("sessionId") == session.acp_session_id:
                 await self._process_session_update(session, params)
-        await self._apply_harness_model(session)
+        if preserve_config and prior_config:
+            await self._reapply_config(session, prior_config)
+        else:
+            await self._apply_harness_model(session)
+
+    @staticmethod
+    def _config_value_offered(option: dict, value: str) -> bool:
+        """True if `value` is among the option's (possibly grouped) choices."""
+        values: list = []
+        for entry in option.get("options") or []:
+            if isinstance(entry, dict) and isinstance(entry.get("options"), list):
+                values.extend(
+                    c.get("value") for c in entry["options"] if isinstance(c, dict)
+                )
+            elif isinstance(entry, dict):
+                values.append(entry.get("value"))
+        return value in values
+
+    async def _reapply_config(
+        self, session: AgentSession, prior: dict[str, str],
+    ) -> None:
+        """Restore previously-set config values to a freshly-opened ACP
+        session (harness switch / revive) so the user's picks survive. Only
+        re-applies values the new option list still offers."""
+        if session.connection is None or session.acp_session_id is None:
+            return
+        for option_id, value in prior.items():
+            option = next(
+                (o for o in session.config_options if o.get("id") == option_id),
+                None,
+            )
+            if not option or option.get("currentValue") == value:
+                continue
+            if not self._config_value_offered(option, value):
+                continue
+            try:
+                result = await session.connection.set_config_option(
+                    session.acp_session_id, option_id, value,
+                )
+                if result.get("configOptions") is not None:
+                    session.config_options = result["configOptions"]
+                logger.info(
+                    "Re-applied %s=%r to session '%s' after re-open",
+                    option_id, value, session.id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Could not re-apply %s=%r on session '%s': %s",
+                    option_id, value, session.id, e,
+                )
 
     async def _apply_harness_model(self, session: AgentSession) -> None:
         """Best-effort: select the harness's configured model on a fresh ACP
@@ -1880,7 +1944,8 @@ class AgentSessionManager:
             raise RuntimeError(session.error or "could not reconnect to the agent")
         async with session.lock:
             session.harness = harness
-            await self._open_acp_session(session, user_ctx)
+            # An MCP switch must not reset the user's model/effort/mode picks.
+            await self._open_acp_session(session, user_ctx, preserve_config=True)
             session.pending_replay = bool(session.transcript)
             session.last_activity = time.monotonic()
             logger.info(

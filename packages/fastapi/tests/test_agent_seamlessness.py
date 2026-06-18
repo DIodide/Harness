@@ -331,3 +331,51 @@ class TestReviveReprovision:
 
         with pytest.raises(sm.DaytonaNotFoundError):
             asyncio.run(mgr._revive(session))
+
+
+class TestConfigPreservation:
+    """A harness switch / revive opens a fresh ACP session; the user's live
+    config picks (model/effort/mode) must be re-applied, not reset."""
+
+    def test_config_value_offered_flat_and_grouped(self):
+        flat = {"options": [{"value": "high"}, {"value": "max"}]}
+        assert AgentSessionManager._config_value_offered(flat, "high") is True
+        assert AgentSessionManager._config_value_offered(flat, "low") is False
+        grouped = {"options": [{"options": [{"value": "a"}, {"value": "b"}]}]}
+        assert AgentSessionManager._config_value_offered(grouped, "a") is True
+        assert AgentSessionManager._config_value_offered(grouped, "z") is False
+
+    def test_reapply_restores_offered_changed_values_only(self):
+        mgr = AgentSessionManager()
+        session = _make_session()
+        session.acp_session_id = "acp1"
+        # Freshly-opened session: agent defaults.
+        session.config_options = [
+            {
+                "id": "model",
+                "currentValue": "default",
+                "options": [{"value": "default"}, {"value": "opus"}],
+            },
+            {
+                "id": "effort",
+                "currentValue": "high",
+                "options": [{"value": "high"}, {"value": "max"}],
+            },
+        ]
+        calls = []
+
+        class FakeConn:
+            async def set_config_option(self, _sid, oid, val):
+                calls.append((oid, val))
+                return {"configOptions": session.config_options}
+
+        session.connection = FakeConn()
+        # The user previously chose opus + max, plus a now-unoffered mode value
+        # and an effort already at the default (high).
+        prior = {"model": "opus", "effort": "high", "mode": "gone"}
+        asyncio.run(mgr._reapply_config(session, prior))
+
+        applied = dict(calls)
+        assert applied.get("model") == "opus"  # offered + changed → re-applied
+        assert "effort" not in applied  # equals current → skipped
+        assert "mode" not in applied  # not offered by the new session → skipped

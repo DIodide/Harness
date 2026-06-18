@@ -9,18 +9,19 @@ function makeT() {
 	const raw = convexTest(schema, modules);
 	return {
 		raw,
-		asUser: (uid: string) =>
-			raw.withIdentity({ subject: uid, issuer: "test" }),
+		asUser: (uid: string) => raw.withIdentity({ subject: uid, issuer: "test" }),
 	};
 }
 
-const baseCmd = (overrides: Partial<{
-	name: string;
-	server: string;
-	tool: string;
-	description: string;
-	parametersJson: string;
-}> = {}) => ({
+const baseCmd = (
+	overrides: Partial<{
+		name: string;
+		server: string;
+		tool: string;
+		description: string;
+		parametersJson: string;
+	}> = {},
+) => ({
 	name: "do-thing",
 	server: "srv",
 	tool: "tool",
@@ -40,10 +41,7 @@ describe("commands.upsert", () => {
 	it("inserts new commands and returns their IDs in input order", async () => {
 		const a = makeT().asUser("user-a");
 		const ids = await a.mutation(api.commands.upsert, {
-			commands: [
-				baseCmd({ name: "a" }),
-				baseCmd({ name: "b" }),
-			],
+			commands: [baseCmd({ name: "a" }), baseCmd({ name: "b" })],
 		});
 		expect(ids).toHaveLength(2);
 		const rows = await a.query(api.commands.getByIds, { ids });
@@ -61,6 +59,22 @@ describe("commands.upsert", () => {
 		expect(id).toBe(id2);
 		const [row] = await a.query(api.commands.getByIds, { ids: [id] });
 		expect(row?.description).toBe("v2");
+	});
+
+	it("does NOT overwrite another user's identically-named command", async () => {
+		const { asUser } = makeT();
+		const a = asUser("user-a");
+		const b = asUser("user-b");
+		const [idA] = await a.mutation(api.commands.upsert, {
+			commands: [baseCmd({ name: "GitHub__create_issue", description: "A's" })],
+		});
+		const [idB] = await b.mutation(api.commands.upsert, {
+			commands: [baseCmd({ name: "GitHub__create_issue", description: "B's" })],
+		});
+		// Separate rows per user — B's upsert must not patch A's.
+		expect(idA).not.toBe(idB);
+		const [rowA] = await a.query(api.commands.getByIds, { ids: [idA] });
+		expect(rowA?.description).toBe("A's");
 	});
 });
 
@@ -84,6 +98,19 @@ describe("commands.getByIds", () => {
 	it("returns empty for an empty input array", async () => {
 		const a = makeT().asUser("user-a");
 		const rows = await a.query(api.commands.getByIds, { ids: [] });
+		expect(rows).toEqual([]);
+	});
+
+	it("does not leak another user's command rows", async () => {
+		const { asUser } = makeT();
+		const a = asUser("user-a");
+		const b = asUser("user-b");
+		const [idA] = await a.mutation(api.commands.upsert, {
+			commands: [baseCmd({ name: "secret", description: "A's params" })],
+		});
+		// User B holds a stale/foreign id (e.g. via a cross-wired harness) —
+		// getByIds must not return A's row to B.
+		const rows = await b.query(api.commands.getByIds, { ids: [idA] });
 		expect(rows).toEqual([]);
 	});
 });
