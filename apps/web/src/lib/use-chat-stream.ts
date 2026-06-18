@@ -137,7 +137,15 @@ interface UseChatStreamCallbacks {
 		conversationId: string,
 		event: { sandbox_id: string; status: string },
 	) => void;
-	onError: (conversationId: string, error: string) => void;
+	// kind: "disconnect" = the connection dropped and the backend skipped its
+	// save (the client should persist the streamed-so-far turn); "server"
+	// (default) = a backend-emitted error frame that the backend already
+	// persisted (the client must NOT save, to avoid a duplicate row).
+	onError: (
+		conversationId: string,
+		error: string,
+		kind?: "server" | "disconnect",
+	) => void;
 	onBudgetExceeded?: (conversationId: string, info: BudgetExceededInfo) => void;
 	onAbort?: (conversationId: string) => void;
 	/** ACP agent mode: the agent is waiting for a tool-use approval. */
@@ -477,11 +485,15 @@ async function runAgentStream(
 	// if the agent is still working, the next send may report "a turn is
 	// already in progress"; otherwise it starts fresh.
 	if (!finished) {
+		// Silent disconnect: the SSE ended without a terminal done/error frame,
+		// so the gateway skipped its own save — the client owns persisting the
+		// streamed-so-far turn ("disconnect" kind).
 		cb.onError(
 			convoId,
 			"The connection to the agent dropped before its turn finished. " +
 				"It may still be working in its sandbox — wait a moment, or press " +
 				"Stop and try again.",
+			"disconnect",
 		);
 	}
 }
@@ -629,15 +641,24 @@ export function useChatStream(callbacks: UseChatStreamCallbacks) {
 				if (err instanceof Error && err.name === "AbortError") {
 					cbRef.current.onAbort?.(convoId);
 				} else if (err instanceof Error) {
-					cbRef.current.onError(convoId, err.message);
+					// Transport failure (the fetch/reader threw): the connection
+					// was lost, so the backend skipped its save — client owns it.
+					cbRef.current.onError(convoId, err.message, "disconnect");
 				}
 			} finally {
-				abortControllers.current.delete(convoId);
-				setStreamingConvoIds((prev) => {
-					const next = new Set(prev);
-					next.delete(convoId);
-					return next;
-				});
+				// Only tear down if a newer stream for the same conversation
+				// hasn't already replaced this one (regenerate / send-now abort
+				// the old stream and start a new one synchronously — the old
+				// finally must NOT delete the new stream's controller, which
+				// would break Stop, nor clear its streaming flag).
+				if (abortControllers.current.get(convoId) === controller) {
+					abortControllers.current.delete(convoId);
+					setStreamingConvoIds((prev) => {
+						const next = new Set(prev);
+						next.delete(convoId);
+						return next;
+					});
+				}
 			}
 		},
 		[getToken, user?.id],

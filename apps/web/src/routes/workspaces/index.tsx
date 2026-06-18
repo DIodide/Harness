@@ -262,9 +262,11 @@ function ChatPage() {
 		setMessageQueue([...messageQueueRef.current]);
 	}, []);
 
-	const dequeueMessage = useCallback((index: number) => {
+	const dequeueMessage = useCallback((id: number) => {
+		// Key by stable id, not array index (the queue can auto-shift between
+		// render and click, which would otherwise remove the wrong item).
 		messageQueueRef.current = messageQueueRef.current.filter(
-			(_, i) => i !== index,
+			(it) => it.id !== id,
 		);
 		setMessageQueue([...messageQueueRef.current]);
 	}, []);
@@ -299,6 +301,70 @@ function ChatPage() {
 		mutationFn: useConvexMutation(api.messages.send),
 	});
 
+	// Persist a turn that ended without a clean "done" — a user Stop (onAbort)
+	// OR an agent connection drop that surfaces as onError — so the
+	// streamed-so-far content isn't lost. No-op if onDone already saved it.
+	const persistInterruptedTurn = (convoId: string) => {
+		const state = streamStatesRef.current[convoId];
+		if (state?.pendingDoneContent != null) return; // onDone already saved
+		if (
+			!state ||
+			(!state.content && !state.reasoning && state.toolCalls.length === 0)
+		) {
+			clearStreamState(convoId);
+			return;
+		}
+		const completedToolCalls = state.toolCalls.filter(
+			(tc) => tc.result,
+		) as Array<{
+			tool: string;
+			arguments: Record<string, unknown>;
+			call_id: string;
+			result: string;
+		}>;
+		const cleanedParts = state.parts.filter(
+			(p) => p.type !== "tool_call" || p.result,
+		);
+		const partialContent = state.content ?? "";
+		const model = state.model ?? sessionModel ?? activeHarness?.model ?? null;
+		saveInterruptedMsg.mutate(
+			{
+				conversationId: convoId as Id<"conversations">,
+				content: partialContent,
+				...(state.reasoning ? { reasoning: state.reasoning } : {}),
+				...(completedToolCalls.length > 0
+					? { toolCalls: completedToolCalls }
+					: {}),
+				...(cleanedParts.length > 0
+					? { parts: toPersistableParts(cleanedParts) }
+					: {}),
+				...(state.usage ? { usage: state.usage } : {}),
+				...(model ? { model } : {}),
+			},
+			{
+				// If the write fails, clear the bubble so it doesn't wedge.
+				onError: () => {
+					clearStreamState(convoId);
+					toast.error("Couldn't save the interrupted response.");
+				},
+			},
+		);
+		setStreamState(convoId, () => ({
+			...state,
+			toolCalls: completedToolCalls,
+			parts: cleanedParts,
+			pendingDoneContent: partialContent,
+			model,
+		}));
+	};
+
+	const drainQueueAfterTurn = (convoId: string) => {
+		if (!pendingQueueSendRef.current && messageQueueRef.current.length > 0) {
+			const next = shiftQueue();
+			if (next) pendingQueueSendRef.current = { convoId, content: next };
+		}
+	};
+
 	useChatStreamSideEffects({
 		onMcpError: (_convoId, event) => {
 			setMcpFailures((prev) => [
@@ -318,89 +384,17 @@ function ChatPage() {
 				`${which.charAt(0).toUpperCase() + which.slice(1)} usage limit reached`,
 			);
 		},
-		onError: (_convoId, error) => {
+		onError: (convoId, error, kind) => {
 			toast.error(error);
+			// Persist the streamed-so-far turn ONLY on a connection drop, where
+			// the backend skipped its own save. A server-emitted error frame was
+			// already persisted backend-side — saving here too would duplicate
+			// the assistant row.
+			if (kind === "disconnect") persistInterruptedTurn(convoId);
 		},
 		onAbort: (convoId) => {
-			const state = streamStatesRef.current[convoId];
-
-			// If onDone already fired (pendingDoneContent is set), the backend already
-			// saved the message — don't save a duplicate interrupted copy.
-			if (
-				state?.pendingDoneContent !== null &&
-				state?.pendingDoneContent !== undefined
-			) {
-				// Just process queued messages if any
-				if (
-					!pendingQueueSendRef.current &&
-					messageQueueRef.current.length > 0
-				) {
-					const next = shiftQueue();
-					if (next) {
-						pendingQueueSendRef.current = { convoId, content: next };
-					}
-				}
-				return;
-			}
-
-			if (
-				!state ||
-				(!state.content && !state.reasoning && state.toolCalls.length === 0)
-			) {
-				// Nothing accumulated — just clear state
-				clearStreamState(convoId);
-			} else {
-				// Filter: only keep completed tool calls (those with results)
-				const completedToolCalls = state.toolCalls.filter(
-					(tc) => tc.result,
-				) as Array<{
-					tool: string;
-					arguments: Record<string, unknown>;
-					call_id: string;
-					result: string;
-				}>;
-				const cleanedParts = state.parts.filter(
-					(p) => p.type !== "tool_call" || p.result,
-				);
-
-				const partialContent = state.content ?? "";
-				// model is only sent in the "done" event which doesn't fire on abort,
-				// so fall back to the session model, then the harness model
-				const model =
-					state.model ?? sessionModel ?? activeHarness?.model ?? null;
-
-				saveInterruptedMsg.mutate({
-					conversationId: convoId as Id<"conversations">,
-					content: partialContent,
-					...(state.reasoning ? { reasoning: state.reasoning } : {}),
-					...(completedToolCalls.length > 0
-						? { toolCalls: completedToolCalls }
-						: {}),
-					...(cleanedParts.length > 0
-						? { parts: toPersistableParts(cleanedParts) }
-						: {}),
-					...(state.usage ? { usage: state.usage } : {}),
-					...(model ? { model } : {}),
-				});
-
-				// Keep streaming bubble visible until Convex syncs the interrupted message
-				// (same pattern as onDone — set pendingDoneContent so convexHasMessage can match)
-				setStreamState(convoId, () => ({
-					...state,
-					toolCalls: completedToolCalls,
-					parts: cleanedParts,
-					pendingDoneContent: partialContent,
-					model,
-				}));
-			}
-
-			// Process next queued message if any (skip if handleSendNow already set one)
-			if (!pendingQueueSendRef.current && messageQueueRef.current.length > 0) {
-				const next = shiftQueue();
-				if (next) {
-					pendingQueueSendRef.current = { convoId, content: next };
-				}
-			}
+			persistInterruptedTurn(convoId);
+			drainQueueAfterTurn(convoId);
 		},
 	});
 
@@ -725,24 +719,56 @@ function ChatPage() {
 		[chatStream],
 	);
 
+	const sendQueuedMessage = useCallback(
+		async (convoId: string, content: string) => {
+			if (!activeHarness) return;
+			await sendMessageFromQueue.mutateAsync({
+				conversationId: convoId as Id<"conversations">,
+				role: "user",
+				content,
+				harnessId: activeHarness._id,
+			});
+
+			// Build history from current messages + the new user message
+			const msgs = activeMessagesRef.current ?? [];
+			const history = [
+				...msgs.map((m) => ({ role: m.role, content: m.content })),
+				{ role: "user", content },
+			];
+
+			const harnessConfig = buildHarnessConfig();
+			if (!harnessConfig) return;
+
+			chatStream.stream({
+				messages: history,
+				harness: harnessConfig,
+				conversation_id: convoId,
+				...agentStreamFields(harnessConfig),
+			});
+		},
+		[activeHarness, chatStream, sendMessageFromQueue, buildHarnessConfig],
+	);
+
 	const handleSendNow = useCallback(
-		(index: number) => {
+		(id: number) => {
 			if (!activeConvoId) return;
-			const item = messageQueueRef.current[index];
+			const item = messageQueueRef.current.find((it) => it.id === id);
 			if (!item) return;
-			// Remove this message from queue
 			messageQueueRef.current = messageQueueRef.current.filter(
-				(_, i) => i !== index,
+				(it) => it.id !== id,
 			);
 			setMessageQueue([...messageQueueRef.current]);
-			// Set it as the pending send and interrupt
-			pendingQueueSendRef.current = {
-				convoId: activeConvoId,
-				content: item.content,
-			};
-			chatStream.cancel(activeConvoId);
+			if (chatStream.streamingConvoIds.has(activeConvoId)) {
+				pendingQueueSendRef.current = {
+					convoId: activeConvoId,
+					content: item.content,
+				};
+				chatStream.cancel(activeConvoId);
+			} else {
+				void sendQueuedMessage(activeConvoId, item.content);
+			}
 		},
-		[activeConvoId, chatStream],
+		[activeConvoId, chatStream, sendQueuedMessage],
 	);
 
 	// Process pending queued messages after stream ends
@@ -755,41 +781,8 @@ function ChatPage() {
 		if (chatStream.streamingConvoIds.has(convoId)) return;
 
 		pendingQueueSendRef.current = null;
-
-		const run = async () => {
-			await sendMessageFromQueue.mutateAsync({
-				conversationId: convoId as Id<"conversations">,
-				role: "user",
-				content: pending.content,
-				harnessId: activeHarness._id,
-			});
-
-			// Build history from current messages + the new user message
-			const msgs = activeMessagesRef.current ?? [];
-			const history = [
-				...msgs.map((m) => ({ role: m.role, content: m.content })),
-				{ role: "user", content: pending.content },
-			];
-
-			const harnessConfig = buildHarnessConfig();
-			if (!harnessConfig) return;
-
-			chatStream.stream({
-				messages: history,
-				harness: harnessConfig,
-				conversation_id: convoId,
-				...agentStreamFields(harnessConfig),
-			});
-		};
-
-		run();
-	}, [
-		chatStream.streamingConvoIds,
-		activeHarness,
-		chatStream,
-		sendMessageFromQueue,
-		buildHarnessConfig,
-	]);
+		void sendQueuedMessage(convoId, pending.content);
+	}, [chatStream.streamingConvoIds, activeHarness, sendQueuedMessage]);
 
 	const handleSelectConversation = useCallback(
 		(convoId: Id<"conversations"> | null) => {

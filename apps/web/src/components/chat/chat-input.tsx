@@ -200,8 +200,8 @@ export function ChatInput({
 		}>;
 	}>;
 	messageQueue: { id: number; content: string }[];
-	onDequeue: (index: number) => void;
-	onSendNow: (index: number) => void;
+	onDequeue: (id: number) => void;
+	onSendNow: (id: number) => void;
 	pendingPrompt?: string | null;
 	sessionModel?: string | null;
 	modelSelectorMode?: "session" | "harness";
@@ -217,6 +217,9 @@ export function ChatInput({
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
+	// Synchronous guard against double-dispatch (rapid Enter): set at the top
+	// of a send, cleared once the send is dispatched/decided.
+	const sendInFlightRef = useRef(false);
 	const [isDragOver, setIsDragOver] = useState(false);
 
 	// ACP agent mode: the agent loop is HARNESS configuration
@@ -434,6 +437,9 @@ export function ChatInput({
 		const content = text.trim();
 		if (!content || !activeHarness) return;
 		if (budgetExceeded && agentMode === "default") return;
+		// Block a second dispatch while the first is still deciding (rapid
+		// double-Enter would otherwise create two conversations / two streams).
+		if (sendInFlightRef.current) return;
 
 		// ── Slash command interception ────────────────────────────────
 		// MCP commands are stripped + sent with forced_tool; agent commands
@@ -446,35 +452,73 @@ export function ChatInput({
 		const forcedTool =
 			slashResult?.kind === "mcp" ? slashResult.forcedTool : undefined;
 
+		sendInFlightRef.current = true;
 		setText("");
 		setHistoryIndex(-1);
 		setDraft("");
 		clearAttachments();
 
-		// If streaming: agents that support prompt queueing (Claude Code)
-		// accept the message immediately and run it after the current turn —
-		// no need to lock the conversation. Otherwise fall back to the
-		// client-side queue.
-		if (isStreaming && conversationId) {
-			if (agentMode !== "default") {
-				const sessionId = getCachedAgentSessionId(conversationId, agentMode);
-				if (sessionId) {
-					const token = await getToken({ template: "convex" });
-					if (await queueAgentPrompt(token, sessionId, content)) {
-						await sendMessage.mutateAsync({
-							conversationId,
-							role: "user",
-							content,
-							harnessId: activeHarness._id,
-						});
-						return;
+		try {
+			// If streaming: agents that support prompt queueing (Claude Code)
+			// accept the message immediately and run it after the current turn —
+			// no need to lock the conversation. Otherwise fall back to the
+			// client-side queue.
+			if (isStreaming && conversationId) {
+				if (agentMode !== "default") {
+					const sessionId = getCachedAgentSessionId(conversationId, agentMode);
+					if (sessionId) {
+						let queued = false;
+						try {
+							const token = await getToken({ template: "convex" });
+							queued = await queueAgentPrompt(token, sessionId, content);
+						} catch {
+							// Token refresh / gateway blip — fall through to the
+							// client-side queue rather than losing the message.
+							queued = false;
+						}
+						if (queued) {
+							// Persist for the transcript; if THIS fails the turn is
+							// already queued gateway-side, so don't re-queue (would
+							// duplicate) — just surface it.
+							try {
+								await sendMessage.mutateAsync({
+									conversationId,
+									role: "user",
+									content,
+									harnessId: activeHarness._id,
+								});
+							} catch {
+								toast.error(
+									"Message queued, but couldn't be saved to the transcript.",
+								);
+							}
+							return;
+						}
 					}
 				}
+				onEnqueue(content);
+				return;
 			}
-			onEnqueue(content);
-			return;
-		}
 
+			await dispatchFreshSend(content, messageContent, forcedTool);
+		} catch (err) {
+			// The send failed before it was dispatched (createConvo / persist /
+			// token). Restore the draft so the user's message isn't lost.
+			setText(content);
+			toast.error(
+				err instanceof Error ? err.message : "Couldn't send your message",
+			);
+		} finally {
+			sendInFlightRef.current = false;
+		}
+	};
+
+	const dispatchFreshSend = async (
+		content: string,
+		messageContent: string,
+		forcedTool: string | undefined,
+	) => {
+		if (!activeHarness) return;
 		const resolvedSandboxId = sandboxEnabled ? sandboxId : undefined;
 
 		// Snapshot harness config at send time (shared snake_case builder —
@@ -736,7 +780,7 @@ export function ChatInput({
 							exit={{ opacity: 0, height: 0 }}
 							className="mb-2 flex flex-col gap-1.5 overflow-hidden"
 						>
-							{messageQueue.map((item, idx) => (
+							{messageQueue.map((item) => (
 								<motion.div
 									key={item.id}
 									initial={{ opacity: 0, x: -8 }}
@@ -752,7 +796,7 @@ export function ChatInput({
 											<TooltipTrigger asChild>
 												<button
 													type="button"
-													onClick={() => onSendNow(idx)}
+													onClick={() => onSendNow(item.id)}
 													className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
 												>
 													<ArrowUp size={12} />
@@ -764,7 +808,7 @@ export function ChatInput({
 											<TooltipTrigger asChild>
 												<button
 													type="button"
-													onClick={() => onDequeue(idx)}
+													onClick={() => onDequeue(item.id)}
 													className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
 												>
 													<X size={12} />

@@ -56,7 +56,11 @@ interface ChatStreamSideEffects {
 		model: string | undefined,
 	) => void;
 	onAbort?: (conversationId: string) => void;
-	onError?: (conversationId: string, message: string) => void;
+	onError?: (
+		conversationId: string,
+		message: string,
+		kind?: "server" | "disconnect",
+	) => void;
 	onMcpError?: (
 		conversationId: string,
 		event: { server_name: string; server_url: string; reason: string },
@@ -132,6 +136,25 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 	const [pendingQuestions, setPendingQuestions] = useState<
 		Record<string, PendingAgentQuestion[]>
 	>({});
+
+	// Pending permission/question cards are tied to a live turn. When a turn
+	// ends or its connection drops, drop any still-pending cards for that
+	// conversation — answering them would 404 against a dead/gone session, and
+	// they'd otherwise reappear (as zombie cards) when the user returns.
+	const clearPendingForConvo = useCallback((convoId: string) => {
+		setPendingPermissions((prev) => {
+			if (!prev[convoId]) return prev;
+			const next = { ...prev };
+			delete next[convoId];
+			return next;
+		});
+		setPendingQuestions((prev) => {
+			if (!prev[convoId]) return prev;
+			const next = { ...prev };
+			delete next[convoId];
+			return next;
+		});
+	}, []);
 
 	const dispatchSideEffect = useCallback(
 		<K extends keyof ChatStreamSideEffects>(
@@ -335,15 +358,20 @@ export function ChatStreamProvider({ children }: { children: ReactNode }) {
 		onBudgetExceeded: (convoId, info) => {
 			dispatchSideEffect("onBudgetExceeded", (h) => h(convoId, info));
 		},
-		onError: (convoId, message) => {
+		onError: (convoId, message, kind) => {
+			// Clear the bubble unconditionally (the route handler re-creates it
+			// with pendingDoneContent for a "disconnect" save). This guarantees
+			// no stale bubble even if no route handler is mounted.
 			setStreamStates((prev) => {
 				const next = { ...prev };
 				delete next[convoId];
 				return next;
 			});
-			dispatchSideEffect("onError", (h) => h(convoId, message));
+			clearPendingForConvo(convoId);
+			dispatchSideEffect("onError", (h) => h(convoId, message, kind));
 		},
 		onAbort: (convoId) => {
+			clearPendingForConvo(convoId);
 			dispatchSideEffect("onAbort", (h) => h(convoId));
 		},
 		onPermissionRequest: (convoId, sessionId, request) => {
