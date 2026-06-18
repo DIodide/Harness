@@ -262,9 +262,11 @@ function ChatPage() {
 		setMessageQueue([...messageQueueRef.current]);
 	}, []);
 
-	const dequeueMessage = useCallback((index: number) => {
+	const dequeueMessage = useCallback((id: number) => {
+		// Key by stable id, not array index (the queue can auto-shift between
+		// render and click, which would otherwise remove the wrong item).
 		messageQueueRef.current = messageQueueRef.current.filter(
-			(_, i) => i !== index,
+			(it) => it.id !== id,
 		);
 		setMessageQueue([...messageQueueRef.current]);
 	}, []);
@@ -725,24 +727,56 @@ function ChatPage() {
 		[chatStream],
 	);
 
+	const sendQueuedMessage = useCallback(
+		async (convoId: string, content: string) => {
+			if (!activeHarness) return;
+			await sendMessageFromQueue.mutateAsync({
+				conversationId: convoId as Id<"conversations">,
+				role: "user",
+				content,
+				harnessId: activeHarness._id,
+			});
+
+			// Build history from current messages + the new user message
+			const msgs = activeMessagesRef.current ?? [];
+			const history = [
+				...msgs.map((m) => ({ role: m.role, content: m.content })),
+				{ role: "user", content },
+			];
+
+			const harnessConfig = buildHarnessConfig();
+			if (!harnessConfig) return;
+
+			chatStream.stream({
+				messages: history,
+				harness: harnessConfig,
+				conversation_id: convoId,
+				...agentStreamFields(harnessConfig),
+			});
+		},
+		[activeHarness, chatStream, sendMessageFromQueue, buildHarnessConfig],
+	);
+
 	const handleSendNow = useCallback(
-		(index: number) => {
+		(id: number) => {
 			if (!activeConvoId) return;
-			const item = messageQueueRef.current[index];
+			const item = messageQueueRef.current.find((it) => it.id === id);
 			if (!item) return;
-			// Remove this message from queue
 			messageQueueRef.current = messageQueueRef.current.filter(
-				(_, i) => i !== index,
+				(it) => it.id !== id,
 			);
 			setMessageQueue([...messageQueueRef.current]);
-			// Set it as the pending send and interrupt
-			pendingQueueSendRef.current = {
-				convoId: activeConvoId,
-				content: item.content,
-			};
-			chatStream.cancel(activeConvoId);
+			if (chatStream.streamingConvoIds.has(activeConvoId)) {
+				pendingQueueSendRef.current = {
+					convoId: activeConvoId,
+					content: item.content,
+				};
+				chatStream.cancel(activeConvoId);
+			} else {
+				void sendQueuedMessage(activeConvoId, item.content);
+			}
 		},
-		[activeConvoId, chatStream],
+		[activeConvoId, chatStream, sendQueuedMessage],
 	);
 
 	// Process pending queued messages after stream ends
@@ -755,41 +789,8 @@ function ChatPage() {
 		if (chatStream.streamingConvoIds.has(convoId)) return;
 
 		pendingQueueSendRef.current = null;
-
-		const run = async () => {
-			await sendMessageFromQueue.mutateAsync({
-				conversationId: convoId as Id<"conversations">,
-				role: "user",
-				content: pending.content,
-				harnessId: activeHarness._id,
-			});
-
-			// Build history from current messages + the new user message
-			const msgs = activeMessagesRef.current ?? [];
-			const history = [
-				...msgs.map((m) => ({ role: m.role, content: m.content })),
-				{ role: "user", content: pending.content },
-			];
-
-			const harnessConfig = buildHarnessConfig();
-			if (!harnessConfig) return;
-
-			chatStream.stream({
-				messages: history,
-				harness: harnessConfig,
-				conversation_id: convoId,
-				...agentStreamFields(harnessConfig),
-			});
-		};
-
-		run();
-	}, [
-		chatStream.streamingConvoIds,
-		activeHarness,
-		chatStream,
-		sendMessageFromQueue,
-		buildHarnessConfig,
-	]);
+		void sendQueuedMessage(convoId, pending.content);
+	}, [chatStream.streamingConvoIds, activeHarness, sendQueuedMessage]);
 
 	const handleSelectConversation = useCallback(
 		(convoId: Id<"conversations"> | null) => {
