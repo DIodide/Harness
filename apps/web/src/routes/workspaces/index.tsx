@@ -31,6 +31,10 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
+import {
+	BackgroundAgentsPanel,
+	countActiveAgents,
+} from "../../components/chat/background-agents-panel";
 import { ChatInput } from "../../components/chat/chat-input";
 import { ChatMessages } from "../../components/chat/chat-messages";
 import {
@@ -192,6 +196,7 @@ function ChatPage() {
 	// Session-only model override — does not persist to the harness
 	const [sessionModel, setSessionModel] = useState<string | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
+	const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
 	const [pendingEditWorkspaceId, setPendingEditWorkspaceId] =
 		useState<Id<"workspaces"> | null>(null);
 	const [pendingCreateWorkspace, setPendingCreateWorkspace] = useState(0);
@@ -963,6 +968,10 @@ function ChatPage() {
 	const isActiveConvoStreaming = activeConvoId
 		? chatStream.streamingConvoIds.has(activeConvoId)
 		: false;
+	const agentActivityCount = countActiveAgents(
+		activeStreamState.parts,
+		isActiveConvoStreaming,
+	);
 
 	return (
 		<SandboxPanelProvider
@@ -1123,9 +1132,19 @@ function ChatPage() {
 						/>
 					)}
 
+					<BackgroundAgentsPanel
+						open={agentsPanelOpen}
+						parts={activeStreamState.parts}
+						isStreaming={isActiveConvoStreaming}
+						onClose={() => setAgentsPanelOpen(false)}
+					/>
+
 					<ChatInput
 						conversationId={activeConvoId}
 						activeHarness={activeWorkspace ? activeHarness : undefined}
+						agentsPanelOpen={agentsPanelOpen}
+						onToggleAgentsPanel={() => setAgentsPanelOpen((o) => !o)}
+						agentActivityCount={agentActivityCount}
 						disabled={!activeWorkspace || !activeHarness}
 						placeholder={
 							!activeWorkspace
