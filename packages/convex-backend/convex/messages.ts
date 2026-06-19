@@ -141,6 +141,10 @@ export const removeFrom = mutation({
  * regenerate), this is exclusive — rewinding to a user message keeps that
  * message so the thread ends there. Same authorization as `removeFrom`
  * (owner, or an editor-grant collaborator via `token`).
+ *
+ * Deletes by POSITION in the canonical (by_conversation) order rather than a
+ * `_creationTime` comparison, so same-millisecond siblings (e.g. messages
+ * copied in one transaction) are handled correctly.
  */
 export const removeAfter = mutation({
 	args: { id: v.id("messages"), token: v.optional(v.string()) },
@@ -164,10 +168,9 @@ export const removeAfter = mutation({
 				q.eq("conversationId", message.conversationId),
 			)
 			.collect();
-		for (const m of inConvo) {
-			if (m._creationTime > message._creationTime) {
-				await ctx.db.delete(m._id);
-			}
+		const targetIdx = inConvo.findIndex((m) => m._id === args.id);
+		for (let i = targetIdx + 1; i < inConvo.length; i++) {
+			await ctx.db.delete(inConvo[i]._id);
 		}
 	},
 });

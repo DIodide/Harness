@@ -1,28 +1,30 @@
-import { type AgentMode, forgetAgentSession } from "./agent-mode";
+import { forgetAllAgentSessions, resetServerAgentSessions } from "./agent-mode";
 
 /**
- * Reset the live agent session after a NORMAL (in-place) rewind.
+ * Reset the live agent session(s) after a NORMAL (in-place) rewind.
  *
- * A Convex truncation doesn't touch a running ACP agent's in-memory context,
- * so the agent would still "remember" the rewound turns. Forgetting the cached
- * session forces the next prompt to open a fresh session that re-seeds its
- * transcript from the now-truncated history (the same reset-then-replay path
- * used by harness-switch and 404 recovery).
+ * A Convex truncation doesn't touch a running ACP agent's context: the gateway
+ * reuses the warm session by (user, conversation, agent) and skips re-seeding
+ * because its transcript is non-empty, AND the ACP session in the sandbox still
+ * natively holds the rewound turns. So a CLIENT cache drop alone is not enough.
+ *
+ * We tear the session down SERVER-SIDE (keyed by conversation, not agent — so a
+ * session-only agent override is never missed), which closes the ACP session
+ * while parking the runtime warm. The next prompt then opens a fresh session
+ * that re-seeds its transcript from the now-truncated history. The client cache
+ * is also cleared so it doesn't try to reuse the torn-down session id.
  *
  * This is the single seam where future per-agent rewind handling would land
- * (e.g. a dedicated gateway `rewind` RPC that reuses the live session instead
- * of paying a fresh-session cold start). Keep it thin.
+ * (e.g. a dedicated gateway rewind RPC). Idempotent + best-effort: a no-op for
+ * the stateless OpenRouter loop (the server simply has no session to reset).
  *
- * No-op for the default (OpenRouter) loop: it's stateless and holds no session,
- * so its next turn rebuilds from the reactive message history automatically.
- *
- * Rewind-AND-fork needs no reset — a new conversation has no cached session and
- * seeds from the forked (already-truncated) history by construction.
+ * Rewind-AND-fork needs no reset — a new conversation has no session and seeds
+ * from the forked (already-truncated) history by construction.
  */
-export function resetAgentSessionForRewind(
+export async function resetAgentSessionForRewind(
+	token: string | null,
 	conversationId: string,
-	agent: AgentMode,
-): void {
-	if (agent === "default") return;
-	forgetAgentSession(conversationId, agent);
+): Promise<void> {
+	await resetServerAgentSessions(token, conversationId);
+	forgetAllAgentSessions(conversationId);
 }

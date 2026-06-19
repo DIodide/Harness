@@ -420,6 +420,32 @@ export function forgetAgentSession(
 	sessionCache.delete(cacheKey(conversationId, agent));
 }
 
+/** Forget EVERY cached ACP session for a conversation (all agents) — agent-
+ *  agnostic, so a session-only agent override is covered too. Used by rewind. */
+export function forgetAllAgentSessions(conversationId: string): void {
+	const prefix = `${conversationId}:`;
+	for (const key of [...sessionCache.keys()]) {
+		if (key.startsWith(prefix)) sessionCache.delete(key);
+	}
+}
+
+/** Tear down the caller's live ACP session(s) for a conversation server-side
+ *  (rewind) so the next prompt reopens fresh, re-seeded from the truncated
+ *  history. Best-effort: a failed reset must not block the rewind. */
+export async function resetServerAgentSessions(
+	token: string | null,
+	conversationId: string,
+): Promise<void> {
+	try {
+		await api(token, `/sessions/by-conversation/${conversationId}/reset`, {
+			method: "POST",
+		});
+	} catch {
+		// swallow — the Convex truncation already happened; the agent reset is
+		// best-effort and the next prompt's 404-recovery is a backstop.
+	}
+}
+
 export async function answerAgentPermission(
 	token: string | null,
 	sessionId: string,

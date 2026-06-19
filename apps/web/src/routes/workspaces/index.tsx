@@ -96,7 +96,6 @@ import {
 	useModifierHeld,
 	useWorkspaceShortcuts,
 } from "../../hooks/use-workspace-shortcuts";
-import type { AgentMode } from "../../lib/agent-mode";
 import {
 	EMPTY_STREAM_STATE,
 	useChatStreamContext,
@@ -916,18 +915,15 @@ function ChatPage() {
 				return;
 			}
 			await truncateAfterMessage.mutateAsync({ id: messageId });
-			const agent: AgentMode =
-				activeHarness?.agent && activeHarness.agent !== "default"
-					? (activeHarness.agent as AgentMode)
-					: "default";
-			resetAgentSessionForRewind(activeConvoId, agent);
+			const token = await getToken();
+			await resetAgentSessionForRewind(token, activeConvoId);
 		},
 		[
 			activeConvoId,
-			activeHarness,
 			chatStream,
 			truncateAfterMessage,
 			streamStatesRef,
+			getToken,
 		],
 	);
 

@@ -212,6 +212,26 @@ describe("messages.removeAfter (rewind)", () => {
 		expect(left.map((m) => m.content)).toEqual(["q1", "a1", "q2"]);
 	});
 
+	it("truncates by position, robust to rapid (same-instant) inserts", async () => {
+		const t = makeT();
+		const { user, conversationId } = await seedConversation(t, "u-a");
+		// No delay between inserts — exercises the position-based deletion so a
+		// _creationTime tie can't leave a successor behind.
+		const ids: string[] = [];
+		for (const content of ["q1", "a1", "q2", "a2"]) {
+			ids.push(
+				await user.mutation(api.messages.send, {
+					conversationId,
+					role: content.startsWith("q") ? "user" : "assistant",
+					content,
+				}),
+			);
+		}
+		await user.mutation(api.messages.removeAfter, { id: ids[0] });
+		const left = await user.query(api.messages.list, { conversationId });
+		expect(left.map((m) => m.content)).toEqual(["q1"]);
+	});
+
 	it("rejects when the conversation isn't owned by the caller", async () => {
 		const t = makeT();
 		const { user, conversationId } = await seedConversation(t, "u-a");
