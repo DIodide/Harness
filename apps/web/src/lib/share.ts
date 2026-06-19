@@ -16,6 +16,48 @@
 export const FORK_INTENT_KEY = "shareForkIntent";
 export const SHARE_RETURN_KEY = "shareReturn";
 
+// The intent is time-boxed so an abandoned flow can't silently auto-fork on a
+// much-later revisit of the same link.
+const FORK_INTENT_TTL_MS = 30 * 60 * 1000;
+
+/** Arm the fork-on-return intent for a token (timestamped). */
+export function setForkIntent(token: string): void {
+	try {
+		sessionStorage.setItem(
+			FORK_INTENT_KEY,
+			JSON.stringify({ token, ts: Date.now() }),
+		);
+		sessionStorage.setItem(SHARE_RETURN_KEY, `/share/${token}`);
+	} catch {}
+}
+
+/** Drop the intent entirely (abandoned or consumed). */
+export function clearForkIntent(): void {
+	try {
+		sessionStorage.removeItem(FORK_INTENT_KEY);
+		sessionStorage.removeItem(SHARE_RETURN_KEY);
+	} catch {}
+}
+
+/** The intended token IF a fresh intent exists, else null. Pure read. */
+export function peekForkIntent(): string | null {
+	try {
+		const raw = sessionStorage.getItem(FORK_INTENT_KEY);
+		if (!raw) return null;
+		const parsed = JSON.parse(raw) as { token?: string; ts?: number };
+		if (
+			!parsed.token ||
+			typeof parsed.ts !== "number" ||
+			Date.now() - parsed.ts > FORK_INTENT_TTL_MS
+		) {
+			return null;
+		}
+		return parsed.token;
+	} catch {
+		return null;
+	}
+}
+
 /** Generate a high-entropy, URL-safe share token (prefix + 256 bits). */
 export function generateShareToken(): string {
 	const bytes = new Uint8Array(32);

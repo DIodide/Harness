@@ -80,7 +80,7 @@ import {
 	type SandboxConfig,
 	waitForSandboxRecord,
 } from "../lib/sandbox";
-import { SHARE_RETURN_KEY } from "../lib/share";
+import { clearForkIntent, SHARE_RETURN_KEY } from "../lib/share";
 import type { SkillEntry } from "../lib/skills";
 import { RECOMMENDED_SKILLS } from "../lib/skills";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "../lib/system-prompt";
@@ -304,11 +304,15 @@ function OnboardingPage() {
 					shareReturn = sessionStorage.getItem(SHARE_RETURN_KEY);
 				} catch {}
 				if (shareReturn?.startsWith("/share/")) {
+					// Leave the fork intent armed — the share page consumes it.
 					navigate({
 						to: "/share/$token",
 						params: { token: shareReturn.slice("/share/".length) },
 					});
 				} else {
+					// Onboarding completed without returning to a share — drop any
+					// armed intent so it can't auto-fork later.
+					clearForkIntent();
 					navigate({
 						to: "/workspaces",
 						search: { harnessId: id as string, workspaceId },

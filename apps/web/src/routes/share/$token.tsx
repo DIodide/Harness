@@ -14,7 +14,11 @@ import {
 	AvatarImage,
 } from "../../components/ui/avatar";
 import { Button } from "../../components/ui/button";
-import { FORK_INTENT_KEY, SHARE_RETURN_KEY } from "../../lib/share";
+import {
+	clearForkIntent,
+	peekForkIntent,
+	setForkIntent,
+} from "../../lib/share";
 
 export const Route = createFileRoute("/share/$token")({
 	// No beforeLoad auth guard — anonymous visitors must be able to view.
@@ -58,10 +62,7 @@ function SharedChatPage() {
 		if (!isSignedIn) {
 			// Persist the intent (sign-up + onboarding can be several redirects)
 			// so the fork resumes automatically when we return here.
-			try {
-				sessionStorage.setItem(FORK_INTENT_KEY, token);
-				sessionStorage.setItem(SHARE_RETURN_KEY, `/share/${token}`);
-			} catch {}
+			setForkIntent(token);
 			navigate({ to: "/sign-in", search: { redirect: `/share/${token}` } });
 			return;
 		}
@@ -88,18 +89,13 @@ function SharedChatPage() {
 		if (autoForked.current || !isSignedIn || !header || header.viewerIsOwner) {
 			return;
 		}
-		let intent: string | null = null;
-		try {
-			intent = sessionStorage.getItem(FORK_INTENT_KEY);
-		} catch {}
-		if (intent === token) {
-			autoForked.current = true;
-			try {
-				sessionStorage.removeItem(FORK_INTENT_KEY);
-				sessionStorage.removeItem(SHARE_RETURN_KEY);
-			} catch {}
-			runFork();
-		}
+		// Consume the intent on the first qualifying landing regardless of match,
+		// so an abandoned/stale intent can't silently re-arm a fork on a later
+		// organic revisit of this token.
+		autoForked.current = true;
+		const intentToken = peekForkIntent();
+		clearForkIntent();
+		if (intentToken === token) runFork();
 	}, [isSignedIn, header, token]);
 
 	// Hold the spinner until the header AND transcript are loaded (so the
