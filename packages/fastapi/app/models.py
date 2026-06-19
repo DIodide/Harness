@@ -48,9 +48,61 @@ class MessagePayload(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[MessagePayload]
-    harness: HarnessConfig
+    # Required for the owner's own run; omitted by an editor-grant collaborator
+    # (they don't have it — the server resolves the owner's harness). The route
+    # enforces presence for the owner path.
+    harness: HarnessConfig | None = None
     conversation_id: str
     forced_tool: str | None = None
+    # Editor-grant collaboration: the share link the (signed-in) collaborator
+    # arrived through. When present and the caller is an editor (not the owner),
+    # the server IGNORES `harness` and resolves the owner's harness server-side,
+    # billing the owner. Absent/owner → the caller's own harness is used.
+    token: str | None = None
+
+
+def harness_config_from_resolved(resolved: dict) -> "HarnessConfig":
+    """Build a HarnessConfig from harnesses:resolveForCollab output (the owner's
+    harness, fetched server-side for a collaborator's turn). Never built from
+    untrusted client input — `resolved` comes from Convex via the deploy key."""
+    sc = resolved.get("sandboxConfig")
+    sandbox_config = (
+        SandboxConfig(
+            persistent=sc.get("persistent", False),
+            auto_start=sc.get("autoStart", True),
+            default_language=sc.get("defaultLanguage", "python"),
+            resource_tier=sc.get("resourceTier", "basic"),
+            snapshot_id=sc.get("snapshotId"),
+            git_repo=sc.get("gitRepo"),
+            network_restricted=sc.get("networkRestricted"),
+        )
+        if sc
+        else None
+    )
+    return HarnessConfig(
+        name=resolved.get("name") or "Shared",
+        model=resolved["model"],
+        system_prompt=resolved.get("systemPrompt"),
+        skills=[
+            SkillRef(name=s["name"], description=s.get("description", ""))
+            for s in resolved.get("skills", [])
+        ],
+        mcp_servers=[
+            McpServer(
+                name=s["name"],
+                url=s["url"],
+                auth_type=s.get("authType", "none"),
+                auth_token=s.get("authToken"),
+            )
+            for s in resolved.get("mcpServers", [])
+        ],
+        agent=resolved.get("agent"),
+        agent_credential_id=resolved.get("agentCredentialId"),
+        harness_id=resolved.get("harnessId"),
+        sandbox_enabled=resolved.get("sandboxEnabled", False),
+        sandbox_id=resolved.get("sandboxId"),
+        sandbox_config=sandbox_config,
+    )
 
 
 class SandboxCreateRequest(BaseModel):
@@ -107,8 +159,12 @@ class CommandListRequest(BaseModel):
 
 class AgentSessionCreateRequest(BaseModel):
     agent: str  # registry id: "codex" | "claude-code"
-    harness: HarnessConfig
+    # Optional for editor-grant collaboration: a collaborator does not have the
+    # owner's harness, so they send `token` and the server resolves the owner's
+    # harness. The owner's own create still sends a harness.
+    harness: HarnessConfig | None = None
     conversation_id: str
+    token: str | None = None
 
 
 class AgentPromptRequest(BaseModel):

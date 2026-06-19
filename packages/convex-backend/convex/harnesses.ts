@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalQuery, mutation, query } from "./_generated/server";
+import { resolveConversationRole } from "./shares";
 
 /** Match apps/web `SYSTEM_PROMPT_MAX_LENGTH` and FastAPI `HarnessConfig.system_prompt`. */
 const SYSTEM_PROMPT_MAX_CHARS = 4000;
@@ -38,6 +39,65 @@ export const get = query({
 		const harness = await ctx.db.get(args.id);
 		if (!harness || harness.userId !== identity.subject) return null;
 		return harness;
+	},
+});
+
+/**
+ * Resolve the OWNER's current harness for a conversation so the FastAPI backend
+ * can run a collaborator's turn server-side, billed to and configured as the
+ * owner. The collaborator's browser NEVER calls this and NEVER receives the
+ * harness — it's an internalQuery (deploy-key only), so returning the owner's
+ * secrets (MCP authToken, agentCredentialId, sandbox id) to the backend is
+ * safe; they stay server-side and are re-injected against the owner's identity.
+ *
+ * Re-authorizes the requester against the conversation (owner or active editor
+ * grant) and returns null on any denial — fail closed. The backend must treat
+ * null as "not authorized / nothing to run".
+ */
+export const resolveForCollab = internalQuery({
+	args: {
+		conversationId: v.id("conversations"),
+		requesterUserId: v.string(),
+		token: v.optional(v.string()),
+	},
+	handler: async (ctx, args) => {
+		const role = await resolveConversationRole(
+			ctx,
+			args.requesterUserId,
+			args.conversationId,
+			args.token,
+		);
+		if (role !== "owner" && role !== "editor") return null;
+
+		const convo = await ctx.db.get(args.conversationId);
+		if (!convo?.lastHarnessId) return null;
+		const harness = await ctx.db.get(convo.lastHarnessId);
+		if (!harness) return null;
+
+		return {
+			// Bill, resolve credentials/MCP-OAuth, and verify the sandbox against
+			// THIS id — never the collaborator's.
+			ownerUserId: convo.userId,
+			harnessId: harness._id,
+			name: harness.name,
+			model: harness.model,
+			systemPrompt: harness.systemPrompt ?? null,
+			skills: harness.skills,
+			// "default" | "claude-code" | "codex" | ... | null
+			agent: harness.agent ?? null,
+			agentCredentialId: harness.agentCredentialId ?? null,
+			mcpServers: harness.mcpServers.map((s) => ({
+				name: s.name,
+				url: s.url,
+				authType: s.authType,
+				authToken: s.authToken ?? null,
+			})),
+			sandboxEnabled: harness.sandboxEnabled ?? false,
+			// FastAPI HarnessConfig.sandbox_id is the Daytona sandbox id string
+			// (verify_sandbox_owner looks it up via getOwnerByDaytonaId).
+			sandboxId: harness.daytonaSandboxId ?? null,
+			sandboxConfig: harness.sandboxConfig ?? null,
+		};
 	},
 });
 

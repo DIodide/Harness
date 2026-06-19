@@ -10,7 +10,9 @@ from app.services.convex import (
     create_sandbox_record,
     patch_message_usage,
     query_convex,
+    resolve_collab_harness,
     save_assistant_message,
+    verify_conversation_access,
     verify_sandbox_owner,
 )
 
@@ -204,6 +206,94 @@ class TestVerifySandboxOwner:
             side_effect=httpx.ConnectError("down")
         )
         assert await verify_sandbox_owner("sbx_1", "u1") is False
+
+
+class TestVerifyConversationAccess:
+    async def test_unconfigured_grants_owner_dev_access(self, no_convex_settings):
+        async with httpx.AsyncClient() as client:
+            assert await verify_conversation_access(client, "c1", "u1") == "owner"
+
+    async def test_partial_config_denies(self, monkeypatch):
+        from app.config import settings
+        monkeypatch.setattr(settings, "convex_url", CONVEX_URL)
+        monkeypatch.setattr(settings, "convex_deploy_key", "")
+        async with httpx.AsyncClient() as client:
+            assert await verify_conversation_access(client, "c1", "u1") == "none"
+
+    @respx.mock
+    async def test_returns_role_from_response(self, convex_settings):
+        respx.post(f"{CONVEX_URL}/api/query").mock(
+            return_value=httpx.Response(200, json={"value": "editor"})
+        )
+        async with httpx.AsyncClient() as client:
+            assert await verify_conversation_access(client, "c1", "u1") == "editor"
+
+    @respx.mock
+    async def test_unexpected_value_denies(self, convex_settings):
+        respx.post(f"{CONVEX_URL}/api/query").mock(
+            return_value=httpx.Response(200, json={"value": "admin"})
+        )
+        async with httpx.AsyncClient() as client:
+            assert await verify_conversation_access(client, "c1", "u1") == "none"
+
+    @respx.mock
+    async def test_network_error_fails_closed(self, convex_settings):
+        respx.post(f"{CONVEX_URL}/api/query").mock(
+            side_effect=httpx.ConnectError("down")
+        )
+        async with httpx.AsyncClient() as client:
+            assert await verify_conversation_access(client, "c1", "u1") == "none"
+
+    @respx.mock
+    async def test_forwards_token_when_provided(self, convex_settings):
+        route = respx.post(f"{CONVEX_URL}/api/query").mock(
+            return_value=httpx.Response(200, json={"value": "editor"})
+        )
+        async with httpx.AsyncClient() as client:
+            await verify_conversation_access(client, "c1", "u1", token="shr_abc")
+        body = json.loads(route.calls.last.request.content)
+        assert body["path"] == "shares:checkConversationAccess"
+        assert body["args"]["token"] == "shr_abc"
+        assert body["args"]["userId"] == "u1"
+
+
+class TestResolveCollabHarness:
+    @respx.mock
+    async def test_returns_resolved_harness(self, convex_settings):
+        respx.post(f"{CONVEX_URL}/api/query").mock(
+            return_value=httpx.Response(
+                200, json={"value": {"ownerUserId": "owner", "agent": "claude-code"}}
+            )
+        )
+        async with httpx.AsyncClient() as client:
+            out = await resolve_collab_harness(client, "c1", "u-collab", "shr_x")
+        assert out["ownerUserId"] == "owner"
+        assert out["agent"] == "claude-code"
+
+    @respx.mock
+    async def test_returns_none_when_denied(self, convex_settings):
+        respx.post(f"{CONVEX_URL}/api/query").mock(
+            return_value=httpx.Response(200, json={"value": None})
+        )
+        async with httpx.AsyncClient() as client:
+            assert await resolve_collab_harness(client, "c1", "u-collab", "shr_x") is None
+
+
+class TestSaveAssistantMessageRequester:
+    @respx.mock
+    async def test_forwards_requester_identity(self, convex_settings):
+        route = respx.post(f"{CONVEX_URL}/api/mutation").mock(
+            return_value=httpx.Response(200, json={"value": None})
+        )
+        async with httpx.AsyncClient() as client:
+            await save_assistant_message(
+                client, "c1", "x",
+                requester_user_id="u-collab",
+                requester_token="shr_x",
+            )
+        body = json.loads(route.calls.last.request.content)
+        assert body["args"]["requesterUserId"] == "u-collab"
+        assert body["args"]["requesterToken"] == "shr_x"
 
 
 class TestCreateSandboxRecord:

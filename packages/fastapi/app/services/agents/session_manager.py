@@ -194,6 +194,12 @@ class AgentSession:
     # lock, which only flip after the pre-turn awaits (ready_event, healthz)
     # — so _claim_parked can never steal a session whose turn is starting.
     turn_guard: int = 0
+    # Editor-grant collaborators authorized on this session (the session always
+    # runs under the OWNER's user_id; collaborators are authorized separately).
+    # Maps a collaborator's Clerk subject → the share token they joined with,
+    # so every action RE-VERIFIES the live grant (revocation takes effect at
+    # once). The owner is never in this map.
+    collaborator_tokens: dict[str, str] = field(default_factory=dict)
 
     @property
     def supports_prompt_queueing(self) -> bool:
@@ -825,6 +831,21 @@ class AgentSessionManager:
         if session is None or session.user_id != user_id:
             raise KeyError(session_id)
         return session
+
+    def peek(self, session_id: str) -> AgentSession | None:
+        """Look up a session WITHOUT an ownership check. The route layer is
+        responsible for authorization (owner fast-path or a re-verified editor
+        grant). Never expose this result without authorizing first."""
+        return self._sessions.get(session_id)
+
+    def note_collaborator(self, session_id: str, user_id: str, token: str) -> None:
+        """Record that an editor-grant collaborator joined this session with
+        `token`, so later actions can re-verify the live grant. No-op if the
+        user is the owner (sessions run under the owner's id)."""
+        session = self._sessions.get(session_id)
+        if session is None or session.user_id == user_id:
+            return
+        session.collaborator_tokens[user_id] = token
 
     # ── Creation ───────────────────────────────────────────
 
