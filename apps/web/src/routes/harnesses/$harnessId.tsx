@@ -10,12 +10,7 @@ import type {
 	Id,
 } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import {
-	createFileRoute,
-	Link,
-	redirect,
-	useNavigate,
-} from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
 	AlertCircle,
 	ArrowLeft,
@@ -127,7 +122,11 @@ function formatSandboxMeta(sandbox: Sandbox) {
 export const Route = createFileRoute("/harnesses/$harnessId")({
 	beforeLoad: ({ context }) => {
 		if (!context.userId) {
-			throw redirect({ to: "/sign-in" });
+			// SSR can't see the Clerk session (the prod session cookies are not
+			// shared to the app domain), so context.userId is null even for
+			// signed-in users. Defer to the client auth gate instead of bouncing
+			// to /sign-in, which loops. Mirrors /app.
+			return;
 		}
 	},
 	component: HarnessEditPage,

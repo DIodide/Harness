@@ -6,7 +6,7 @@ import type {
 	Id,
 } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import {
 	Archive,
 	ArrowLeft,
@@ -46,7 +46,11 @@ type Sandbox = Doc<"sandboxes">;
 export const Route = createFileRoute("/sandboxes/$sandboxId")({
 	beforeLoad: ({ context }) => {
 		if (!context.userId) {
-			throw redirect({ to: "/sign-in" });
+			// SSR can't see the Clerk session (the prod session cookies are not
+			// shared to the app domain), so context.userId is null even for
+			// signed-in users. Defer to the client auth gate instead of bouncing
+			// to /sign-in, which loops. Mirrors /app.
+			return;
 		}
 	},
 	component: SandboxDetailPage,
