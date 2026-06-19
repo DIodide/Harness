@@ -21,6 +21,7 @@ import {
 	Plus,
 	Search, // Icon for search
 	Settings,
+	Share2,
 	SlidersHorizontal,
 	Trash2,
 	X,
@@ -40,6 +41,7 @@ import {
 	SandboxPanelToggle,
 } from "../../components/chat/chat-misc";
 import { SettingsDialog } from "../../components/chat/settings-dialog";
+import { ShareDialog } from "../../components/chat/share-dialog";
 import { useChatPaletteCommands } from "../../components/command-palette/commands/chat-commands";
 import { HarnessAgentBadge } from "../../components/harness-agent-badge";
 import { HarnessMark } from "../../components/harness-mark";
@@ -93,17 +95,20 @@ import { cn } from "../../lib/utils";
 export const Route = createFileRoute("/chat/")({
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { harnessId?: string } => ({
+	): { harnessId?: string; convoId?: string } => ({
 		harnessId: (search.harnessId as string) ?? undefined,
+		convoId: (search.convoId as string) ?? undefined,
 	}),
-	beforeLoad: async ({ context }) => {
+	beforeLoad: async ({ context, search }) => {
 		if (!context.userId) {
 			throw redirect({ to: "/sign-in" });
 		}
 		const settings = await context.queryClient.ensureQueryData(
 			convexQuery(api.userSettings.get, {}),
 		);
-		if (settings.workspacesMode === "workspaces") {
+		// A deep-linked conversation (e.g. a freshly forked share) always opens
+		// in the simple chat view, even for workspaces-mode users.
+		if (settings.workspacesMode === "workspaces" && !search.convoId) {
 			throw redirect({
 				to: "/workspaces",
 			});
@@ -119,7 +124,8 @@ type SandboxSelection = "harness" | "none" | Id<"sandboxes">;
 function ChatPage() {
 	const navigate = useNavigate();
 	const { getToken } = useAuth();
-	const { harnessId: initialHarnessId } = Route.useSearch();
+	const { harnessId: initialHarnessId, convoId: initialConvoId } =
+		Route.useSearch();
 
 	const { data: harnesses, isLoading: harnessesLoading } = useQuery(
 		convexQuery(api.harnesses.list, {}),
@@ -766,6 +772,20 @@ function ChatPage() {
 		[userSettings, conversations, harnesses],
 	);
 
+	// Open a deep-linked conversation once (e.g. a chat just forked from a
+	// shared link arriving as /chat?convoId=…). Only opens one the user owns.
+	const appliedInitialConvo = useRef(false);
+	useEffect(() => {
+		if (appliedInitialConvo.current || !initialConvoId || !conversations) {
+			return;
+		}
+		const target = conversations.find((c) => c._id === initialConvoId);
+		if (target) {
+			appliedInitialConvo.current = true;
+			handleSelectConversation(target._id);
+		}
+	}, [initialConvoId, conversations, handleSelectConversation]);
+
 	// State handlers for searching
 	const [scrollToMessageId, setScrollToMessageId] =
 		useState<Id<"messages"> | null>(null);
@@ -974,6 +994,7 @@ function ChatPage() {
 
 				<div className="flex flex-1 flex-col overflow-hidden">
 					<ChatHeader
+						conversationId={activeConvoId}
 						harness={activeHarness}
 						harnesses={harnesses ?? []}
 						onSwitchHarness={setActiveHarnessId}
@@ -1533,6 +1554,7 @@ function ChatSidebar({
 }
 
 function ChatHeader({
+	conversationId,
 	harness,
 	harnesses,
 	onSwitchHarness,
@@ -1549,6 +1571,7 @@ function ChatHeader({
 	onAddSkill,
 	onRemoveSkill,
 }: {
+	conversationId?: Id<"conversations"> | null;
 	harness?: {
 		_id: Id<"harnesses">;
 		name: string;
@@ -1593,6 +1616,7 @@ function ChatHeader({
 	onAddSkill: (skill: SkillEntry) => void;
 	onRemoveSkill: (skill: SkillEntry) => void;
 }) {
+	const [shareOpen, setShareOpen] = useState(false);
 	return (
 		<header className="flex items-center justify-between border-b border-border px-4 py-2.5">
 			<div className="flex items-center gap-2">
@@ -1686,6 +1710,30 @@ function ChatHeader({
 					panelAvailable={effectiveSandboxEnabled}
 				/>
 			</div>
+
+			{conversationId && (
+				<div className="flex items-center gap-2">
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant="ghost"
+								size="sm"
+								className="gap-1.5"
+								onClick={() => setShareOpen(true)}
+							>
+								<Share2 size={13} />
+								<span className="text-xs font-medium">Share</span>
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>Share this chat</TooltipContent>
+					</Tooltip>
+					<ShareDialog
+						conversationId={conversationId}
+						open={shareOpen}
+						onOpenChange={setShareOpen}
+					/>
+				</div>
+			)}
 		</header>
 	);
 }

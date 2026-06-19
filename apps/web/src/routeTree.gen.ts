@@ -18,6 +18,7 @@ import { Route as WorkspacesIndexRouteImport } from './routes/workspaces/index'
 import { Route as SandboxesIndexRouteImport } from './routes/sandboxes/index'
 import { Route as HarnessesIndexRouteImport } from './routes/harnesses/index'
 import { Route as ChatIndexRouteImport } from './routes/chat/index'
+import { Route as ShareTokenRouteImport } from './routes/share/$token'
 import { Route as SandboxesCreate_sandboxRouteImport } from './routes/sandboxes/create_sandbox'
 import { Route as SandboxesSandboxIdRouteImport } from './routes/sandboxes/$sandboxId'
 import { Route as HarnessesHarnessIdRouteImport } from './routes/harnesses/$harnessId'
@@ -67,6 +68,11 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
   path: '/chat/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ShareTokenRoute = ShareTokenRouteImport.update({
+  id: '/share/$token',
+  path: '/share/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SandboxesCreate_sandboxRoute = SandboxesCreate_sandboxRouteImport.update({
   id: '/sandboxes/create_sandbox',
   path: '/sandboxes/create_sandbox',
@@ -92,6 +98,7 @@ export interface FileRoutesByFullPath {
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
   '/sandboxes/$sandboxId': typeof SandboxesSandboxIdRoute
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
+  '/share/$token': typeof ShareTokenRoute
   '/chat/': typeof ChatIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
   '/sandboxes/': typeof SandboxesIndexRoute
@@ -106,6 +113,7 @@ export interface FileRoutesByTo {
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
   '/sandboxes/$sandboxId': typeof SandboxesSandboxIdRoute
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
+  '/share/$token': typeof ShareTokenRoute
   '/chat': typeof ChatIndexRoute
   '/harnesses': typeof HarnessesIndexRoute
   '/sandboxes': typeof SandboxesIndexRoute
@@ -121,6 +129,7 @@ export interface FileRoutesById {
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
   '/sandboxes/$sandboxId': typeof SandboxesSandboxIdRoute
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
+  '/share/$token': typeof ShareTokenRoute
   '/chat/': typeof ChatIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
   '/sandboxes/': typeof SandboxesIndexRoute
@@ -137,6 +146,7 @@ export interface FileRouteTypes {
     | '/harnesses/$harnessId'
     | '/sandboxes/$sandboxId'
     | '/sandboxes/create_sandbox'
+    | '/share/$token'
     | '/chat/'
     | '/harnesses/'
     | '/sandboxes/'
@@ -151,6 +161,7 @@ export interface FileRouteTypes {
     | '/harnesses/$harnessId'
     | '/sandboxes/$sandboxId'
     | '/sandboxes/create_sandbox'
+    | '/share/$token'
     | '/chat'
     | '/harnesses'
     | '/sandboxes'
@@ -165,6 +176,7 @@ export interface FileRouteTypes {
     | '/harnesses/$harnessId'
     | '/sandboxes/$sandboxId'
     | '/sandboxes/create_sandbox'
+    | '/share/$token'
     | '/chat/'
     | '/harnesses/'
     | '/sandboxes/'
@@ -180,6 +192,7 @@ export interface RootRouteChildren {
   HarnessesHarnessIdRoute: typeof HarnessesHarnessIdRoute
   SandboxesSandboxIdRoute: typeof SandboxesSandboxIdRoute
   SandboxesCreate_sandboxRoute: typeof SandboxesCreate_sandboxRoute
+  ShareTokenRoute: typeof ShareTokenRoute
   ChatIndexRoute: typeof ChatIndexRoute
   HarnessesIndexRoute: typeof HarnessesIndexRoute
   SandboxesIndexRoute: typeof SandboxesIndexRoute
@@ -251,6 +264,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/share/$token': {
+      id: '/share/$token'
+      path: '/share/$token'
+      fullPath: '/share/$token'
+      preLoaderRoute: typeof ShareTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sandboxes/create_sandbox': {
       id: '/sandboxes/create_sandbox'
       path: '/sandboxes/create_sandbox'
@@ -284,6 +304,7 @@ const rootRouteChildren: RootRouteChildren = {
   HarnessesHarnessIdRoute: HarnessesHarnessIdRoute,
   SandboxesSandboxIdRoute: SandboxesSandboxIdRoute,
   SandboxesCreate_sandboxRoute: SandboxesCreate_sandboxRoute,
+  ShareTokenRoute: ShareTokenRoute,
   ChatIndexRoute: ChatIndexRoute,
   HarnessesIndexRoute: HarnessesIndexRoute,
   SandboxesIndexRoute: SandboxesIndexRoute,

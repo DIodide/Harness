@@ -85,7 +85,10 @@ export const Route = createRootRouteWithContext<{
 function RootComponent() {
 	const context = useRouteContext({ from: Route.id });
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
-	const isChromeless = CHROMELESS_ROUTES.includes(pathname);
+	// /share/<token> is a standalone, anonymous-friendly viewer with its own
+	// chrome — render it outside the app shell.
+	const isChromeless =
+		CHROMELESS_ROUTES.includes(pathname) || pathname.startsWith("/share/");
 
 	return (
 		<ClerkProvider

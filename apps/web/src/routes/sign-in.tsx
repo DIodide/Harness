@@ -6,20 +6,32 @@ import { useEffect } from "react";
 import { HarnessMark } from "../components/harness-mark";
 
 export const Route = createFileRoute("/sign-in")({
+	validateSearch: (search: Record<string, unknown>): { redirect?: string } => ({
+		redirect: typeof search.redirect === "string" ? search.redirect : undefined,
+	}),
 	component: SignInPage,
 });
 
+/** Only honor INTERNAL, single-slash paths as a post-auth destination —
+ *  never an absolute/external URL (open-redirect guard). */
+function safeRedirect(target: string | undefined): string {
+	if (target && /^\/(?!\/)/.test(target)) return target;
+	return "/app";
+}
+
 function SignInPage() {
 	// Already signed in (e.g. bounced here during the post-auth cookie
-	// race)? Go straight to the app instead of letting Clerk fall back
-	// to the landing page.
+	// race)? Go straight to the destination instead of letting Clerk fall
+	// back to the landing page.
 	const { isLoaded, isSignedIn } = useAuth();
 	const navigate = useNavigate();
+	const { redirect } = Route.useSearch();
+	const destination = safeRedirect(redirect);
 	useEffect(() => {
 		if (isLoaded && isSignedIn) {
-			navigate({ to: "/app", replace: true });
+			navigate({ to: destination, replace: true });
 		}
-	}, [isLoaded, isSignedIn, navigate]);
+	}, [isLoaded, isSignedIn, navigate, destination]);
 
 	return (
 		<div className="flex min-h-screen">
@@ -76,7 +88,7 @@ function SignInPage() {
 					</div>
 					<SignIn
 						routing="hash"
-						forceRedirectUrl="/app"
+						forceRedirectUrl={destination}
 						signUpUrl="/sign-up"
 						appearance={{
 							elements: {
