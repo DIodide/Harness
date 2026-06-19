@@ -58,10 +58,21 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
       # The @cloudflare/vite-plugin flattens only top-level vars into the
-      # generated dist/server/wrangler.json and drops env.* blocks, so
-      # `--env` alone picks the right Worker name but leaves runtime vars
-      # pointing at the top-level defaults. Override at deploy time.
+      # generated dist/server/wrangler.json and drops env.* blocks, so the
+      # deployed Worker's RUNTIME vars otherwise stay on the top-level (dev)
+      # defaults even for prod. That left the SSR worker serving the dev Clerk
+      # publishable key while the client build used the prod one — a split that
+      # breaks Convex auth (NoAuthProvider). Override per-environment at deploy
+      # time, from the same secrets the client build uses, so the Worker
+      # runtime matches the client.
       - name: Deploy to Cloudflare Workers
-        run: cd apps/web && npx wrangler deploy --name ${{ steps.env.outputs.worker_name }}
+        run: |
+          cd apps/web && npx wrangler deploy --name ${{ steps.env.outputs.worker_name }} \
+            --var VITE_CONVEX_URL:"$VITE_CONVEX_URL" \
+            --var VITE_CLERK_PUBLISHABLE_KEY:"$VITE_CLERK_PUBLISHABLE_KEY" \
+            --var VITE_FASTAPI_URL:"$VITE_FASTAPI_URL"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VITE_CONVEX_URL: ${{ secrets.VITE_CONVEX_URL }}
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          VITE_FASTAPI_URL: ${{ steps.env.outputs.fastapi_url }}
