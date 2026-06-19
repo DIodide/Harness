@@ -123,11 +123,16 @@ function HarnessBreakdown({
 	);
 }
 
+// Display names for the usage panel. claude-code is shown as "Claude Agent".
 const AGENT_LABELS: Record<string, string> = {
-	"claude-code": "Claude Code",
+	"claude-code": "Claude Agent",
 	codex: "Codex",
 	cursor: "Cursor",
 };
+// Agent sections render in this order; Claude Agent + Codex always get a place
+// (shown with a placeholder even before any account/usage exists).
+const AGENT_ORDER = ["claude-code", "codex", "cursor"];
+const ALWAYS_SHOW = new Set(["claude-code", "codex"]);
 
 function formatCost(usd: number): string {
 	if (usd <= 0) return "$0.00";
@@ -149,21 +154,62 @@ interface AgentUsageRow {
 	totalTokens: number;
 	turns: number;
 	todayCostUsd: number;
+	weekCostUsd: number;
 	lastModel: string | null;
 }
 
+function AgentCredentialRow({ r }: { r: AgentUsageRow }) {
+	return (
+		<div className="flex items-center gap-2 rounded-md bg-white/[0.03] px-2.5 py-2">
+			<div className="min-w-0 flex-1">
+				<span className="truncate text-[11px] text-foreground/80">
+					{r.label || "Default account"}
+				</span>
+				<div className="mt-0.5 text-[10px] text-foreground/40">
+					{r.turns === 0
+						? "No usage yet"
+						: `${formatTokens(r.totalTokens)} tokens · ${r.turns} turn${
+								r.turns === 1 ? "" : "s"
+							}${r.lastModel ? ` · ${r.lastModel}` : ""}`}
+				</div>
+			</div>
+			<div className="shrink-0 text-right">
+				<div className="text-xs font-medium tabular-nums text-foreground/80">
+					{formatCost(r.totalCostUsd)}
+				</div>
+				{(r.todayCostUsd > 0 || r.weekCostUsd > 0) && (
+					<div className="text-[10px] tabular-nums text-foreground/40">
+						{formatCost(r.todayCostUsd)} today · {formatCost(r.weekCostUsd)} wk
+					</div>
+				)}
+			</div>
+		</div>
+	);
+}
+
 /**
- * Per-credential usage for ACP agents (Claude Code, etc.). Distinct from the
- * OpenRouter budget bars above: this cost bills to the user's OWN agent
- * account, so it's shown as plain informational totals (estimated, no cap).
+ * Agent usage, broken up by agent (Claude Agent, Codex, …) then per credential.
+ * Distinct from the OpenRouter budget bars above: this cost bills to the user's
+ * OWN agent account, so it's plain informational totals (estimated, no cap).
  */
 function AgentUsageSection() {
 	const { data } = useQuery(convexQuery(api.agentUsage.getMyAgentUsage, {}));
 	const rows = (data ?? []) as AgentUsageRow[];
 	if (rows.length === 0) return null;
 
+	const byAgent = new Map<string, AgentUsageRow[]>();
+	for (const r of rows) {
+		const list = byAgent.get(r.agent);
+		if (list) list.push(r);
+		else byAgent.set(r.agent, [r]);
+	}
+	const extra = [...byAgent.keys()].filter((a) => !AGENT_ORDER.includes(a));
+	const agents = [...AGENT_ORDER, ...extra].filter(
+		(a) => byAgent.has(a) || ALWAYS_SHOW.has(a),
+	);
+
 	return (
-		<div className="space-y-2 border-t border-white/10 pt-4">
+		<div className="space-y-3 border-t border-white/10 pt-4">
 			<div className="flex items-baseline justify-between">
 				<h4 className="text-xs font-medium uppercase tracking-wider text-foreground/60">
 					Agent usage
@@ -172,42 +218,36 @@ function AgentUsageSection() {
 					estimated · your account
 				</span>
 			</div>
-			<div className="space-y-1.5">
-				{rows.map((r) => (
-					<div
-						key={r.credentialId}
-						className="flex items-center gap-2 rounded-md bg-white/[0.03] px-2.5 py-2"
-					>
-						<div className="min-w-0 flex-1">
-							<div className="flex items-center gap-1.5">
-								<span className="truncate text-[11px] text-foreground/80">
-									{r.label || AGENT_LABELS[r.agent] || r.agent}
+			{agents.map((agent) => {
+				const agentRows = (byAgent.get(agent) ?? [])
+					.slice()
+					.sort((a, b) => b.totalCostUsd - a.totalCostUsd);
+				const name = AGENT_LABELS[agent] ?? agent;
+				const total = agentRows.reduce((s, r) => s + r.totalCostUsd, 0);
+				return (
+					<div key={agent} className="space-y-1.5">
+						<div className="flex items-baseline justify-between">
+							<span className="text-[11px] font-medium text-foreground/70">
+								{name}
+							</span>
+							{agentRows.length > 0 && (
+								<span className="text-[10px] tabular-nums text-foreground/50">
+									{formatCost(total)}
 								</span>
-								{r.label && (
-									<span className="shrink-0 rounded bg-white/10 px-1 text-[9px] text-foreground/50">
-										{AGENT_LABELS[r.agent] || r.agent}
-									</span>
-								)}
-							</div>
-							<div className="mt-0.5 text-[10px] text-foreground/40">
-								{formatTokens(r.totalTokens)} tokens · {r.turns} turn
-								{r.turns === 1 ? "" : "s"}
-								{r.lastModel ? ` · ${r.lastModel}` : ""}
-							</div>
-						</div>
-						<div className="shrink-0 text-right">
-							<div className="text-xs font-medium tabular-nums text-foreground/80">
-								{formatCost(r.totalCostUsd)}
-							</div>
-							{r.todayCostUsd > 0 && (
-								<div className="text-[10px] text-foreground/40">
-									{formatCost(r.todayCostUsd)} today
-								</div>
 							)}
 						</div>
+						{agentRows.length === 0 ? (
+							<p className="rounded-md bg-white/[0.02] px-2.5 py-2 text-[10px] text-foreground/35">
+								No {name} account connected yet.
+							</p>
+						) : (
+							agentRows.map((r) => (
+								<AgentCredentialRow key={r.credentialId} r={r} />
+							))
+						)}
 					</div>
-				))}
-			</div>
+				);
+			})}
 		</div>
 	);
 }

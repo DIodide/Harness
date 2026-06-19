@@ -14,6 +14,21 @@ function todayKey(): string {
 	return new Date().toISOString().slice(0, 10);
 }
 
+/** ISO-8601 "YYYY-WNN" — must match the gateway's Python `_current_week()`
+ *  (datetime.isocalendar) and the OpenRouter `usage.ts` formatWeek. */
+function weekKey(): string {
+	const now = new Date();
+	const d = new Date(
+		Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+	);
+	d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+	const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+	const weekNo = Math.ceil(
+		((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7,
+	);
+	return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}
+
 /**
  * Record one ACP agent turn's usage (FastAPI gateway via deploy key).
  * Idempotent on `turnKey` — a usage_update can fire more than once per turn
@@ -56,10 +71,28 @@ interface CredAcc {
 	turns: number;
 	todayCostUsd: number;
 	todayTokens: number;
+	weekCostUsd: number;
+	weekTokens: number;
 	perModel: Map<string, { tokens: number; costUsd: number }>;
 	lastTurnAt: number;
 	lastModel: string | null;
 	rateLimit: unknown;
+}
+
+function emptyAcc(): CredAcc {
+	return {
+		totalCostUsd: 0,
+		totalTokens: 0,
+		turns: 0,
+		todayCostUsd: 0,
+		todayTokens: 0,
+		weekCostUsd: 0,
+		weekTokens: 0,
+		perModel: new Map(),
+		lastTurnAt: 0,
+		lastModel: null,
+		rateLimit: null,
+	};
 }
 
 // Bound the ledger scan so the query degrades (caps totals) rather than
@@ -93,22 +126,13 @@ export const getMyAgentUsage = query({
 		]);
 
 		const today = todayKey();
+		const week = weekKey();
 		const byCred = new Map<string, CredAcc>();
 		for (const r of rows) {
 			const key = r.agentCredentialId as string;
 			let acc = byCred.get(key);
 			if (!acc) {
-				acc = {
-					totalCostUsd: 0,
-					totalTokens: 0,
-					turns: 0,
-					todayCostUsd: 0,
-					todayTokens: 0,
-					perModel: new Map(),
-					lastTurnAt: 0,
-					lastModel: null,
-					rateLimit: null,
-				};
+				acc = emptyAcc();
 				byCred.set(key, acc);
 			}
 			acc.totalCostUsd += r.costUsd;
@@ -117,6 +141,10 @@ export const getMyAgentUsage = query({
 			if (r.day === today) {
 				acc.todayCostUsd += r.costUsd;
 				acc.todayTokens += r.usedTokens;
+			}
+			if (r.week === week) {
+				acc.weekCostUsd += r.costUsd;
+				acc.weekTokens += r.usedTokens;
 			}
 			const model = r.model ?? "unknown";
 			const pm = acc.perModel.get(model) ?? { tokens: 0, costUsd: 0 };
@@ -130,12 +158,12 @@ export const getMyAgentUsage = query({
 			}
 		}
 
-		// One entry per credential that has usage; join the human label.
-		const out = [];
-		for (const cred of creds) {
-			const acc = byCred.get(cred._id as string);
-			if (!acc) continue;
-			out.push({
+		// One entry per credential (including connected-but-unused accounts, so
+		// every agent the user has shows up); join the human label. The UI groups
+		// these by `agent`.
+		const out = creds.map((cred) => {
+			const acc = byCred.get(cred._id as string) ?? emptyAcc();
+			return {
 				credentialId: cred._id,
 				agent: cred.agent,
 				label: cred.label ?? null,
@@ -144,14 +172,16 @@ export const getMyAgentUsage = query({
 				turns: acc.turns,
 				todayCostUsd: acc.todayCostUsd,
 				todayTokens: acc.todayTokens,
+				weekCostUsd: acc.weekCostUsd,
+				weekTokens: acc.weekTokens,
 				lastTurnAt: acc.lastTurnAt,
 				lastModel: acc.lastModel,
 				rateLimit: acc.rateLimit,
 				perModel: [...acc.perModel.entries()]
 					.map(([model, m]) => ({ model, tokens: m.tokens, costUsd: m.costUsd }))
 					.sort((a, b) => b.costUsd - a.costUsd),
-			});
-		}
+			};
+		});
 		out.sort((a, b) => b.totalCostUsd - a.totalCostUsd);
 		return out;
 	},

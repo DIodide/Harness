@@ -15,6 +15,21 @@ function makeT() {
 
 const today = new Date().toISOString().slice(0, 10);
 
+// Mirrors agentUsage.ts weekKey() / the Python gateway's _current_week().
+function currentWeekKey(): string {
+	const now = new Date();
+	const d = new Date(
+		Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+	);
+	d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+	const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+	const weekNo = Math.ceil(
+		((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7,
+	);
+	return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}
+const thisWeek = currentWeekKey();
+
 async function seedCredential(raw: ReturnType<typeof makeT>["raw"], userId: string, label: string) {
 	return await raw.mutation(internal.agentCredentials.create, {
 		userId,
@@ -43,7 +58,7 @@ function turn(extra: Record<string, unknown>) {
 		costUsd: 0.01,
 		currency: "USD",
 		day: today,
-		week: "2026-W25",
+		week: thisWeek,
 		...extra,
 	};
 }
@@ -125,21 +140,35 @@ describe("agentUsage.getMyAgentUsage", () => {
 		expect(await asUser("u-b").query(api.agentUsage.getMyAgentUsage, {})).toEqual([]);
 	});
 
-	it("omits credentials with no recorded usage", async () => {
+	it("includes connected credentials with zero usage", async () => {
 		const { raw, asUser } = makeT();
 		await seedCredential(raw, "u-a", "unused");
 		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
-		expect(rows).toEqual([]);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].label).toBe("unused");
+		expect(rows[0].agent).toBe("claude-code");
+		expect(rows[0].turns).toBe(0);
+		expect(rows[0].totalCostUsd).toBe(0);
+		expect(rows[0].totalTokens).toBe(0);
+		expect(rows[0].perModel).toEqual([]);
 	});
 
-	it("excludes past-day rows from today* but counts them in totals", async () => {
+	it("scopes today*/week* by day/week but counts everything in totals", async () => {
 		const { raw, asUser } = makeT();
 		const credId = await seedCredential(raw, "u-a", "work");
 		const convoId = await seedConversation(raw, "u-a");
+		// an old turn: different day AND different week → totals only
 		await raw.mutation(
 			internal.agentUsage.record,
-			turn({ agentCredentialId: credId, conversationId: convoId, day: "2026-06-18", turnKey: "old:1" }),
+			turn({
+				agentCredentialId: credId,
+				conversationId: convoId,
+				day: "2020-01-01",
+				week: "2020-W01",
+				turnKey: "old:1",
+			}),
 		);
+		// a current turn (default day=today, week=thisWeek)
 		await raw.mutation(
 			internal.agentUsage.record,
 			turn({ agentCredentialId: credId, conversationId: convoId, turnKey: "new:1" }),
@@ -148,8 +177,39 @@ describe("agentUsage.getMyAgentUsage", () => {
 		expect(rows[0].turns).toBe(2);
 		expect(rows[0].totalTokens).toBe(200);
 		expect(rows[0].totalCostUsd).toBeCloseTo(0.02);
-		expect(rows[0].todayTokens).toBe(100); // only the today row
+		expect(rows[0].todayTokens).toBe(100); // only the current row
 		expect(rows[0].todayCostUsd).toBeCloseTo(0.01);
+		expect(rows[0].weekTokens).toBe(100); // only the current row
+		expect(rows[0].weekCostUsd).toBeCloseTo(0.01);
+	});
+
+	it("groups credentials by agent (claude-code vs codex)", async () => {
+		const { raw, asUser } = makeT();
+		const claude = await seedCredential(raw, "u-a", "work");
+		const codex = await raw.mutation(internal.agentCredentials.create, {
+			userId: "u-a",
+			agent: "codex",
+			kind: "api_key" as const,
+			ciphertext: "sealed",
+			label: "my-codex",
+		});
+		const convoId = await seedConversation(raw, "u-a");
+		await raw.mutation(
+			internal.agentUsage.record,
+			turn({ agentCredentialId: claude, conversationId: convoId, turnKey: "c:1" }),
+		);
+		await raw.mutation(
+			internal.agentUsage.record,
+			turn({
+				agentCredentialId: codex,
+				conversationId: convoId,
+				agent: "codex",
+				turnKey: "x:1",
+			}),
+		);
+		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
+		const agents = rows.map((r) => r.agent).sort();
+		expect(agents).toEqual(["claude-code", "codex"]);
 	});
 
 	it("buckets turns with no model under 'unknown'", async () => {
