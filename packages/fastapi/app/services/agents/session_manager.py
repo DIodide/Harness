@@ -642,9 +642,13 @@ def normalize_sdk_task_message(message: dict) -> list[dict]:
 
     if phase == "task_started":
         subagent_type = _first_str(message, "subagent_type", "subagentType", "task_type")
-        description = (
-            _first_str(message, "description", "prompt") or subagent_type or "Subagent"
-        )
+        desc = _first_str(message, "description", "prompt")
+        # Lead the row title with the agent type so "what each agent is" is
+        # visible at a glance (e.g. "reviewer: audit the diff").
+        if subagent_type and desc and subagent_type not in desc:
+            description = f"{subagent_type}: {desc}"
+        else:
+            description = desc or subagent_type or "Subagent"
         args = {
             k: v
             for k, v in {
@@ -681,7 +685,10 @@ def normalize_sdk_task_message(message: dict) -> list[dict]:
     output_file = _first_str(message, "output_file", "outputFile")
 
     if phase != "task_progress" and status in _TASK_TERMINAL:
-        result = summary or status
+        # The terminal `status` already marks the call done in the UI, so leave
+        # the result empty (rather than echoing the bare status word) when the
+        # message carries no real summary.
+        result = summary or ""
         if output_file:
             result = f"{result}\n\n→ {output_file}".strip()
         return [

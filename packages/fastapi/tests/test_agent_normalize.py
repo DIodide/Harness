@@ -177,8 +177,17 @@ class TestSdkTaskMessage:
         assert d["call_id"] == "wf-task:t1"
         assert d["kind"] == "subagent"
         assert d["status"] == "in_progress"
-        assert d["tool"] == "Review the diff"
+        # Title leads with the agent type for at-a-glance "what each agent is".
+        assert d["tool"] == "reviewer: Review the diff"
         assert d["arguments"]["subagent_type"] == "reviewer"
+
+    def test_task_started_title_not_duplicated_when_type_in_desc(self):
+        d = one(
+            {"type": "task_started", "task_id": "t", "subagent_type": "reviewer",
+             "description": "reviewer audits the diff"}
+        )["data"]
+        # subagent_type already present in the description — don't prefix it.
+        assert d["tool"] == "reviewer audits the diff"
 
     def test_task_started_system_subtype_shape(self):
         ev = one(
@@ -242,6 +251,12 @@ class TestSdkTaskMessage:
         assert one({"type": "task_updated", "task_id": "t", "status": "killed"})[
             "data"
         ]["status"] == "failed"
+
+    def test_terminal_without_summary_has_empty_result(self):
+        # Bare terminal status must not echo the status word as output.
+        d = one({"type": "task_updated", "task_id": "t", "status": "completed"})["data"]
+        assert d["status"] == "completed"
+        assert d["result"] == ""
 
     def test_task_updated_running_is_non_terminal(self):
         d = one({"type": "task_updated", "task_id": "t", "status": "running"})["data"]
