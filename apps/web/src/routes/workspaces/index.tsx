@@ -158,6 +158,9 @@ function ChatPage() {
 		convexQuery(api.harnesses.list, {}),
 	);
 	const { data: workspaces } = useQuery(convexQuery(api.workspaces.list, {}));
+	// Convex auth readiness — list/queries return [] before the Clerk token is
+	// validated, so anything that WRITES must wait for this to be true.
+	const { isAuthenticated: convexAuthReady } = useConvexAuth();
 
 	// Every user should have a workspace for chats to live in — create the
 	// Default lazily for accounts predating (or skipping) onboarding.
@@ -166,11 +169,27 @@ function ChatPage() {
 	});
 	const ensuredDefaultRef = useRef(false);
 	useEffect(() => {
-		if (workspaces && workspaces.length === 0 && !ensuredDefaultRef.current) {
+		// Gate on convexAuthReady: workspaces.list returns [] during the
+		// auth-loading window too, and calling ensureDefault then throws
+		// "Unauthenticated" — which, with the fire-once ref, would wedge the
+		// page forever. Reset the ref on failure so a transient error can retry.
+		if (
+			convexAuthReady &&
+			workspaces &&
+			workspaces.length === 0 &&
+			!ensuredDefaultRef.current
+		) {
 			ensuredDefaultRef.current = true;
-			ensureDefaultWorkspace.mutate({});
+			ensureDefaultWorkspace.mutate(
+				{},
+				{
+					onError: () => {
+						ensuredDefaultRef.current = false;
+					},
+				},
+			);
 		}
-	}, [workspaces, ensureDefaultWorkspace]);
+	}, [convexAuthReady, workspaces, ensureDefaultWorkspace]);
 	const { data: sandboxes } = useQuery(convexQuery(api.sandboxes.list, {}));
 	const { data: userSettings } = useQuery(
 		convexQuery(api.userSettings.get, {}),
@@ -499,7 +518,6 @@ function ChatPage() {
 		}
 	}, [activeSandboxSelection, sandboxes]);
 
-	const { isAuthenticated: convexAuthReady } = useConvexAuth();
 	useEffect(() => {
 		if (convexAuthReady && harnesses && harnesses.length === 0) {
 			navigate({ to: "/onboarding", search: { flow: "first-run" } });
