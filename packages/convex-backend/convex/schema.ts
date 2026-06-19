@@ -124,6 +124,10 @@ export default defineSchema({
 		lastMessageAt: v.number(),
 		forkedFromConversationId: v.optional(v.id("conversations")),
 		forkedAtMessageCount: v.optional(v.number()),
+		// Share link a fork came from, so "jump to original" returns the forker to
+		// the shared page instead of an empty owner-gated /chat (set only when
+		// forked via a public link).
+		forkedFromShareToken: v.optional(v.string()),
 		editParentConversationId: v.optional(v.id("conversations")),
 		editParentMessageCount: v.optional(v.number()),
 		isCreationSession: v.optional(v.boolean()),

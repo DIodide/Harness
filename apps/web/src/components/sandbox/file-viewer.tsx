@@ -18,7 +18,19 @@ export function FileViewer() {
 	const { getToken } = useAuth();
 	const [cache, setCache] = useState<Map<string, FileCache>>(new Map());
 
-	const api = useMemo(() => createSandboxApi(getToken), [getToken]);
+	const api = useMemo(
+		() =>
+			createSandboxApi(
+				getToken,
+				panel?.readOnly
+					? {
+							conversationId: panel?.conversationId,
+							shareToken: panel?.shareToken,
+						}
+					: undefined,
+			),
+		[getToken, panel?.readOnly, panel?.conversationId, panel?.shareToken],
+	);
 	const sandboxId = panel?.sandboxId;
 	const activeFile = panel?.activeFile;
 
@@ -118,11 +130,25 @@ function FileContent({
 	const [saveStatus, setSaveStatus] = useState<"saved" | "error" | null>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+	const panel = useSandboxPanel();
+	const readOnly = panel?.readOnly ?? false;
 	const language = detectLanguage(path);
 	const highlighted = useHighlighted(content, language);
 	const lines = editing ? editContent.split("\n") : content.split("\n");
 
-	const api = useMemo(() => createSandboxApi(getToken), [getToken]);
+	const api = useMemo(
+		() =>
+			createSandboxApi(
+				getToken,
+				readOnly
+					? {
+							conversationId: panel?.conversationId,
+							shareToken: panel?.shareToken,
+						}
+					: undefined,
+			),
+		[getToken, readOnly, panel?.conversationId, panel?.shareToken],
+	);
 
 	const handleCopy = useCallback(() => {
 		navigator.clipboard.writeText(editing ? editContent : content);
@@ -249,7 +275,7 @@ function FileContent({
 						</>
 					) : (
 						<>
-							{sandboxId && (
+							{sandboxId && !readOnly && (
 								<button
 									type="button"
 									onClick={handleEdit}

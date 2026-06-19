@@ -420,7 +420,15 @@ async def prompt(
     requester_sub = user["sub"]
     requester_token = session.collaborator_tokens.get(requester_sub)
 
+    # Per-turn effort: a collaborator can't persist the owner's sticky session
+    # config, so they pass a per-turn override. Snapshot the current value, apply
+    # for this turn only, and restore in the finally — the session config is the
+    # owner's and must not be mutated past the collaborator's single turn.
+    prev_effort: str | None = None
+    applied_effort_cfg: str | None = None
+
     async def event_stream():
+        nonlocal prev_effort, applied_effort_cfg
         content = ""
         parts: list[dict] = []
         terminal_event = None  # "done" | "error" once the turn concluded
@@ -428,6 +436,25 @@ async def prompt(
         # completes) must become distinct parts, not one merged blob.
         last_text_mid = last_reasoning_mid = object()
         stop_reason = None
+        if body.effort_config_id and body.effort_value:
+            prev_effort = next(
+                (
+                    o.get("currentValue")
+                    for o in session.config_options
+                    if o.get("id") == body.effort_config_id
+                ),
+                None,
+            )
+            try:
+                await manager.set_config_option(
+                    session_id,
+                    effective_user_id,
+                    body.effort_config_id,
+                    body.effort_value,
+                )
+                applied_effort_cfg = body.effort_config_id
+            except Exception:
+                logger.warning("Per-turn effort apply failed; using current effort")
         try:
             async for event in manager.prompt(
                 session_id,
@@ -607,6 +634,14 @@ async def prompt(
                     requester_user_id=requester_sub,
                     requester_token=requester_token,
                 )
+            # Restore the owner's effort if this turn overrode it.
+            if applied_effort_cfg and prev_effort is not None:
+                try:
+                    await manager.set_config_option(
+                        session_id, effective_user_id, applied_effort_cfg, prev_effort,
+                    )
+                except Exception:
+                    logger.warning("Per-turn effort restore failed")
 
     return EventSourceResponse(event_stream())
 

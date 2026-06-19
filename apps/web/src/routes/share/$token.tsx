@@ -4,27 +4,38 @@ import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { GitFork, Loader2, Lock, Send, Square } from "lucide-react";
+import { GitFork, Loader2, Lock, PanelRight, Send, Square } from "lucide-react";
+import { AnimatePresence } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { AgentPermissionCard } from "../../components/agent-permission-card";
 import { AgentQuestionCard } from "../../components/agent-question-card";
+import { countActiveAgents } from "../../components/chat/background-agents-panel";
 import { ChatMessages } from "../../components/chat/chat-messages";
+import { SandboxPanelToggle } from "../../components/chat/chat-misc";
+import { EffortSlider } from "../../components/chat/effort-slider";
 import {
 	Avatar,
 	AvatarFallback,
 	AvatarImage,
 } from "../../components/ui/avatar";
 import { Button } from "../../components/ui/button";
+import type { AgentMode } from "../../lib/agent-mode";
 import {
 	EMPTY_STREAM_STATE,
 	useChatStreamContext,
 } from "../../lib/chat-stream-context";
 import {
+	SandboxPanelProvider,
+	useSandboxPanel,
+} from "../../lib/sandbox-panel-context";
+import {
 	clearForkIntent,
 	peekForkIntent,
 	setForkIntent,
 } from "../../lib/share";
+import { useAgentSessionConfig } from "../../lib/use-agent-session-config";
+import type { StreamPart } from "../../lib/use-chat-stream";
 
 export const Route = createFileRoute("/share/$token")({
 	// No beforeLoad auth guard — anonymous visitors must be able to view.
@@ -41,6 +52,7 @@ type ShareHeader = {
 	ownerName: string | null;
 	ownerImageUrl: string | null;
 	agent: string | null;
+	sandboxId: string | null;
 };
 
 type SharedMessage = {
@@ -294,6 +306,20 @@ function ShareEditorChat({
 
 	const [input, setInput] = useState("");
 
+	// Reasoning-effort for agent conversations. We can READ the owner's session
+	// config (the GET is grant-authorized), but a collaborator can't persist it
+	// (that's owner-only). So the chosen effort is applied per-turn via the
+	// stream instead of the sticky set-config endpoint.
+	const agentMode: AgentMode = (agent as AgentMode) ?? "default";
+	const { options: agentConfigOptions } = useAgentSessionConfig(
+		convoId,
+		agentMode,
+	);
+	const effortOption = agentConfigOptions.find(
+		(o) => o.id === "effort" || o.id === "reasoning_effort",
+	);
+	const [pendingEffort, setPendingEffort] = useState<string | null>(null);
+
 	// Name + avatar snapshot for attribution (never email).
 	const authorSnapshot = () => ({
 		authorName: user?.fullName ?? user?.firstName ?? undefined,
@@ -306,6 +332,9 @@ function ShareEditorChat({
 			conversation_id: convoId,
 			token,
 			...(agent ? { agent: agent as never } : {}),
+			...(effortOption && pendingEffort
+				? { effort: { configId: effortOption.id, value: pendingEffort } }
+				: {}),
 		});
 	};
 
@@ -364,102 +393,164 @@ function ShareEditorChat({
 	const pendingQuestion = pendingQuestions[convoId]?.[0];
 
 	return (
-		<div className="flex flex-1 flex-col overflow-hidden">
-			<ChatMessages
-				conversationId={convoId as Id<"conversations">}
-				messages={messages}
-				shareToken={token}
-				streamingContent={streamState.content}
-				streamingReasoning={streamState.reasoning}
-				activeToolCalls={streamState.toolCalls}
-				streamParts={streamState.parts}
-				pendingDoneContent={streamState.pendingDoneContent}
-				streamUsage={streamState.usage}
-				streamModel={streamState.model}
-				agentStatus={streamState.agentStatus}
-				streamPlan={streamState.plan}
-				agentUsage={streamState.agentUsage}
-				isStreaming={isStreaming}
-				displayMode="standard"
-				editingMessageId={null}
-				editingContent=""
-				allConversations={[]}
-				activeConversation={undefined}
-				scrollToMessageId={null}
-				onStreamSynced={() => clearStreamState(convoId)}
-				onRegenerate={handleRegenerate}
-				onFork={handleForkAt}
-				onStartEditPrompt={noop}
-				onCancelEditPrompt={noop}
-				onSaveEditPrompt={noop}
-				onEditContentChange={noop}
-				onNavigateToConversation={noop}
-				onClearScrollTarget={noop}
-			/>
-
-			<div className="border-t border-border p-3">
-				{/* ACP agent question (AskUserQuestion) — blocks until answered. */}
-				{pendingQuestion && (
-					<div className="mb-2">
-						<AgentQuestionCard
-							key={pendingQuestion.request.request_id}
-							request={pendingQuestion.request}
-							onAnswer={(action, content) =>
-								answerQuestion(convoId, action, content)
-							}
-						/>
-					</div>
-				)}
-				{/* ACP agent approval — blocks the turn until answered. */}
-				{pendingPermission && (
-					<div className="mb-2">
-						<AgentPermissionCard
-							key={pendingPermission.request.request_id}
-							request={pendingPermission.request}
-							onAnswer={(optionId) => answerPermission(convoId, optionId)}
-						/>
-					</div>
-				)}
-				<div className="flex items-end gap-2">
-					<textarea
-						value={input}
-						onChange={(e) => setInput(e.target.value)}
-						onKeyDown={(e) => {
-							if (e.key === "Enter" && !e.shiftKey) {
-								e.preventDefault();
-								handleSend();
-							}
-						}}
-						rows={1}
-						placeholder="Message this shared chat…"
-						className="max-h-40 min-h-[40px] flex-1 resize-none rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-foreground/30"
+		<SandboxPanelProvider
+			sandboxId={header.sandboxId}
+			conversationId={convoId}
+			shareToken={token}
+			readOnly
+			agentParts={streamState.parts}
+			agentIsStreaming={isStreaming}
+		>
+			<div className="flex flex-1 overflow-hidden">
+				<div className="flex flex-1 flex-col overflow-hidden">
+					<ChatMessages
+						conversationId={convoId as Id<"conversations">}
+						messages={messages}
+						shareToken={token}
+						streamingContent={streamState.content}
+						streamingReasoning={streamState.reasoning}
+						activeToolCalls={streamState.toolCalls}
+						streamParts={streamState.parts}
+						pendingDoneContent={streamState.pendingDoneContent}
+						streamUsage={streamState.usage}
+						streamModel={streamState.model}
+						agentStatus={streamState.agentStatus}
+						streamPlan={streamState.plan}
+						agentUsage={streamState.agentUsage}
+						isStreaming={isStreaming}
+						displayMode="standard"
+						editingMessageId={null}
+						editingContent=""
+						allConversations={[]}
+						activeConversation={undefined}
+						scrollToMessageId={null}
+						onStreamSynced={() => clearStreamState(convoId)}
+						onRegenerate={handleRegenerate}
+						onFork={handleForkAt}
+						onStartEditPrompt={noop}
+						onCancelEditPrompt={noop}
+						onSaveEditPrompt={noop}
+						onEditContentChange={noop}
+						onNavigateToConversation={noop}
+						onClearScrollTarget={noop}
 					/>
-					{isStreaming ? (
-						<Button
-							size="icon"
-							variant="outline"
-							onClick={() => cancel(convoId)}
-							title="Stop"
-						>
-							<Square size={14} />
-						</Button>
-					) : (
-						<Button
-							size="icon"
-							onClick={handleSend}
-							disabled={!input.trim() || sendShared.isPending}
-							title="Send"
-						>
-							<Send size={14} />
-						</Button>
-					)}
+
+					<div className="border-t border-border p-3">
+						{/* ACP agent question (AskUserQuestion) — blocks until answered. */}
+						{pendingQuestion && (
+							<div className="mb-2">
+								<AgentQuestionCard
+									key={pendingQuestion.request.request_id}
+									request={pendingQuestion.request}
+									onAnswer={(action, content) =>
+										answerQuestion(convoId, action, content)
+									}
+								/>
+							</div>
+						)}
+						{/* ACP agent approval — blocks the turn until answered. */}
+						{pendingPermission && (
+							<div className="mb-2">
+								<AgentPermissionCard
+									key={pendingPermission.request.request_id}
+									request={pendingPermission.request}
+									onAnswer={(optionId) => answerPermission(convoId, optionId)}
+								/>
+							</div>
+						)}
+						{/* Reasoning effort (agent convos). Applied per-turn — a collaborator
+				    can't persist the owner's session config. */}
+						{effortOption && (
+							<div className="mb-2 flex">
+								<EffortSlider
+									effortOption={{
+										...effortOption,
+										currentValue: pendingEffort ?? effortOption.currentValue,
+									}}
+									onSetEffort={(value) => setPendingEffort(value)}
+									text={input}
+									onSetText={setInput}
+								/>
+							</div>
+						)}
+						<div className="flex items-end gap-2">
+							<textarea
+								value={input}
+								onChange={(e) => setInput(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" && !e.shiftKey) {
+										e.preventDefault();
+										handleSend();
+									}
+								}}
+								rows={1}
+								placeholder="Message this shared chat…"
+								className="max-h-40 min-h-[40px] flex-1 resize-none rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-foreground/30"
+							/>
+							<ShareAgentsToggle
+								parts={streamState.parts}
+								streaming={isStreaming}
+							/>
+							{isStreaming ? (
+								<Button
+									size="icon"
+									variant="outline"
+									onClick={() => cancel(convoId)}
+									title="Stop"
+								>
+									<Square size={14} />
+								</Button>
+							) : (
+								<Button
+									size="icon"
+									onClick={handleSend}
+									disabled={!input.trim() || sendShared.isPending}
+									title="Send"
+								>
+									<Send size={14} />
+								</Button>
+							)}
+						</div>
+						<p className="mt-1.5 px-0.5 text-[10px] text-muted-foreground">
+							Replies run on{" "}
+							{header.ownerName ? `${header.ownerName}’s` : "the owner’s"}{" "}
+							harness and are billed to them.
+						</p>
+					</div>
 				</div>
-				<p className="mt-1.5 px-0.5 text-[10px] text-muted-foreground">
-					Replies run on{" "}
-					{header.ownerName ? `${header.ownerName}’s` : "the owner’s"} harness
-					and are billed to them.
-				</p>
+				<AnimatePresence>
+					<SandboxPanelToggle />
+				</AnimatePresence>
 			</div>
-		</div>
+		</SandboxPanelProvider>
+	);
+}
+
+/** Composer button that opens the right-hand panel on the Agents tab, badged
+ *  with the live background-agent count. Lives inside SandboxPanelProvider. */
+function ShareAgentsToggle({
+	parts,
+	streaming,
+}: {
+	parts: StreamPart[];
+	streaming: boolean;
+}) {
+	const panel = useSandboxPanel();
+	const count = countActiveAgents(parts, streaming);
+	return (
+		<Button
+			size="icon"
+			variant="outline"
+			onClick={() => panel?.openAgentsTab()}
+			title="Agents & sandbox"
+			className="relative shrink-0"
+		>
+			<PanelRight size={14} />
+			{count > 0 && (
+				<span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-medium text-primary-foreground">
+					{count}
+				</span>
+			)}
+		</Button>
 	);
 }

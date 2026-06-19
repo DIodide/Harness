@@ -221,6 +221,12 @@ export interface ChatStreamRequest {
 	 * (the server resolves the owner's harness and bills the owner).
 	 */
 	token?: string;
+	/**
+	 * Per-turn reasoning-effort override (agent mode). Used by editor
+	 * collaborators, who can't persist the owner's sticky session config — the
+	 * server applies it for this turn only and restores afterward.
+	 */
+	effort?: { configId: string; value: string };
 }
 
 /**
@@ -334,6 +340,12 @@ async function runAgentStream(
 				message,
 				history,
 				...(blocks.length > 0 ? { blocks } : {}),
+				...(body.effort
+					? {
+							effort_config_id: body.effort.configId,
+							effort_value: body.effort.value,
+						}
+					: {}),
 			}),
 			signal: controller.signal,
 		});
