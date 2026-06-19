@@ -484,6 +484,14 @@ export function ChatMessages({
 			streamingReasoning !== null ||
 			activeToolCalls.length > 0) &&
 		!convexHasMessage;
+	// Once anything has rendered, the empty-state pending indicator is gone, so a
+	// persistent "still working" heartbeat keeps the bubble from looking frozen
+	// while the agent is quiet between steps (e.g. a long tool call).
+	const hasStreamedContent =
+		streamParts.length > 0 ||
+		streamingContent !== null ||
+		streamingReasoning !== null ||
+		activeToolCalls.length > 0;
 
 	// Clear streaming state once Convex has synced — fire in effect to avoid setState during render
 	useEffect(() => {
@@ -987,6 +995,9 @@ export function ChatMessages({
 											<PendingResponseIndicator message={agentStatus} />
 										)}
 							</div>
+							{isStreaming && hasStreamedContent && (
+								<PendingResponseIndicator variant="compact" />
+							)}
 							{displayMode === "developer" && streamUsage && (
 								<div className="flex items-center gap-3 pt-1">
 									<StreamingUsage usage={streamUsage} model={streamModel} />
