@@ -3,6 +3,7 @@ first-class flow detection that drives Harness's agent rendering."""
 
 from app.services.agents.session_manager import (
     _parse_workflow_script,
+    normalize_sdk_task_message,
     normalize_session_update,
 )
 
@@ -152,3 +153,145 @@ class TestWorkflowParser:
         big = "export const meta = { name: 'x' }\n" + ("a" * 50_000)
         wf = _parse_workflow_script({"script": big})
         assert len(wf["script"]) == 20_000
+
+
+def one(message):
+    """Single-event helper: assert exactly one event and return its data."""
+    events = normalize_sdk_task_message(message)
+    assert len(events) == 1
+    return events[0]
+
+
+class TestSdkTaskMessage:
+    def test_task_started_top_level_shape(self):
+        ev = one(
+            {
+                "type": "task_started",
+                "task_id": "t1",
+                "subagent_type": "reviewer",
+                "description": "Review the diff",
+            }
+        )
+        assert ev["event"] == "tool_call"
+        d = ev["data"]
+        assert d["call_id"] == "wf-task:t1"
+        assert d["kind"] == "subagent"
+        assert d["status"] == "in_progress"
+        # Title leads with the agent type for at-a-glance "what each agent is".
+        assert d["tool"] == "reviewer: Review the diff"
+        assert d["arguments"]["subagent_type"] == "reviewer"
+
+    def test_task_started_title_not_duplicated_when_type_in_desc(self):
+        d = one(
+            {"type": "task_started", "task_id": "t", "subagent_type": "reviewer",
+             "description": "reviewer audits the diff"}
+        )["data"]
+        # subagent_type already present in the description — don't prefix it.
+        assert d["tool"] == "reviewer audits the diff"
+
+    def test_task_started_system_subtype_shape(self):
+        ev = one(
+            {
+                "type": "system",
+                "subtype": "task_started",
+                "task_id": "t2",
+                "subagent_type": "writer",
+                "description": "Draft",
+            }
+        )
+        assert ev["data"]["kind"] == "subagent"
+        assert ev["data"]["call_id"] == "wf-task:t2"
+
+    def test_task_started_falls_back_to_prompt_then_subagent_type(self):
+        d = one({"type": "task_started", "task_id": "t", "prompt": "do x"})["data"]
+        assert d["tool"] == "do x"
+        d2 = one({"type": "task_started", "task_id": "t", "subagent_type": "k"})["data"]
+        assert d2["tool"] == "k"
+
+    def test_task_started_nests_under_tool_use_id(self):
+        d = one(
+            {"type": "task_started", "task_id": "t", "tool_use_id": "wf-call-1"}
+        )["data"]
+        assert d["parent_id"] == "wf-call-1"
+
+    def test_task_started_no_parent_when_absent(self):
+        d = one({"type": "task_started", "task_id": "t"})["data"]
+        assert "parent_id" not in d
+
+    def test_task_progress_appends_and_stays_running(self):
+        d = one(
+            {"type": "task_progress", "task_id": "t", "last_tool_name": "Grep"}
+        )["data"]
+        assert d["append"] is True
+        assert d["status"] == "in_progress"
+        assert d["output_delta"] == "Grep\n"
+
+    def test_task_progress_never_terminal_even_with_status(self):
+        # progress carrying a terminal-looking status must NOT finish the call
+        d = one(
+            {"type": "task_progress", "task_id": "t", "status": "completed",
+             "output": "x"}
+        )["data"]
+        assert d["append"] is True
+        assert d["status"] == "in_progress"
+
+    def test_task_updated_completed(self):
+        d = one(
+            {"type": "task_updated", "task_id": "t", "status": "completed",
+             "result": "done well"}
+        )["data"]
+        assert d["status"] == "completed"
+        assert d["result"] == "done well"
+        assert "append" not in d
+
+    def test_task_updated_failed_and_killed_map_to_failed(self):
+        assert one({"type": "task_updated", "task_id": "t", "status": "failed"})[
+            "data"
+        ]["status"] == "failed"
+        assert one({"type": "task_updated", "task_id": "t", "status": "killed"})[
+            "data"
+        ]["status"] == "failed"
+
+    def test_terminal_without_summary_has_empty_result(self):
+        # Bare terminal status must not echo the status word as output.
+        d = one({"type": "task_updated", "task_id": "t", "status": "completed"})["data"]
+        assert d["status"] == "completed"
+        assert d["result"] == ""
+
+    def test_task_updated_running_is_non_terminal(self):
+        d = one({"type": "task_updated", "task_id": "t", "status": "running"})["data"]
+        assert d["append"] is True
+        assert d["status"] == "in_progress"
+
+    def test_task_updated_status_dict_shape(self):
+        d = one(
+            {"type": "task_updated", "task_id": "t", "status": {"status": "completed"},
+             "summary": "ok"}
+        )["data"]
+        assert d["status"] == "completed"
+        assert d["result"] == "ok"
+
+    def test_task_notification_with_output_file(self):
+        d = one(
+            {"type": "task_notification", "task_id": "t", "status": "completed",
+             "summary": "all good", "output_file": "/tmp/out.md"}
+        )["data"]
+        assert d["status"] == "completed"
+        assert "all good" in d["result"]
+        assert "/tmp/out.md" in d["result"]
+
+    def test_non_task_message_ignored(self):
+        assert normalize_sdk_task_message({"type": "assistant"}) == []
+        assert normalize_sdk_task_message({"type": "result"}) == []
+        assert normalize_sdk_task_message({"type": "system", "subtype": "init"}) == []
+
+    def test_missing_task_id_ignored(self):
+        assert normalize_sdk_task_message({"type": "task_started"}) == []
+
+    def test_uuid_used_as_task_id_fallback(self):
+        d = one({"type": "task_started", "uuid": "u9"})["data"]
+        assert d["call_id"] == "wf-task:u9"
+
+    def test_non_dict_ignored(self):
+        assert normalize_sdk_task_message(None) == []
+        assert normalize_sdk_task_message("nope") == []
