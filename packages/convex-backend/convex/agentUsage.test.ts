@@ -131,4 +131,83 @@ describe("agentUsage.getMyAgentUsage", () => {
 		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
 		expect(rows).toEqual([]);
 	});
+
+	it("excludes past-day rows from today* but counts them in totals", async () => {
+		const { raw, asUser } = makeT();
+		const credId = await seedCredential(raw, "u-a", "work");
+		const convoId = await seedConversation(raw, "u-a");
+		await raw.mutation(
+			internal.agentUsage.record,
+			turn({ agentCredentialId: credId, conversationId: convoId, day: "2026-06-18", turnKey: "old:1" }),
+		);
+		await raw.mutation(
+			internal.agentUsage.record,
+			turn({ agentCredentialId: credId, conversationId: convoId, turnKey: "new:1" }),
+		);
+		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
+		expect(rows[0].turns).toBe(2);
+		expect(rows[0].totalTokens).toBe(200);
+		expect(rows[0].totalCostUsd).toBeCloseTo(0.02);
+		expect(rows[0].todayTokens).toBe(100); // only the today row
+		expect(rows[0].todayCostUsd).toBeCloseTo(0.01);
+	});
+
+	it("buckets turns with no model under 'unknown'", async () => {
+		const { raw, asUser } = makeT();
+		const credId = await seedCredential(raw, "u-a", "work");
+		const convoId = await seedConversation(raw, "u-a");
+		await raw.mutation(
+			internal.agentUsage.record,
+			turn({ agentCredentialId: credId, conversationId: convoId, turnKey: "s1:1" }),
+		);
+		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
+		expect(rows[0].perModel.map((m) => m.model)).toEqual(["unknown"]);
+		expect(rows[0].lastModel).toBeNull();
+	});
+
+	it("takes lastModel/rateLimit from the latest-recorded turn (null overwrites)", async () => {
+		const { raw, asUser } = makeT();
+		const credId = await seedCredential(raw, "u-a", "work");
+		const convoId = await seedConversation(raw, "u-a");
+		await raw.mutation(
+			internal.agentUsage.record,
+			turn({
+				agentCredentialId: credId,
+				conversationId: convoId,
+				model: "opus",
+				rateLimit: { remaining: 5 },
+				turnKey: "s1:1",
+			}),
+		);
+		await raw.mutation(
+			internal.agentUsage.record,
+			turn({ agentCredentialId: credId, conversationId: convoId, model: "sonnet", turnKey: "s1:2" }),
+		);
+		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
+		expect(rows[0].lastModel).toBe("sonnet");
+		// the newer turn has no rateLimit → it overwrites the older snapshot to null
+		expect(rows[0].rateLimit).toBeNull();
+	});
+
+	it("cascade-deletes usage when the owning credential is removed", async () => {
+		const { raw, asUser } = makeT();
+		const credId = await seedCredential(raw, "u-a", "work");
+		const convoId = await seedConversation(raw, "u-a");
+		await raw.mutation(
+			internal.agentUsage.record,
+			turn({ agentCredentialId: credId, conversationId: convoId, turnKey: "s1:1" }),
+		);
+		expect(
+			await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {}),
+		).toHaveLength(1);
+		await asUser("u-a").mutation(api.agentCredentials.remove, {
+			credentialId: credId,
+		});
+		// the ledger rows are gone, not just hidden
+		expect(await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {})).toEqual([]);
+		const remaining = await raw.run(async (ctx) =>
+			ctx.db.query("agentUsageLedger").collect(),
+		);
+		expect(remaining).toEqual([]);
+	});
 });

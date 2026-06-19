@@ -62,12 +62,17 @@ interface CredAcc {
 	rateLimit: unknown;
 }
 
+// Bound the ledger scan so the query degrades (caps totals) rather than
+// THROWING past Convex's per-transaction read limit. One row per agent turn;
+// 8000 leaves ample headroom under the limit for the credential join + the
+// rateLimit blobs. If a user ever exceeds this, introduce a per-period rollup.
+const MAX_LEDGER_ROWS = 8000;
+
 /**
  * The current user's agent usage, aggregated per credential.
  *
- * Sums the ledger (no rollup table — keeps period totals exact and dodges the
- * cumulative-cost double-count trap). Fine at current volume; if a single user
- * ever accumulates many thousands of turns, introduce a per-period rollup.
+ * Sums the (capped) ledger — no rollup table, which keeps period totals exact
+ * and dodges the cumulative-cost double-count trap.
  */
 export const getMyAgentUsage = query({
 	args: {},
@@ -84,7 +89,7 @@ export const getMyAgentUsage = query({
 			ctx.db
 				.query("agentUsageLedger")
 				.withIndex("by_user", (q) => q.eq("userId", userId))
-				.collect(),
+				.take(MAX_LEDGER_ROWS),
 		]);
 
 		const today = todayKey();

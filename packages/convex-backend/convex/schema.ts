@@ -408,8 +408,7 @@ export default defineSchema({
 		week: v.string(), // "2026-W25"
 		recordedAt: v.number(),
 	})
-		.index("by_turnKey", ["turnKey"])
-		.index("by_user", ["userId"])
-		.index("by_user_day", ["userId", "day"])
-		.index("by_credential", ["agentCredentialId"]),
+		.index("by_turnKey", ["turnKey"]) // idempotency lookup
+		.index("by_user", ["userId"]) // getMyAgentUsage
+		.index("by_credential", ["agentCredentialId"]), // cascade-delete on credential removal
 });

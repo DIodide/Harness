@@ -197,6 +197,11 @@ class AgentSession:
     # Monotonic per-turn counter; combined with acp_session_id into the usage
     # ledger's idempotency key so a usage_update can't be double-counted.
     turn_index: int = 0
+    # The SDK's total_cost_usd is CUMULATIVE across the ACP session (one
+    # long-lived query() per session — only token usage resets per prompt), so
+    # we persist per-turn DELTAs. Tracks the last cumulative cost seen; reset to
+    # 0 whenever a fresh ACP session opens (the SDK cost restarts there).
+    last_cost_usd: float = 0.0
 
     @property
     def supports_prompt_queueing(self) -> bool:
@@ -1323,6 +1328,33 @@ class AgentSessionManager:
             session.error = classify_agent_error(e)
             return False
 
+    @staticmethod
+    def _build_session_meta(session: AgentSession) -> dict | None:
+        """session/new `_meta`. Scoped to claude-code (other agents ignore it).
+
+        - emitRawSDKMessages: re-emit SDK task-lifecycle messages (otherwise
+          dropped) so Workflow/subagent activity is visible.
+        - options.systemPrompt: forward the harness system prompt (silently
+          dropped on the ACP path before). APPEND to Claude Code's preset so
+          its tool-use scaffolding survives — a bare string would replace it.
+
+        Relies on the adapter spreading `_meta.claudeCode.options` into the SDK
+        query() options (verified against acp-agent.ts), NOT a stable ACP
+        contract — re-verify on any claude-agent-acp version bump.
+        """
+        if session.agent_id != "claude-code":
+            return None
+        claude_meta: dict = {"emitRawSDKMessages": SDK_TASK_MESSAGE_FILTERS}
+        if session.harness.system_prompt:
+            claude_meta["options"] = {
+                "systemPrompt": {
+                    "type": "preset",
+                    "preset": "claude_code",
+                    "append": session.harness.system_prompt,
+                }
+            }
+        return {"claudeCode": claude_meta}
+
     async def _open_acp_session(
         self, session: AgentSession, user_ctx, preserve_config: bool = False,
     ) -> None:
@@ -1374,33 +1406,15 @@ class AgentSessionManager:
                 servers,
                 session.relay_generation,
             )
-        # claude-agent-acp _meta.claudeCode: re-emit SDK task-lifecycle messages
-        # (otherwise dropped) so Workflow/subagent activity is visible, and
-        # forward the harness system prompt. Scoped to claude-code; other agents
-        # don't read this _meta.
-        session_meta: dict | None = None
-        if session.agent_id == "claude-code":
-            claude_meta: dict = {"emitRawSDKMessages": SDK_TASK_MESSAGE_FILTERS}
-            # The harness system prompt was silently dropped on the ACP path.
-            # Forward it via _meta.claudeCode.options (merged into the SDK
-            # query() options by the adapter), APPENDing to Claude Code's preset
-            # so its built-in tool-use scaffolding survives — a bare string
-            # would replace it.
-            if session.harness.system_prompt:
-                claude_meta["options"] = {
-                    "systemPrompt": {
-                        "type": "preset",
-                        "preset": "claude_code",
-                        "append": session.harness.system_prompt,
-                    }
-                }
-            session_meta = {"claudeCode": claude_meta}
+        session_meta = self._build_session_meta(session)
         result = await session.connection.new_session(
             cwd=(session.runtime.cwd if session.runtime else SANDBOX_WORKSPACE),
             mcp_servers=acp_servers,
             meta=session_meta,
         )
         session.acp_session_id = result["sessionId"]
+        # Fresh ACP session → the SDK's cumulative cost restarts at ~0.
+        session.last_cost_usd = 0.0
         session.config_options = result.get("configOptions") or []
         # Replay notifications that raced the session/new response: Claude
         # Code sends available_commands_update on a setTimeout(0) right after
@@ -1590,17 +1604,35 @@ class AgentSessionManager:
                 and event["data"].get("cost") is not None
                 and session.harness.agent_credential_id
             ):
+                # Cost is cumulative-per-session; convert to a per-turn delta
+                # HERE (this handler runs sequentially per session) so the
+                # fire-and-forget recorder below can't race on last_cost_usd.
+                cost_delta = self._per_turn_cost_delta(
+                    session, float(event["data"].get("cost") or 0.0)
+                )
                 task = asyncio.create_task(
-                    self._record_agent_usage(session, event["data"], update)
+                    self._record_agent_usage(session, event["data"], update, cost_delta)
                 )
                 self._usage_tasks.add(task)
                 task.add_done_callback(self._usage_tasks.discard)
             await session.event_queue.put(event)
 
+    @staticmethod
+    def _per_turn_cost_delta(session: AgentSession, cumulative: float) -> float:
+        """The SDK's total_cost_usd is cumulative across the ACP session; return
+        this turn's delta and advance the session's running total. Clamped at 0
+        so a reset/reconnect can't record a negative cost."""
+        delta = max(0.0, cumulative - session.last_cost_usd)
+        session.last_cost_usd = cumulative
+        return delta
+
     async def _record_agent_usage(
-        self, session: AgentSession, data: dict, update: dict
+        self, session: AgentSession, data: dict, update: dict, cost: float
     ) -> None:
-        """Record one turn's agent usage to Convex (per-credential, fail-soft)."""
+        """Record one turn's agent usage to Convex (per-credential, fail-soft).
+
+        `cost` is the per-turn delta already computed by the caller.
+        """
         cred_id = session.harness.agent_credential_id
         if not cred_id:
             return
@@ -1624,7 +1656,7 @@ class AgentSessionManager:
             model=model,
             used_tokens=int(data.get("used") or 0),
             context_size=data.get("size"),
-            cost=float(data.get("cost") or 0.0),
+            cost=cost,
             currency=data.get("currency") or "USD",
             turn_key=f"{session.acp_session_id}:{session.turn_index}",
             rate_limit=rate_limit,
