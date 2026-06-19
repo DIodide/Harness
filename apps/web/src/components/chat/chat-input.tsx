@@ -216,8 +216,13 @@ export function ChatInput({
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	// The Agents composer button drives the right sandbox panel's Agents tab.
 	const sandboxPanel = useSandboxPanel();
+	// Mirror the panel's effectiveTab fallback: the Agents tab is what renders
+	// when activeTab is "agents" OR there's no sandbox (Files/Terminal/Git need
+	// one, so the panel falls back to Agents). Reading raw activeTab here would
+	// desync the button highlight after a sandbox detaches with the panel open.
 	const agentsTabOpen =
-		sandboxPanel?.panelOpen === true && sandboxPanel.activeTab === "agents";
+		sandboxPanel?.panelOpen === true &&
+		(sandboxPanel.activeTab === "agents" || sandboxPanel.sandboxId == null);
 	const toggleAgentsTab = useCallback(() => {
 		if (!sandboxPanel) return;
 		if (agentsTabOpen) sandboxPanel.togglePanel();
