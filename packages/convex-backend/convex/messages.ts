@@ -1,6 +1,10 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
-import { authorizeConversationWrite, resolveConversationRole } from "./shares";
+import {
+	authorizeConversationWrite,
+	MAX_MESSAGE_CONTENT_CHARS,
+	resolveConversationRole,
+} from "./shares";
 
 export const list = query({
 	args: { conversationId: v.id("conversations") },
@@ -38,6 +42,9 @@ export const send = mutation({
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
+		if (args.content.length > MAX_MESSAGE_CONTENT_CHARS) {
+			throw new Error("Message too long");
+		}
 		const convo = await ctx.db.get(args.conversationId);
 		if (!convo || convo.userId !== identity.subject) {
 			throw new Error("Not found");

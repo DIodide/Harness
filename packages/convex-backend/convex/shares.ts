@@ -122,9 +122,7 @@ export async function resolveConversationRole(
 	// Per-user grants addressed directly to this user.
 	const grants = await ctx.db
 		.query("shareGrants")
-		.withIndex("by_conversation", (q) =>
-			q.eq("conversationId", conversationId),
-		)
+		.withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
 		.collect();
 	for (const g of grants) {
 		if (!isActiveGrant(g)) continue;
@@ -165,7 +163,12 @@ export async function authorizeConversationWrite(
 	conversationId: Id<"conversations">,
 	token?: string,
 ): Promise<Doc<"conversations">> {
-	const role = await resolveConversationRole(ctx, userId, conversationId, token);
+	const role = await resolveConversationRole(
+		ctx,
+		userId,
+		conversationId,
+		token,
+	);
 	if (role !== "owner" && role !== "editor") {
 		throw new Error("Not found");
 	}
@@ -174,18 +177,39 @@ export async function authorizeConversationWrite(
 	return convo;
 }
 
-// A collaborator-supplied author snapshot is untrusted (client-provided), so
-// clamp the name and accept only a plausible https image URL. Name + avatar
-// ONLY — never email (locked product decision).
+// Mirror the FastAPI USER_MESSAGE_MAX_LENGTH so an editor-grant collaborator
+// can't write an oversized message straight to Convex (the FastAPI cap only
+// gates the model turn, not this persistence path).
+export const MAX_MESSAGE_CONTENT_CHARS = 16000;
+
+// Avatar URLs are rendered as <img src> to every viewer of a shared chat, so an
+// arbitrary host would be a tracking-pixel beacon. Restrict to the hosts our
+// auth provider actually serves avatars from (Clerk proxies OAuth avatars
+// through img.clerk.com). A disallowed/garbage URL just falls back to initials.
+const ALLOWED_AVATAR_HOSTS = new Set([
+	"img.clerk.com",
+	"images.clerk.dev",
+	"www.gravatar.com",
+]);
+
+// A client-supplied author/owner snapshot is untrusted, so clamp the name and
+// accept only an https avatar URL on a known host. Name + avatar ONLY — never
+// email (locked product decision).
 function clampAuthorName(name?: string): string | undefined {
 	if (!name) return undefined;
 	const trimmed = name.trim().slice(0, 80);
 	return trimmed || undefined;
 }
 function clampAuthorImageUrl(url?: string): string | undefined {
-	if (!url) return undefined;
-	if (url.length > 2048) return undefined;
-	if (!/^https:\/\//i.test(url)) return undefined;
+	if (!url || url.length > 2048) return undefined;
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		return undefined;
+	}
+	if (parsed.protocol !== "https:") return undefined;
+	if (!ALLOWED_AVATAR_HOSTS.has(parsed.hostname)) return undefined;
 	return url;
 }
 
@@ -218,6 +242,9 @@ export const sendShared = mutation({
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
+		if (args.content.length > MAX_MESSAGE_CONTENT_CHARS) {
+			throw new Error("Message too long");
+		}
 		const convo = await authorizeConversationWrite(
 			ctx,
 			identity.subject,
@@ -282,8 +309,8 @@ export const ensurePublicLink = mutation({
 		if (activeLink) {
 			// Keep the owner profile snapshot fresh on re-open.
 			await ctx.db.patch(activeLink._id, {
-				ownerName: args.ownerName,
-				ownerImageUrl: args.ownerImageUrl,
+				ownerName: clampAuthorName(args.ownerName),
+				ownerImageUrl: clampAuthorImageUrl(args.ownerImageUrl),
 			});
 			return {
 				token: activeLink.publicToken as string,
@@ -295,8 +322,8 @@ export const ensurePublicLink = mutation({
 		const grantId = await ctx.db.insert("shareGrants", {
 			conversationId: args.conversationId,
 			ownerUserId: convo.userId,
-			ownerName: args.ownerName,
-			ownerImageUrl: args.ownerImageUrl,
+			ownerName: clampAuthorName(args.ownerName),
+			ownerImageUrl: clampAuthorImageUrl(args.ownerImageUrl),
 			role: args.role,
 			publicToken: args.token,
 			createdAt: Date.now(),
@@ -353,8 +380,8 @@ export const rotatePublicLink = mutation({
 		await ctx.db.insert("shareGrants", {
 			conversationId: args.conversationId,
 			ownerUserId: convo.userId,
-			ownerName: args.ownerName,
-			ownerImageUrl: args.ownerImageUrl,
+			ownerName: clampAuthorName(args.ownerName),
+			ownerImageUrl: clampAuthorImageUrl(args.ownerImageUrl),
 			role,
 			publicToken: args.token,
 			createdAt: Date.now(),
@@ -407,16 +434,14 @@ export const listShareGrants = query({
 				q.eq("conversationId", args.conversationId),
 			)
 			.collect();
-		return grants
-			.filter(isActiveGrant)
-			.map((g) => ({
-				_id: g._id,
-				role: g.role,
-				publicToken: g.publicToken ?? null,
-				grantedToUserId: g.grantedToUserId ?? null,
-				createdAt: g.createdAt,
-				lastAccessedAt: g.lastAccessedAt ?? null,
-			}));
+		return grants.filter(isActiveGrant).map((g) => ({
+			_id: g._id,
+			role: g.role,
+			publicToken: g.publicToken ?? null,
+			grantedToUserId: g.grantedToUserId ?? null,
+			createdAt: g.createdAt,
+			lastAccessedAt: g.lastAccessedAt ?? null,
+		}));
 	},
 });
 
@@ -563,8 +588,14 @@ export const forkSharedConversation = mutation({
 			// Drop the source owner's per-message token/cost accounting (`usage`)
 			// and workspace placement; re-stamp ownership to the forker so the
 			// copy is consistently theirs (the search index filters on userId).
-			const { _id, _creationTime, conversationId, workspaceId, usage, ...rest } =
-				msg;
+			const {
+				_id,
+				_creationTime,
+				conversationId,
+				workspaceId,
+				usage,
+				...rest
+			} = msg;
 			await ctx.db.insert("messages", {
 				...rest,
 				userId: identity.subject,

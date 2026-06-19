@@ -336,11 +336,13 @@ async def chat_stream(
         user.get("sub", "unknown"),
         body.conversation_id,
     )
+    # body.harness is None for an editor-grant collaborator (the server resolves
+    # the owner's harness below) — never dereference it unguarded.
     logger.info(
         "Harness config: sandbox_enabled=%s, sandbox_id=%s, sandbox_config=%s, daytona_key=%s",
-        body.harness.sandbox_enabled,
-        body.harness.sandbox_id,
-        body.harness.sandbox_config,
+        body.harness.sandbox_enabled if body.harness else None,
+        body.harness.sandbox_id if body.harness else None,
+        body.harness.sandbox_config if body.harness else None,
         bool(settings.daytona_api_key),
     )
 
@@ -356,6 +358,9 @@ async def chat_stream(
     if access not in ("owner", "editor"):
         raise HTTPException(status_code=403, detail="Not authorized for this conversation")
 
+    # A collaborator must not be shown the owner's infrastructure details (MCP
+    # server URLs, sandbox id) in stream frames — non-secret, but the owner's.
+    is_collab = access == "editor"
     if access == "editor":
         # Collaborator turn: NEVER trust a client-supplied harness — resolve the
         # owner's harness server-side and bill/resolve everything as the owner.
@@ -441,14 +446,15 @@ async def chat_stream(
             if not tools:
                 tools = None
 
-            # Notify frontend about MCP servers that failed to connect
+            # Notify frontend about MCP servers that failed to connect. The URL
+            # is the OWNER's infrastructure — omit it for a collaborator.
             for failure in mcp_failures:
                 yield {
                     "event": "mcp_error",
                     "data": json.dumps(
                         {
                             "server_name": failure.server_name,
-                            "server_url": failure.server_url,
+                            "server_url": None if is_collab else failure.server_url,
                             "reason": failure.reason,
                         }
                     ),
@@ -514,7 +520,14 @@ async def chat_stream(
                 )
                 yield {
                     "event": "sandbox_status",
-                    "data": json.dumps({"sandbox_id": sandbox_id, "status": "active"}),
+                    "data": json.dumps(
+                        {
+                            # Owner's sandbox id — confers no capability (all
+                            # sandbox routes re-check ownership) but it's theirs.
+                            "sandbox_id": None if is_collab else sandbox_id,
+                            "status": "active",
+                        }
+                    ),
                 }
 
         # Resolve GitHub OAuth credentials for sandbox git operations.

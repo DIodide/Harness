@@ -128,7 +128,7 @@ describe("shares public viewing", () => {
 			role: "viewer",
 			token: TOKEN,
 			ownerName: "Ada Lovelace",
-			ownerImageUrl: "https://img.example/ada.png",
+			ownerImageUrl: "https://img.clerk.com/ada.png",
 		});
 		const asOwner = await asUser("u-owner").query(
 			api.shares.getSharedConversation,
@@ -142,7 +142,7 @@ describe("shares public viewing", () => {
 		expect(asOther?.viewerIsOwner).toBe(false);
 		// Author attribution is present; email is never part of the projection.
 		expect(asOther?.ownerName).toBe("Ada Lovelace");
-		expect(asOther?.ownerImageUrl).toBe("https://img.example/ada.png");
+		expect(asOther?.ownerImageUrl).toBe("https://img.clerk.com/ada.png");
 		expect("ownerEmail" in (asOther ?? {})).toBe(false);
 	});
 
@@ -171,10 +171,14 @@ describe("shares public viewing", () => {
 	it("returns null/[] for an invalid token (no existence leak)", async () => {
 		const { raw } = makeT();
 		expect(
-			await raw.query(api.shares.getSharedConversation, { token: "nope-nope-nope-nope-nope-nope-xx" }),
+			await raw.query(api.shares.getSharedConversation, {
+				token: "nope-nope-nope-nope-nope-nope-xx",
+			}),
 		).toBeNull();
 		expect(
-			await raw.query(api.shares.listSharedMessages, { token: "nope-nope-nope-nope-nope-nope-xx" }),
+			await raw.query(api.shares.listSharedMessages, {
+				token: "nope-nope-nope-nope-nope-nope-xx",
+			}),
 		).toEqual([]);
 	});
 });
@@ -239,7 +243,9 @@ describe("shares revocation", () => {
 			role: "viewer",
 			token: TOKEN,
 		});
-		await a.mutation(api.shares.unshareConversation, { conversationId: convoId });
+		await a.mutation(api.shares.unshareConversation, {
+			conversationId: convoId,
+		});
 		expect(
 			await a.query(api.shares.listShareGrants, { conversationId: convoId }),
 		).toEqual([]);
@@ -430,7 +436,7 @@ describe("shares.sendShared (collaborator user message)", () => {
 			conversationId: convoId,
 			content: "hi from a collaborator",
 			authorName: "Grace Hopper",
-			authorImageUrl: "https://img.example/grace.png",
+			authorImageUrl: "https://img.clerk.com/grace.png",
 		});
 
 		// The owner sees it in their owner-gated list, attributed to the sender.
@@ -449,7 +455,7 @@ describe("shares.sendShared (collaborator user message)", () => {
 		});
 		const pub = shared.find((m) => m.content === "hi from a collaborator");
 		expect(pub?.authorName).toBe("Grace Hopper");
-		expect(pub?.authorImageUrl).toBe("https://img.example/grace.png");
+		expect(pub?.authorImageUrl).toBe("https://img.clerk.com/grace.png");
 		expect("userId" in (pub ?? {})).toBe(false);
 	});
 
@@ -484,6 +490,37 @@ describe("shares.sendShared (collaborator user message)", () => {
 		expect(pub).toBeTruthy();
 		expect(pub?.authorImageUrl).toBeUndefined();
 	});
+
+	it("drops an avatar URL on a non-allowlisted host (no tracking pixels)", async () => {
+		const { raw, asUser } = makeT();
+		const convoId = await seedConvo(raw, "u-owner");
+		await mintLink(asUser, convoId, "editor");
+		await asUser("u-collab").mutation(api.shares.sendShared, {
+			token: TOKEN,
+			conversationId: convoId,
+			content: "evil avatar host",
+			authorName: "X",
+			authorImageUrl: "https://attacker.example/track.gif",
+		});
+		const shared = await raw.query(api.shares.listSharedMessages, {
+			token: TOKEN,
+		});
+		const pub = shared.find((m) => m.content === "evil avatar host");
+		expect(pub?.authorImageUrl).toBeUndefined();
+	});
+
+	it("rejects an oversized message (no transcript bloat)", async () => {
+		const { raw, asUser } = makeT();
+		const convoId = await seedConvo(raw, "u-owner");
+		await mintLink(asUser, convoId, "editor");
+		await expect(
+			asUser("u-collab").mutation(api.shares.sendShared, {
+				token: TOKEN,
+				conversationId: convoId,
+				content: "A".repeat(16001),
+			}),
+		).rejects.toThrow(/too long/);
+	});
 });
 
 describe("shares editor delete/regenerate", () => {
@@ -491,7 +528,9 @@ describe("shares editor delete/regenerate", () => {
 		const { raw, asUser } = makeT();
 		const convoId = await seedConvo(raw, "u-owner");
 		const { grantId } = await mintLink(asUser, convoId, "editor");
-		const msgs = await raw.query(api.shares.listSharedMessages, { token: TOKEN });
+		const msgs = await raw.query(api.shares.listSharedMessages, {
+			token: TOKEN,
+		});
 		const lastId = msgs[msgs.length - 1]._id as Id<"messages">;
 
 		// Downgrade to viewer → cannot delete.
@@ -515,7 +554,9 @@ describe("shares editor delete/regenerate", () => {
 			id: lastId,
 			token: TOKEN,
 		});
-		const after = await raw.query(api.shares.listSharedMessages, { token: TOKEN });
+		const after = await raw.query(api.shares.listSharedMessages, {
+			token: TOKEN,
+		});
 		expect(after).toHaveLength(1);
 	});
 });
