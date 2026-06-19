@@ -1,4 +1,11 @@
-import { ChevronLeft, Files, GitBranch, Terminal, X } from "lucide-react";
+import {
+	ChevronLeft,
+	Files,
+	GitBranch,
+	Layers,
+	Terminal,
+	X,
+} from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import {
 	lazy,
@@ -13,6 +20,10 @@ import {
 	useSandboxPanel,
 } from "../../lib/sandbox-panel-context";
 import { cn } from "../../lib/utils";
+import {
+	BackgroundAgentsContent,
+	countActiveAgents,
+} from "../chat/background-agents-panel";
 import { RoseCurveSpinner } from "../rose-curve-spinner";
 import { CommandRunner } from "./command-input";
 import { FileExplorer } from "./file-explorer";
@@ -23,11 +34,12 @@ const WebTerminal = lazy(() =>
 	import("./terminal").then((m) => ({ default: m.WebTerminal })),
 );
 
-const TABS: { id: SandboxTab; icon: typeof Files; label: string }[] = [
+const SANDBOX_TABS: { id: SandboxTab; icon: typeof Files; label: string }[] = [
 	{ id: "files", icon: Files, label: "Files" },
 	{ id: "terminal", icon: Terminal, label: "Terminal" },
 	{ id: "git", icon: GitBranch, label: "Git" },
 ];
+const AGENTS_TAB = { id: "agents" as const, icon: Layers, label: "Agents" };
 
 const MIN_WIDTH = 360;
 const MAX_WIDTH = 800;
@@ -95,9 +107,19 @@ export function SandboxPanel() {
 		openFiles,
 		togglePanel,
 		setActiveFile,
+		sandboxId,
+		agentParts,
+		agentIsStreaming,
 	} = panel;
+	// File/Terminal/Git tabs need an attached sandbox; the Agents tab is always
+	// available (agent mode can run without a harness sandbox).
+	const tabs = sandboxId ? [...SANDBOX_TABS, AGENTS_TAB] : [AGENTS_TAB];
+	const effectiveTab = tabs.some((t) => t.id === activeTab)
+		? activeTab
+		: AGENTS_TAB.id;
+	const agentCount = countActiveAgents(agentParts, agentIsStreaming);
 	const showViewer =
-		activeTab === "files" && openFiles.length > 0 && activeFile;
+		effectiveTab === "files" && openFiles.length > 0 && activeFile;
 
 	return (
 		<motion.aside
@@ -120,9 +142,10 @@ export function SandboxPanel() {
 			{/* Top bar: tabs + close */}
 			<div className="flex h-9 shrink-0 items-center border-b border-border">
 				<div className="flex flex-1 items-center">
-					{TABS.map((tab) => {
+					{tabs.map((tab) => {
 						const Icon = tab.icon;
-						const isActive = activeTab === tab.id;
+						const isActive = effectiveTab === tab.id;
+						const showBadge = tab.id === "agents" && agentCount > 0;
 						return (
 							<button
 								key={tab.id}
@@ -137,12 +160,17 @@ export function SandboxPanel() {
 							>
 								<Icon size={13} strokeWidth={1.5} />
 								{tab.label}
+								{showBadge && (
+									<span className="flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground/15 px-1 font-mono text-[9px] text-foreground">
+										{agentCount}
+									</span>
+								)}
 							</button>
 						);
 					})}
 				</div>
 				{/* Terminal mode toggle */}
-				{activeTab === "terminal" && (
+				{effectiveTab === "terminal" && (
 					<div className="flex items-center gap-0.5 pr-1">
 						<button
 							type="button"
@@ -188,7 +216,7 @@ export function SandboxPanel() {
 				className="flex min-h-0 flex-1 flex-col overflow-hidden"
 			>
 				{/* Files tab */}
-				{activeTab === "files" && (
+				{effectiveTab === "files" && (
 					<AnimatePresence mode="wait" initial={false}>
 						{showViewer ? (
 							<motion.div
@@ -264,34 +292,43 @@ export function SandboxPanel() {
 				)}
 
 				{/* Terminal — always mounted, hidden via CSS to preserve state */}
-				<div
-					className={cn(
-						"flex flex-1 flex-col overflow-hidden",
-						activeTab !== "terminal" && "hidden",
-					)}
-				>
-					{terminalMode === "pty" ? (
-						<Suspense
-							fallback={
-								<div className="flex flex-1 items-center justify-center gap-2">
-									<RoseCurveSpinner
-										size={12}
-										className="text-muted-foreground/40"
-									/>
-									<span className="font-mono text-[10.5px] text-muted-foreground/40">
-										Loading terminal...
-									</span>
-								</div>
-							}
-						>
-							<WebTerminal />
-						</Suspense>
-					) : (
-						<CommandRunner />
-					)}
-				</div>
+				{sandboxId && (
+					<div
+						className={cn(
+							"flex flex-1 flex-col overflow-hidden",
+							effectiveTab !== "terminal" && "hidden",
+						)}
+					>
+						{terminalMode === "pty" ? (
+							<Suspense
+								fallback={
+									<div className="flex flex-1 items-center justify-center gap-2">
+										<RoseCurveSpinner
+											size={12}
+											className="text-muted-foreground/40"
+										/>
+										<span className="font-mono text-[10.5px] text-muted-foreground/40">
+											Loading terminal...
+										</span>
+									</div>
+								}
+							>
+								<WebTerminal />
+							</Suspense>
+						) : (
+							<CommandRunner />
+						)}
+					</div>
+				)}
 
-				{activeTab === "git" && <GitPanel />}
+				{effectiveTab === "git" && <GitPanel />}
+
+				{effectiveTab === "agents" && (
+					<BackgroundAgentsContent
+						parts={agentParts}
+						isStreaming={agentIsStreaming}
+					/>
+				)}
 			</div>
 		</motion.aside>
 	);

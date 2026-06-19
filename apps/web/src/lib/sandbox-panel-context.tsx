@@ -7,8 +7,9 @@ import {
 	useRef,
 	useState,
 } from "react";
+import type { StreamPart } from "./use-chat-stream";
 
-export type SandboxTab = "files" | "terminal" | "git";
+export type SandboxTab = "files" | "terminal" | "git" | "agents";
 
 interface SandboxPanelState {
 	/** Whether the panel is open. */
@@ -25,9 +26,15 @@ interface SandboxPanelState {
 	activeFile: string | null;
 	/** Current directory the file explorer is viewing. */
 	currentDir: string;
+	/** Live stream parts for the active conversation — drives the Agents tab. */
+	agentParts: StreamPart[];
+	/** Whether the active conversation is streaming (Agents tab statuses). */
+	agentIsStreaming: boolean;
 
 	togglePanel: () => void;
 	setActiveTab: (tab: SandboxTab) => void;
+	/** Open the panel directly on the Agents tab (composer toggle). */
+	openAgentsTab: () => void;
 	openFile: (path: string) => void;
 	closeFile: (path: string) => void;
 	setActiveFile: (path: string | null) => void;
@@ -38,9 +45,13 @@ const SandboxPanelContext = createContext<SandboxPanelState | null>(null);
 
 export function SandboxPanelProvider({
 	sandboxId,
+	agentParts = [],
+	agentIsStreaming = false,
 	children,
 }: {
 	sandboxId: string | null;
+	agentParts?: StreamPart[];
+	agentIsStreaming?: boolean;
 	children: React.ReactNode;
 }) {
 	const [panelOpen, setPanelOpen] = useState(false);
@@ -89,6 +100,11 @@ export function SandboxPanelProvider({
 		setCurrentDir(dir);
 	}, []);
 
+	const openAgentsTab = useCallback(() => {
+		setPanelOpen(true);
+		setActiveTab("agents");
+	}, []);
+
 	const value = useMemo(
 		() => ({
 			panelOpen,
@@ -98,8 +114,11 @@ export function SandboxPanelProvider({
 			openFiles,
 			activeFile,
 			currentDir,
+			agentParts,
+			agentIsStreaming,
 			togglePanel,
 			setActiveTab,
+			openAgentsTab,
 			openFile,
 			closeFile,
 			setActiveFile,
@@ -113,7 +132,10 @@ export function SandboxPanelProvider({
 			openFiles,
 			activeFile,
 			currentDir,
+			agentParts,
+			agentIsStreaming,
 			togglePanel,
+			openAgentsTab,
 			openFile,
 			closeFile,
 			navigateTo,

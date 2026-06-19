@@ -31,10 +31,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
-import {
-	BackgroundAgentsPanel,
-	countActiveAgents,
-} from "../../components/chat/background-agents-panel";
+import { countActiveAgents } from "../../components/chat/background-agents-panel";
 import { ChatInput } from "../../components/chat/chat-input";
 import { ChatMessages } from "../../components/chat/chat-messages";
 import {
@@ -215,7 +212,6 @@ function ChatPage() {
 	// Session-only model override — does not persist to the harness
 	const [sessionModel, setSessionModel] = useState<string | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
-	const [agentsPanelOpen, setAgentsPanelOpen] = useState(false);
 	const [pendingEditWorkspaceId, setPendingEditWorkspaceId] =
 		useState<Id<"workspaces"> | null>(null);
 	const [pendingCreateWorkspace, setPendingCreateWorkspace] = useState(0);
@@ -996,6 +992,8 @@ function ChatPage() {
 	return (
 		<SandboxPanelProvider
 			sandboxId={effectiveSandboxEnabled ? effectiveSandboxDaytonaId : null}
+			agentParts={activeStreamState.parts}
+			agentIsStreaming={isActiveConvoStreaming}
 		>
 			<div className="flex h-full overflow-hidden bg-background">
 				<AnimatePresence>
@@ -1152,18 +1150,9 @@ function ChatPage() {
 						/>
 					)}
 
-					<BackgroundAgentsPanel
-						open={agentsPanelOpen}
-						parts={activeStreamState.parts}
-						isStreaming={isActiveConvoStreaming}
-						onClose={() => setAgentsPanelOpen(false)}
-					/>
-
 					<ChatInput
 						conversationId={activeConvoId}
 						activeHarness={activeWorkspace ? activeHarness : undefined}
-						agentsPanelOpen={agentsPanelOpen}
-						onToggleAgentsPanel={() => setAgentsPanelOpen((o) => !o)}
 						agentActivityCount={agentActivityCount}
 						disabled={!activeWorkspace || !activeHarness}
 						placeholder={
@@ -1212,8 +1201,11 @@ function ChatPage() {
 					/>
 				</div>
 
+				{/* Self-gates on panelOpen; opened by the sandbox toggle (when a
+				    sandbox is attached) or the composer Agents button (agent mode),
+				    so it works without a sandbox. */}
 				<AnimatePresence>
-					{effectiveSandboxEnabled && <SandboxPanelToggle />}
+					<SandboxPanelToggle />
 				</AnimatePresence>
 			</div>
 		</SandboxPanelProvider>
