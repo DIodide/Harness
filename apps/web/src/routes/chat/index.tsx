@@ -90,6 +90,7 @@ import {
 import type { SkillEntry } from "../../lib/skills";
 import type { BudgetExceededInfo } from "../../lib/use-chat-stream";
 import { toPersistableParts } from "../../lib/use-chat-stream";
+import { useFollowStream } from "../../lib/use-follow-stream";
 import { cn } from "../../lib/utils";
 
 export const Route = createFileRoute("/chat/")({
@@ -948,12 +949,25 @@ function ChatPage() {
 	const activeConversation = conversations?.find(
 		(c) => c._id === activeConvoId,
 	);
-	const activeStreamState = activeConvoId
-		? (streamStates[activeConvoId] ?? EMPTY_STREAM_STATE)
-		: EMPTY_STREAM_STATE;
-	const isActiveConvoStreaming = activeConvoId
+	const isLocalActiveStreaming = activeConvoId
 		? chatStream.streamingConvoIds.has(activeConvoId)
 		: false;
+	// When THIS tab isn't driving the active conversation's turn (a sharee or
+	// another of the owner's tabs is), follow the live token feed so it streams
+	// down here too. Disabled while we're the initiator (our local stream is
+	// token-perfect — never render both).
+	const { followState: ownerFollow, clearFollow: clearOwnerFollow } =
+		useFollowStream({
+			conversationId: activeConvoId ?? null,
+			enabled: !!activeConvoId && !isLocalActiveStreaming,
+		});
+	const localActiveStreamState = activeConvoId
+		? (streamStates[activeConvoId] ?? EMPTY_STREAM_STATE)
+		: EMPTY_STREAM_STATE;
+	const activeStreamState = isLocalActiveStreaming
+		? localActiveStreamState
+		: (ownerFollow ?? EMPTY_STREAM_STATE);
+	const isActiveConvoStreaming = isLocalActiveStreaming || ownerFollow != null;
 	const agentActivityCount = countActiveAgents(
 		activeStreamState.parts,
 		isActiveConvoStreaming,
@@ -1059,7 +1073,11 @@ function ChatPage() {
 							agentStatus={activeStreamState.agentStatus}
 							streamPlan={activeStreamState.plan}
 							agentUsage={activeStreamState.agentUsage}
-							onStreamSynced={handleStreamSynced}
+							onStreamSynced={(cid) =>
+								isLocalActiveStreaming
+									? handleStreamSynced(cid)
+									: clearOwnerFollow()
+							}
 							displayMode={
 								(userSettings?.displayMode as DisplayMode) ?? "standard"
 							}

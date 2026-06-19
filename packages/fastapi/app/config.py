@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     # Clerk JWT verification — pinned issuer prevents attacker-controlled JWKS.
     clerk_issuer: str = ""
 
+    # Redis Streams bus for live token fan-out to passive viewers (owner's other
+    # tabs, sharees). OPTIONAL: when unset, turns stream only to the initiating
+    # client exactly as before (no regression) — the /follow endpoint just has
+    # nothing to relay. A shared instance also makes fan-out work across multiple
+    # FastAPI workers/boxes.
+    redis_url: str = ""
+
     # ── ACP agent gateway (external agents in Daytona sandboxes) ──
     # Daytona snapshot with node + codex-acp + claude-agent-acp preinstalled.
     # Built by packages/fastapi/scripts/create_acp_snapshot.py.

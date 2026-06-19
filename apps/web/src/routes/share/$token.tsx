@@ -6,7 +6,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { GitFork, Loader2, Lock, PanelRight, Send, Square } from "lucide-react";
 import { AnimatePresence } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { type ComponentProps, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { AgentPermissionCard } from "../../components/agent-permission-card";
 import { AgentQuestionCard } from "../../components/agent-question-card";
@@ -36,6 +36,7 @@ import {
 } from "../../lib/share";
 import { useAgentSessionConfig } from "../../lib/use-agent-session-config";
 import type { StreamPart } from "../../lib/use-chat-stream";
+import { useFollowStream } from "../../lib/use-follow-stream";
 
 export const Route = createFileRoute("/share/$token")({
 	// No beforeLoad auth guard — anonymous visitors must be able to view.
@@ -216,41 +217,70 @@ function SharedChatPage() {
 					messages={(messages ?? []) as SharedMessage[]}
 				/>
 			) : (
-				<div className="flex flex-1 flex-col overflow-hidden">
-					<ChatMessages
-						conversationId={header.conversationId as Id<"conversations">}
-						messages={messages ?? []}
-						readOnly
-						shareToken={token}
-						streamingContent={null}
-						streamingReasoning={null}
-						activeToolCalls={[]}
-						streamParts={[]}
-						pendingDoneContent={null}
-						streamUsage={null}
-						streamModel={null}
-						agentStatus={null}
-						streamPlan={null}
-						agentUsage={null}
-						isStreaming={false}
-						displayMode="standard"
-						editingMessageId={null}
-						editingContent=""
-						allConversations={[]}
-						activeConversation={undefined}
-						scrollToMessageId={null}
-						onStreamSynced={noop}
-						onRegenerate={noop}
-						onFork={noop}
-						onStartEditPrompt={noop}
-						onCancelEditPrompt={noop}
-						onSaveEditPrompt={noop}
-						onEditContentChange={noop}
-						onNavigateToConversation={noop}
-						onClearScrollTarget={noop}
-					/>
-				</div>
+				<ShareReadOnlyChat
+					token={token}
+					conversationId={header.conversationId as Id<"conversations">}
+					messages={messages ?? []}
+				/>
 			)}
+		</div>
+	);
+}
+
+/**
+ * Read-only viewer (anonymous or viewer-grant): the live transcript with the
+ * owner's turns streaming down via the follow feed. Authorizes by share token
+ * (plus the Clerk JWT when signed in).
+ */
+function ShareReadOnlyChat({
+	token,
+	conversationId,
+	messages,
+}: {
+	token: string;
+	conversationId: Id<"conversations">;
+	messages: ComponentProps<typeof ChatMessages>["messages"];
+}) {
+	const { followState, clearFollow } = useFollowStream({
+		conversationId,
+		token,
+		enabled: true,
+	});
+	const s = followState ?? EMPTY_STREAM_STATE;
+	return (
+		<div className="flex flex-1 flex-col overflow-hidden">
+			<ChatMessages
+				conversationId={conversationId}
+				messages={messages}
+				readOnly
+				shareToken={token}
+				streamingContent={s.content}
+				streamingReasoning={s.reasoning}
+				activeToolCalls={s.toolCalls}
+				streamParts={s.parts}
+				pendingDoneContent={s.pendingDoneContent}
+				streamUsage={s.usage}
+				streamModel={s.model}
+				agentStatus={s.agentStatus}
+				streamPlan={s.plan}
+				agentUsage={s.agentUsage}
+				isStreaming={followState != null}
+				displayMode="standard"
+				editingMessageId={null}
+				editingContent=""
+				allConversations={[]}
+				activeConversation={undefined}
+				scrollToMessageId={null}
+				onStreamSynced={clearFollow}
+				onRegenerate={noop}
+				onFork={noop}
+				onStartEditPrompt={noop}
+				onCancelEditPrompt={noop}
+				onSaveEditPrompt={noop}
+				onEditContentChange={noop}
+				onNavigateToConversation={noop}
+				onClearScrollTarget={noop}
+			/>
 		</div>
 	);
 }
@@ -291,8 +321,19 @@ function ShareEditorChat({
 		pendingQuestions,
 		answerQuestion,
 	} = useChatStreamContext();
-	const streamState = streamStates[convoId] ?? EMPTY_STREAM_STATE;
-	const isStreaming = streamingConvoIds.has(convoId);
+	const localStreamState = streamStates[convoId] ?? EMPTY_STREAM_STATE;
+	const isLocalStreaming = streamingConvoIds.has(convoId);
+	// When THIS tab isn't driving the turn (the owner or another collaborator
+	// is), follow the live token feed so it streams down here too.
+	const { followState, clearFollow } = useFollowStream({
+		conversationId: convoId,
+		token,
+		enabled: !isLocalStreaming,
+	});
+	const streamState = isLocalStreaming
+		? localStreamState
+		: (followState ?? EMPTY_STREAM_STATE);
+	const isStreaming = isLocalStreaming || followState != null;
 
 	const sendShared = useMutation({
 		mutationFn: useConvexMutation(api.shares.sendShared),
@@ -424,7 +465,9 @@ function ShareEditorChat({
 						allConversations={[]}
 						activeConversation={undefined}
 						scrollToMessageId={null}
-						onStreamSynced={() => clearStreamState(convoId)}
+						onStreamSynced={() =>
+							isLocalStreaming ? clearStreamState(convoId) : clearFollow()
+						}
 						onRegenerate={handleRegenerate}
 						onFork={handleForkAt}
 						onStartEditPrompt={noop}
@@ -491,7 +534,7 @@ function ShareEditorChat({
 								parts={streamState.parts}
 								streaming={isStreaming}
 							/>
-							{isStreaming ? (
+							{isLocalStreaming ? (
 								<Button
 									size="icon"
 									variant="outline"
@@ -504,7 +547,11 @@ function ShareEditorChat({
 								<Button
 									size="icon"
 									onClick={handleSend}
-									disabled={!input.trim() || sendShared.isPending}
+									// Disabled while a followed turn streams (someone else is
+									// driving) — can't send concurrently.
+									disabled={
+										!input.trim() || isStreaming || sendShared.isPending
+									}
 									title="Send"
 								>
 									<Send size={14} />
