@@ -182,3 +182,60 @@ async def record_usage(
             user_id,
             conversation_id,
         )
+
+
+async def record_agent_usage(
+    http_client: httpx.AsyncClient,
+    *,
+    user_id: str,
+    agent_credential_id: str,
+    agent: str,
+    conversation_id: str,
+    acp_session_id: str | None,
+    model: str | None,
+    used_tokens: int,
+    context_size: int | None,
+    cost: float,
+    currency: str,
+    turn_key: str,
+    rate_limit: object | None,
+) -> None:
+    """Record one ACP agent turn's usage, per credential.
+
+    Unlike `record_usage` (OpenRouter spend Harness pays for + caps), agent
+    cost bills to the user's OWN agent account — this is informational only and
+    never gates a turn. Idempotent on `turn_key` server-side. Fire-and-forget:
+    logs errors, never raises.
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        return
+    args: dict = {
+        "userId": user_id,
+        "agentCredentialId": agent_credential_id,
+        "agent": agent,
+        "conversationId": conversation_id,
+        "usedTokens": used_tokens,
+        "costUsd": cost,
+        "currency": currency,
+        "turnKey": turn_key,
+        "day": _current_day(),
+        "week": _current_week(),
+    }
+    if acp_session_id:
+        args["acpSessionId"] = acp_session_id
+    if model:
+        args["model"] = model
+    if context_size is not None:
+        args["contextSize"] = context_size
+    if rate_limit is not None:
+        args["rateLimit"] = rate_limit
+
+    # Imported here to avoid a module-load cycle (convex imports settings too).
+    from app.services.convex import run_convex_mutation
+
+    try:
+        await run_convex_mutation(http_client, "agentUsage:record", args)
+    except Exception:
+        logger.exception(
+            "Failed to record agent usage for credential '%s'", agent_credential_id
+        )

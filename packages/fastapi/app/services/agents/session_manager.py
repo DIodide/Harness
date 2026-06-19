@@ -194,6 +194,9 @@ class AgentSession:
     # lock, which only flip after the pre-turn awaits (ready_event, healthz)
     # — so _claim_parked can never steal a session whose turn is starting.
     turn_guard: int = 0
+    # Monotonic per-turn counter; combined with acp_session_id into the usage
+    # ledger's idempotency key so a usage_update can't be double-counted.
+    turn_index: int = 0
 
     @property
     def supports_prompt_queueing(self) -> bool:
@@ -802,6 +805,9 @@ class AgentSessionManager:
         self._parked: dict[tuple[str, str, str], ParkedRuntime] = {}
         self._reaper_task: asyncio.Task | None = None
         self._http: httpx.AsyncClient | None = None
+        # Fire-and-forget usage-recording tasks; held so they aren't GC'd
+        # mid-flight, discarded on completion.
+        self._usage_tasks: set[asyncio.Task] = set()
 
     @staticmethod
     def _runtime_key(
@@ -1368,14 +1374,27 @@ class AgentSessionManager:
                 servers,
                 session.relay_generation,
             )
-        # Opt claude-agent-acp into re-emitting Claude Agent SDK task-lifecycle
-        # messages (otherwise dropped), so Workflow/subagent activity becomes
-        # visible. Scoped to claude-code; other agents don't read this _meta.
+        # claude-agent-acp _meta.claudeCode: re-emit SDK task-lifecycle messages
+        # (otherwise dropped) so Workflow/subagent activity is visible, and
+        # forward the harness system prompt. Scoped to claude-code; other agents
+        # don't read this _meta.
         session_meta: dict | None = None
         if session.agent_id == "claude-code":
-            session_meta = {
-                "claudeCode": {"emitRawSDKMessages": SDK_TASK_MESSAGE_FILTERS}
-            }
+            claude_meta: dict = {"emitRawSDKMessages": SDK_TASK_MESSAGE_FILTERS}
+            # The harness system prompt was silently dropped on the ACP path.
+            # Forward it via _meta.claudeCode.options (merged into the SDK
+            # query() options by the adapter), APPENDing to Claude Code's preset
+            # so its built-in tool-use scaffolding survives — a bare string
+            # would replace it.
+            if session.harness.system_prompt:
+                claude_meta["options"] = {
+                    "systemPrompt": {
+                        "type": "preset",
+                        "preset": "claude_code",
+                        "append": session.harness.system_prompt,
+                    }
+                }
+            session_meta = {"claudeCode": claude_meta}
         result = await session.connection.new_session(
             cwd=(session.runtime.cwd if session.runtime else SANDBOX_WORKSPACE),
             mcp_servers=acp_servers,
@@ -1563,7 +1582,53 @@ class AgentSessionManager:
             session.available_commands = update.get("availableCommands") or []
         event = normalize_session_update(update)
         if event is not None:
+            # Persist per-credential agent usage on the terminal usage_update
+            # (the only one carrying cost). Informational only — never gates a
+            # turn — and fail-soft, so it can't disturb streaming.
+            if (
+                event["event"] == "agent_usage"
+                and event["data"].get("cost") is not None
+                and session.harness.agent_credential_id
+            ):
+                task = asyncio.create_task(
+                    self._record_agent_usage(session, event["data"], update)
+                )
+                self._usage_tasks.add(task)
+                task.add_done_callback(self._usage_tasks.discard)
             await session.event_queue.put(event)
+
+    async def _record_agent_usage(
+        self, session: AgentSession, data: dict, update: dict
+    ) -> None:
+        """Record one turn's agent usage to Convex (per-credential, fail-soft)."""
+        cred_id = session.harness.agent_credential_id
+        if not cred_id:
+            return
+        model: str | None = None
+        for opt in session.config_options:
+            if isinstance(opt, dict) and opt.get("id") == "model":
+                value = opt.get("currentValue")
+                model = value if isinstance(value, str) else None
+                break
+        # Authoritative-ish Anthropic per-account quota snapshot, if present.
+        rate_limit = (update.get("_meta") or {}).get("_claude/rateLimit")
+        from app.services.usage import record_agent_usage
+
+        await record_agent_usage(
+            self._http_client(),
+            user_id=session.user_id,
+            agent_credential_id=cred_id,
+            agent=session.agent_id,
+            conversation_id=session.conversation_id,
+            acp_session_id=session.acp_session_id,
+            model=model,
+            used_tokens=int(data.get("used") or 0),
+            context_size=data.get("size"),
+            cost=float(data.get("cost") or 0.0),
+            currency=data.get("currency") or "USD",
+            turn_key=f"{session.acp_session_id}:{session.turn_index}",
+            rate_limit=rate_limit,
+        )
 
     async def _handle_cursor_notification(
         self, session: AgentSession, method: str, params: dict
@@ -1838,6 +1903,7 @@ class AgentSessionManager:
         # stealing a session in that window tears down its connection
         # mid-request and hands its sandbox to another session.
         session.turn_guard += 1
+        session.turn_index += 1
         try:
             async for event in self._prompt_turn(session, message, history, blocks):
                 yield event

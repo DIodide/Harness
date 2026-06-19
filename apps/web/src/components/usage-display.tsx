@@ -123,6 +123,95 @@ function HarnessBreakdown({
 	);
 }
 
+const AGENT_LABELS: Record<string, string> = {
+	"claude-code": "Claude Code",
+	codex: "Codex",
+	cursor: "Cursor",
+};
+
+function formatCost(usd: number): string {
+	if (usd <= 0) return "$0.00";
+	if (usd < 0.01) return "<$0.01";
+	return `$${usd.toFixed(2)}`;
+}
+
+function formatTokens(n: number): string {
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+	return String(n);
+}
+
+interface AgentUsageRow {
+	credentialId: string;
+	agent: string;
+	label: string | null;
+	totalCostUsd: number;
+	totalTokens: number;
+	turns: number;
+	todayCostUsd: number;
+	lastModel: string | null;
+}
+
+/**
+ * Per-credential usage for ACP agents (Claude Code, etc.). Distinct from the
+ * OpenRouter budget bars above: this cost bills to the user's OWN agent
+ * account, so it's shown as plain informational totals (estimated, no cap).
+ */
+function AgentUsageSection() {
+	const { data } = useQuery(convexQuery(api.agentUsage.getMyAgentUsage, {}));
+	const rows = (data ?? []) as AgentUsageRow[];
+	if (rows.length === 0) return null;
+
+	return (
+		<div className="space-y-2 border-t border-white/10 pt-4">
+			<div className="flex items-baseline justify-between">
+				<h4 className="text-xs font-medium uppercase tracking-wider text-foreground/60">
+					Agent usage
+				</h4>
+				<span className="text-[10px] text-foreground/40">
+					estimated · your account
+				</span>
+			</div>
+			<div className="space-y-1.5">
+				{rows.map((r) => (
+					<div
+						key={r.credentialId}
+						className="flex items-center gap-2 rounded-md bg-white/[0.03] px-2.5 py-2"
+					>
+						<div className="min-w-0 flex-1">
+							<div className="flex items-center gap-1.5">
+								<span className="truncate text-[11px] text-foreground/80">
+									{r.label || AGENT_LABELS[r.agent] || r.agent}
+								</span>
+								{r.label && (
+									<span className="shrink-0 rounded bg-white/10 px-1 text-[9px] text-foreground/50">
+										{AGENT_LABELS[r.agent] || r.agent}
+									</span>
+								)}
+							</div>
+							<div className="mt-0.5 text-[10px] text-foreground/40">
+								{formatTokens(r.totalTokens)} tokens · {r.turns} turn
+								{r.turns === 1 ? "" : "s"}
+								{r.lastModel ? ` · ${r.lastModel}` : ""}
+							</div>
+						</div>
+						<div className="shrink-0 text-right">
+							<div className="text-xs font-medium tabular-nums text-foreground/80">
+								{formatCost(r.totalCostUsd)}
+							</div>
+							{r.todayCostUsd > 0 && (
+								<div className="text-[10px] text-foreground/40">
+									{formatCost(r.todayCostUsd)} today
+								</div>
+							)}
+						</div>
+					</div>
+				))}
+			</div>
+		</div>
+	);
+}
+
 export function formatResetTime(isoString: string): string {
 	const reset = new Date(isoString);
 	const now = new Date();
@@ -188,6 +277,7 @@ export function UsageDisplay() {
 
 			<ModelBreakdown items={usage.perModelPct} />
 			<HarnessBreakdown items={usage.perHarnessPct} />
+			<AgentUsageSection />
 		</div>
 	);
 }
