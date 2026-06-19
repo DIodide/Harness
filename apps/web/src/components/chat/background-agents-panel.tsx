@@ -1,5 +1,4 @@
-import { Bot, Check, CircleX, Loader2, X } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
+import { Bot, Check, CircleX, Loader2 } from "lucide-react";
 import type { StreamPart } from "../../lib/use-chat-stream";
 import { AgentToolCallBlock, KIND_LABELS, kindIcon } from "../agent-tool-call";
 
@@ -144,20 +143,16 @@ function TaskRow({
 }
 
 /**
- * A docked panel that slides up from above the composer to show every
- * background agent task (subagents, workflows, long-running commands) for the
- * active turn, with live statuses and expandable detail.
+ * Background-agents content for the right sandbox panel's "Agents" tab —
+ * every background task (subagents, workflows, long-running commands) for the
+ * active turn, with live statuses and expandable detail. Fills its container.
  */
-export function BackgroundAgentsPanel({
-	open,
+export function BackgroundAgentsContent({
 	parts,
 	isStreaming,
-	onClose,
 }: {
-	open: boolean;
 	parts: StreamPart[];
 	isStreaming: boolean;
-	onClose: () => void;
 }) {
 	const tasks = organizeTasks(parts);
 	const running = tasks.filter(
@@ -169,59 +164,41 @@ export function BackgroundAgentsPanel({
 	const done = tasks.length - running - failed;
 
 	return (
-		<AnimatePresence>
-			{open && (
-				<motion.div
-					initial={{ height: 0, opacity: 0 }}
-					animate={{ height: "auto", opacity: 1 }}
-					exit={{ height: 0, opacity: 0 }}
-					transition={{ duration: 0.2 }}
-					className="overflow-hidden"
-				>
-					<div className="mx-auto mb-2 max-w-3xl overflow-hidden rounded-lg border border-border bg-muted/20">
-						<div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
-							<Bot size={13} className="text-muted-foreground" />
-							<span className="text-xs font-medium">Background agents</span>
-							<div className="ml-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-								{running > 0 && (
-									<span className="flex items-center gap-1">
-										<Loader2 size={9} className="animate-spin" />
-										{running} running
-									</span>
-								)}
-								{done > 0 && <span>{done} done</span>}
-								{failed > 0 && (
-									<span className="text-destructive">{failed} failed</span>
-								)}
-							</div>
-							<button
-								type="button"
-								onClick={onClose}
-								aria-label="Close background agents panel"
-								className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
-							>
-								<X size={13} />
-							</button>
-						</div>
-						<div className="max-h-[40vh] space-y-1.5 overflow-y-auto p-2.5">
-							{tasks.length === 0 ? (
-								<p className="px-1 py-6 text-center text-[11px] text-muted-foreground">
-									No background agents yet. Subagents, workflows, and
-									long-running commands appear here while the agent works.
-								</p>
-							) : (
-								tasks.map((task, idx) => (
-									<TaskRow
-										key={task.call_id ?? `task-${idx}`}
-										task={task}
-										isStreaming={isStreaming}
-									/>
-								))
-							)}
-						</div>
-					</div>
-				</motion.div>
-			)}
-		</AnimatePresence>
+		<div className="flex min-h-0 flex-1 flex-col">
+			<div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border px-2.5">
+				<Bot size={12} strokeWidth={1.5} className="text-muted-foreground/70" />
+				<span className="font-mono text-[10.5px] text-muted-foreground">
+					Background agents
+				</span>
+				<div className="ml-auto flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
+					{running > 0 && (
+						<span className="flex items-center gap-1">
+							<Loader2 size={9} className="animate-spin" />
+							{running} running
+						</span>
+					)}
+					{done > 0 && <span>{done} done</span>}
+					{failed > 0 && (
+						<span className="text-destructive">{failed} failed</span>
+					)}
+				</div>
+			</div>
+			<div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2.5">
+				{tasks.length === 0 ? (
+					<p className="px-1 py-8 text-center text-[11px] text-muted-foreground">
+						No background agents yet. Subagents, workflows, and long-running
+						commands appear here while the agent works.
+					</p>
+				) : (
+					tasks.map((task, idx) => (
+						<TaskRow
+							key={task.call_id ?? `task-${idx}`}
+							task={task}
+							isStreaming={isStreaming}
+						/>
+					))
+				)}
+			</div>
+		</div>
 	);
 }

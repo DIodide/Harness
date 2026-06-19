@@ -54,6 +54,7 @@ import {
 	modelSupportsMedia,
 } from "../../lib/models";
 import { buildMultimodalContent } from "../../lib/multimodal";
+import { useSandboxPanel } from "../../lib/sandbox-panel-context";
 import type { SkillEntry } from "../../lib/skills";
 import { useAgentCatalog } from "../../lib/use-agent-catalog";
 import { useAgentSessionConfig } from "../../lib/use-agent-session-config";
@@ -119,8 +120,6 @@ export function ChatInput({
 	pendingPrompt,
 	onPendingPromptConsumed,
 	budgetExceeded,
-	agentsPanelOpen = false,
-	onToggleAgentsPanel,
 	agentActivityCount = 0,
 	disabled = false,
 	placeholder = "Send a message...",
@@ -208,8 +207,6 @@ export function ChatInput({
 	onSessionModelChange: (model: string | null) => void;
 	onPendingPromptConsumed?: () => void;
 	budgetExceeded?: boolean;
-	agentsPanelOpen?: boolean;
-	onToggleAgentsPanel?: () => void;
 	agentActivityCount?: number;
 	disabled?: boolean;
 	placeholder?: string;
@@ -217,6 +214,15 @@ export function ChatInput({
 	const [text, setText] = useState("");
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
+	// The Agents composer button drives the right sandbox panel's Agents tab.
+	const sandboxPanel = useSandboxPanel();
+	const agentsTabOpen =
+		sandboxPanel?.panelOpen === true && sandboxPanel.activeTab === "agents";
+	const toggleAgentsTab = useCallback(() => {
+		if (!sandboxPanel) return;
+		if (agentsTabOpen) sandboxPanel.togglePanel();
+		else sandboxPanel.openAgentsTab();
+	}, [sandboxPanel, agentsTabOpen]);
 	// Synchronous guard against double-dispatch (rapid Enter): set at the top
 	// of a send, cleared once the send is dispatched/decided.
 	const sendInFlightRef = useRef(false);
@@ -1085,39 +1091,37 @@ export function ChatInput({
 										</DropdownMenu>
 									);
 								})}
-						{/* Background agents panel toggle — view live subagent /
-						    workflow / command activity for this turn. Only where the
-						    host route wired the panel (avoids a dead control). */}
-						{activeHarness &&
-							agentMode !== "default" &&
-							onToggleAgentsPanel && (
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<button
-											type="button"
-											onClick={() => onToggleAgentsPanel()}
-											className={cn(
-												"flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors hover:bg-foreground/10 hover:text-foreground",
-												agentsPanelOpen
-													? "text-foreground"
-													: "text-muted-foreground",
-											)}
-										>
-											<Layers size={12} className="shrink-0" />
-											<span>Agents</span>
-											{agentActivityCount > 0 && (
-												<span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-semibold text-primary-foreground tabular-nums">
-													{agentActivityCount}
-												</span>
-											)}
-										</button>
-									</TooltipTrigger>
-									<TooltipContent>
-										Background agents — live subagent, workflow &amp; command
-										activity
-									</TooltipContent>
-								</Tooltip>
-							)}
+						{/* Background agents panel toggle — opens the right panel's
+						    Agents tab to view live subagent / workflow / command
+						    activity. Only when the panel context is mounted. */}
+						{activeHarness && agentMode !== "default" && sandboxPanel && (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<button
+										type="button"
+										onClick={toggleAgentsTab}
+										className={cn(
+											"flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors hover:bg-foreground/10 hover:text-foreground",
+											agentsTabOpen
+												? "text-foreground"
+												: "text-muted-foreground",
+										)}
+									>
+										<Layers size={12} className="shrink-0" />
+										<span>Agents</span>
+										{agentActivityCount > 0 && (
+											<span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-semibold text-primary-foreground tabular-nums">
+												{agentActivityCount}
+											</span>
+										)}
+									</button>
+								</TooltipTrigger>
+								<TooltipContent>
+									Background agents — live subagent, workflow &amp; command
+									activity
+								</TooltipContent>
+							</Tooltip>
+						)}
 						{activeHarness && agentMode === "default" && (
 							<DropdownMenu>
 								<Tooltip>
