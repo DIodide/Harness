@@ -177,6 +177,17 @@ export const remove = mutation({
 				await ctx.db.patch(harness._id, { agentCredentialId: undefined });
 			}
 		}
+		// Cascade-delete this credential's usage ledger so it doesn't dangle as
+		// orphaned-but-summed rows (agentUsage totals are summed from the ledger).
+		const usage = await ctx.db
+			.query("agentUsageLedger")
+			.withIndex("by_credential", (q) =>
+				q.eq("agentCredentialId", args.credentialId),
+			)
+			.collect();
+		for (const row of usage) {
+			await ctx.db.delete(row._id);
+		}
 		await ctx.db.delete(args.credentialId);
 		return { removed: true };
 	},
