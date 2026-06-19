@@ -1,12 +1,14 @@
-import { useAuth } from "@clerk/tanstack-react-start";
+import { useAuth, useUser } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { GitFork, Loader2, Lock } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { GitFork, Loader2, Lock, Send, Square } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
+import { AgentPermissionCard } from "../../components/agent-permission-card";
+import { AgentQuestionCard } from "../../components/agent-question-card";
 import { ChatMessages } from "../../components/chat/chat-messages";
 import {
 	Avatar,
@@ -14,6 +16,10 @@ import {
 	AvatarImage,
 } from "../../components/ui/avatar";
 import { Button } from "../../components/ui/button";
+import {
+	EMPTY_STREAM_STATE,
+	useChatStreamContext,
+} from "../../lib/chat-stream-context";
 import {
 	clearForkIntent,
 	peekForkIntent,
@@ -26,6 +32,22 @@ export const Route = createFileRoute("/share/$token")({
 });
 
 const noop = () => {};
+
+type ShareHeader = {
+	conversationId: string;
+	title: string;
+	role: "viewer" | "editor";
+	viewerIsOwner: boolean;
+	ownerName: string | null;
+	ownerImageUrl: string | null;
+	agent: string | null;
+};
+
+type SharedMessage = {
+	_id: Id<"messages">;
+	role: "user" | "assistant";
+	content: string;
+};
 
 function SharedChatPage() {
 	const { token } = Route.useParams();
@@ -130,6 +152,10 @@ function SharedChatPage() {
 		);
 	}
 
+	// A signed-in holder of an active editor link collaborates; everyone else
+	// (anonymous, or a viewer grant) gets the read-only transcript.
+	const isEditor = Boolean(isSignedIn) && header.role === "editor";
+
 	return (
 		<div className="flex h-screen flex-col overflow-hidden bg-background">
 			<header className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
@@ -156,7 +182,7 @@ function SharedChatPage() {
 						</span>
 					)}
 					<span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-						view only
+						{isEditor ? "can edit" : "view only"}
 					</span>
 				</div>
 				<Button
@@ -171,39 +197,268 @@ function SharedChatPage() {
 				</Button>
 			</header>
 
-			<div className="flex flex-1 flex-col overflow-hidden">
-				<ChatMessages
-					conversationId={header.conversationId as Id<"conversations">}
-					messages={messages ?? []}
-					readOnly
-					shareToken={token}
-					streamingContent={null}
-					streamingReasoning={null}
-					activeToolCalls={[]}
-					streamParts={[]}
-					pendingDoneContent={null}
-					streamUsage={null}
-					streamModel={null}
-					agentStatus={null}
-					streamPlan={null}
-					agentUsage={null}
-					isStreaming={false}
-					displayMode="standard"
-					editingMessageId={null}
-					editingContent=""
-					allConversations={[]}
-					activeConversation={undefined}
-					scrollToMessageId={null}
-					onStreamSynced={noop}
-					onRegenerate={noop}
-					onFork={noop}
-					onStartEditPrompt={noop}
-					onCancelEditPrompt={noop}
-					onSaveEditPrompt={noop}
-					onEditContentChange={noop}
-					onNavigateToConversation={noop}
-					onClearScrollTarget={noop}
+			{isEditor ? (
+				<ShareEditorChat
+					token={token}
+					header={header as ShareHeader}
+					messages={(messages ?? []) as SharedMessage[]}
 				/>
+			) : (
+				<div className="flex flex-1 flex-col overflow-hidden">
+					<ChatMessages
+						conversationId={header.conversationId as Id<"conversations">}
+						messages={messages ?? []}
+						readOnly
+						shareToken={token}
+						streamingContent={null}
+						streamingReasoning={null}
+						activeToolCalls={[]}
+						streamParts={[]}
+						pendingDoneContent={null}
+						streamUsage={null}
+						streamModel={null}
+						agentStatus={null}
+						streamPlan={null}
+						agentUsage={null}
+						isStreaming={false}
+						displayMode="standard"
+						editingMessageId={null}
+						editingContent=""
+						allConversations={[]}
+						activeConversation={undefined}
+						scrollToMessageId={null}
+						onStreamSynced={noop}
+						onRegenerate={noop}
+						onFork={noop}
+						onStartEditPrompt={noop}
+						onCancelEditPrompt={noop}
+						onSaveEditPrompt={noop}
+						onEditContentChange={noop}
+						onNavigateToConversation={noop}
+						onClearScrollTarget={noop}
+					/>
+				</div>
+			)}
+		</div>
+	);
+}
+
+/**
+ * The collaborator (editor-grant) experience: the live transcript + a composer
+ * that sends into the OWNER's conversation. The assistant turn runs server-side
+ * on the owner's harness, billed to the owner — the browser only ever sends
+ * {conversation_id, token, message}. Reuses the root ChatStreamProvider so
+ * streaming, agent permission/question prompts, and state handling are shared
+ * with the owner's own chat.
+ */
+function ShareEditorChat({
+	token,
+	header,
+	messages,
+}: {
+	token: string;
+	header: ShareHeader;
+	messages: SharedMessage[];
+}) {
+	const navigate = useNavigate();
+	const { user } = useUser();
+	const convoId = header.conversationId;
+	// Omit the agent field for the default OpenRouter loop; pass it through for
+	// ACP agents so the stream routes to the agent gateway.
+	const agent =
+		header.agent && header.agent !== "default" ? header.agent : undefined;
+
+	const {
+		stream,
+		cancel,
+		streamStates,
+		clearStreamState,
+		streamingConvoIds,
+		pendingPermissions,
+		answerPermission,
+		pendingQuestions,
+		answerQuestion,
+	} = useChatStreamContext();
+	const streamState = streamStates[convoId] ?? EMPTY_STREAM_STATE;
+	const isStreaming = streamingConvoIds.has(convoId);
+
+	const sendShared = useMutation({
+		mutationFn: useConvexMutation(api.shares.sendShared),
+	});
+	const truncateFrom = useMutation({
+		mutationFn: useConvexMutation(api.messages.removeFrom),
+	});
+	const forkShared = useMutation({
+		mutationFn: useConvexMutation(api.shares.forkSharedConversation),
+	});
+
+	const [input, setInput] = useState("");
+
+	// Name + avatar snapshot for attribution (never email).
+	const authorSnapshot = () => ({
+		authorName: user?.fullName ?? user?.firstName ?? undefined,
+		authorImageUrl: user?.imageUrl ?? undefined,
+	});
+
+	const runTurn = (history: Array<{ role: string; content: string }>) => {
+		stream({
+			messages: history,
+			conversation_id: convoId,
+			token,
+			...(agent ? { agent: agent as never } : {}),
+		});
+	};
+
+	const handleSend = async () => {
+		const content = input.trim();
+		if (!content || isStreaming) return;
+		setInput("");
+		try {
+			await sendShared.mutateAsync({
+				token,
+				conversationId: convoId as Id<"conversations">,
+				content,
+				...authorSnapshot(),
+			});
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : "Couldn't send message");
+			setInput(content);
+			return;
+		}
+		const history = [
+			...messages.map((m) => ({ role: m.role, content: m.content })),
+			{ role: "user", content },
+		];
+		runTurn(history);
+	};
+
+	const handleRegenerate = async (
+		messageId: Id<"messages">,
+		history: Array<{ role: string; content: string }>,
+	) => {
+		if (isStreaming || streamState.pendingDoneContent != null) return;
+		try {
+			await truncateFrom.mutateAsync({ id: messageId, token });
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : "Couldn't regenerate");
+			return;
+		}
+		runTurn(history);
+	};
+
+	const handleForkAt = (messageId: Id<"messages">) => {
+		forkShared.mutate(
+			{ token, upToMessageId: messageId },
+			{
+				onSuccess: (newConvoId) => {
+					toast.success("Forked to your account");
+					navigate({ to: "/chat", search: { convoId: newConvoId as string } });
+				},
+				onError: (e) =>
+					toast.error(e instanceof Error ? e.message : "Couldn't fork"),
+			},
+		);
+	};
+
+	const pendingPermission = pendingPermissions[convoId]?.[0];
+	const pendingQuestion = pendingQuestions[convoId]?.[0];
+
+	return (
+		<div className="flex flex-1 flex-col overflow-hidden">
+			<ChatMessages
+				conversationId={convoId as Id<"conversations">}
+				messages={messages}
+				shareToken={token}
+				streamingContent={streamState.content}
+				streamingReasoning={streamState.reasoning}
+				activeToolCalls={streamState.toolCalls}
+				streamParts={streamState.parts}
+				pendingDoneContent={streamState.pendingDoneContent}
+				streamUsage={streamState.usage}
+				streamModel={streamState.model}
+				agentStatus={streamState.agentStatus}
+				streamPlan={streamState.plan}
+				agentUsage={streamState.agentUsage}
+				isStreaming={isStreaming}
+				displayMode="standard"
+				editingMessageId={null}
+				editingContent=""
+				allConversations={[]}
+				activeConversation={undefined}
+				scrollToMessageId={null}
+				onStreamSynced={() => clearStreamState(convoId)}
+				onRegenerate={handleRegenerate}
+				onFork={handleForkAt}
+				onStartEditPrompt={noop}
+				onCancelEditPrompt={noop}
+				onSaveEditPrompt={noop}
+				onEditContentChange={noop}
+				onNavigateToConversation={noop}
+				onClearScrollTarget={noop}
+			/>
+
+			<div className="border-t border-border p-3">
+				{/* ACP agent question (AskUserQuestion) — blocks until answered. */}
+				{pendingQuestion && (
+					<div className="mb-2">
+						<AgentQuestionCard
+							key={pendingQuestion.request.request_id}
+							request={pendingQuestion.request}
+							onAnswer={(action, content) =>
+								answerQuestion(convoId, action, content)
+							}
+						/>
+					</div>
+				)}
+				{/* ACP agent approval — blocks the turn until answered. */}
+				{pendingPermission && (
+					<div className="mb-2">
+						<AgentPermissionCard
+							key={pendingPermission.request.request_id}
+							request={pendingPermission.request}
+							onAnswer={(optionId) => answerPermission(convoId, optionId)}
+						/>
+					</div>
+				)}
+				<div className="flex items-end gap-2">
+					<textarea
+						value={input}
+						onChange={(e) => setInput(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter" && !e.shiftKey) {
+								e.preventDefault();
+								handleSend();
+							}
+						}}
+						rows={1}
+						placeholder="Message this shared chat…"
+						className="max-h-40 min-h-[40px] flex-1 resize-none rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-foreground/30"
+					/>
+					{isStreaming ? (
+						<Button
+							size="icon"
+							variant="outline"
+							onClick={() => cancel(convoId)}
+							title="Stop"
+						>
+							<Square size={14} />
+						</Button>
+					) : (
+						<Button
+							size="icon"
+							onClick={handleSend}
+							disabled={!input.trim() || sendShared.isPending}
+							title="Send"
+						>
+							<Send size={14} />
+						</Button>
+					)}
+				</div>
+				<p className="mt-1.5 px-0.5 text-[10px] text-muted-foreground">
+					Replies run on{" "}
+					{header.ownerName ? `${header.ownerName}’s` : "the owner’s"} harness
+					and are billed to them.
+				</p>
 			</div>
 		</div>
 	);
