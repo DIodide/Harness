@@ -269,6 +269,33 @@ async def resolve_collab_harness(
     return await query_convex(http_client, "harnesses:resolveForCollab", args)
 
 
+async def verify_sandbox_read_access(
+    http_client: httpx.AsyncClient,
+    conversation_id: str,
+    sandbox_id: str,
+    user_id: str,
+    token: str | None,
+) -> bool:
+    """Allow READ-ONLY sandbox access for an editor-grant collaborator on
+    `conversation_id` whose owner's harness is bound to `sandbox_id`.
+
+    Fails CLOSED. The sandbox id is BOUND to the conversation: a collaborator
+    can only read the sandbox their conversation's owner actually uses — never
+    an arbitrary sandbox id they name. resolve_collab_harness returns None for
+    viewer/none (so this grants editors only) and resolves the OWNER's sandbox
+    id server-side.
+    """
+    if not conversation_id:
+        return False
+    resolved = await resolve_collab_harness(
+        http_client, conversation_id, user_id, token
+    )
+    if not resolved:
+        return False
+    owner_sandbox = resolved.get("sandboxId")
+    return bool(owner_sandbox) and owner_sandbox == sandbox_id
+
+
 async def verify_sandbox_owner(
     daytona_sandbox_id: str,
     user_id: str,

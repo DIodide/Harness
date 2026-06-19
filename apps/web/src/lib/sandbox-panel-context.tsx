@@ -30,6 +30,13 @@ interface SandboxPanelState {
 	agentParts: StreamPart[];
 	/** Whether the active conversation is streaming (Agents tab statuses). */
 	agentIsStreaming: boolean;
+	/** Read-only mode (an editor-grant collaborator viewing the OWNER's sandbox):
+	 *  hide every mutating surface (terminal, git, write/delete/rename). */
+	readOnly: boolean;
+	/** Conversation + share token, so read API calls authorize via the editor
+	 *  grant instead of sandbox ownership (collaborators aren't the owner). */
+	conversationId: string | null;
+	shareToken: string | null;
 
 	togglePanel: () => void;
 	setActiveTab: (tab: SandboxTab) => void;
@@ -47,11 +54,17 @@ export function SandboxPanelProvider({
 	sandboxId,
 	agentParts = [],
 	agentIsStreaming = false,
+	readOnly = false,
+	conversationId = null,
+	shareToken = null,
 	children,
 }: {
 	sandboxId: string | null;
 	agentParts?: StreamPart[];
 	agentIsStreaming?: boolean;
+	readOnly?: boolean;
+	conversationId?: string | null;
+	shareToken?: string | null;
 	children: React.ReactNode;
 }) {
 	const [panelOpen, setPanelOpen] = useState(false);
@@ -116,6 +129,9 @@ export function SandboxPanelProvider({
 			currentDir,
 			agentParts,
 			agentIsStreaming,
+			readOnly,
+			conversationId,
+			shareToken,
 			togglePanel,
 			setActiveTab,
 			openAgentsTab,
@@ -134,6 +150,9 @@ export function SandboxPanelProvider({
 			currentDir,
 			agentParts,
 			agentIsStreaming,
+			readOnly,
+			conversationId,
+			shareToken,
 			togglePanel,
 			openAgentsTab,
 			openFile,

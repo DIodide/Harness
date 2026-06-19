@@ -175,6 +175,11 @@ class AgentPromptRequest(BaseModel):
     # Extra ACP content blocks for this message — image attachments as
     # {type: "image", data: <base64>, mimeType: "image/..."}.
     blocks: list[dict] | None = None
+    # Per-turn reasoning-effort override (used by editor collaborators, who
+    # can't persist the owner's sticky session config). Applied for THIS turn
+    # only and restored after. The agent rejects unknown values.
+    effort_config_id: str | None = None
+    effort_value: str | None = None
 
 
 class AgentQueuePromptRequest(BaseModel):

@@ -14,6 +14,7 @@ from app.services.convex import (
     save_assistant_message,
     verify_conversation_access,
     verify_sandbox_owner,
+    verify_sandbox_read_access,
 )
 
 CONVEX_URL = "https://test.convex.cloud"
@@ -277,6 +278,46 @@ class TestResolveCollabHarness:
         )
         async with httpx.AsyncClient() as client:
             assert await resolve_collab_harness(client, "c1", "u-collab", "shr_x") is None
+
+
+class TestVerifySandboxReadAccess:
+    @respx.mock
+    async def test_grants_when_owner_sandbox_matches(self, convex_settings):
+        respx.post(f"{CONVEX_URL}/api/query").mock(
+            return_value=httpx.Response(
+                200, json={"value": {"ownerUserId": "o", "sandboxId": "dsbx_1"}}
+            )
+        )
+        async with httpx.AsyncClient() as client:
+            ok = await verify_sandbox_read_access(client, "c1", "dsbx_1", "u-collab", "tok")
+        assert ok is True
+
+    @respx.mock
+    async def test_denies_when_sandbox_id_mismatch(self, convex_settings):
+        # Collaborator names a different sandbox than the conversation's owner uses.
+        respx.post(f"{CONVEX_URL}/api/query").mock(
+            return_value=httpx.Response(
+                200, json={"value": {"ownerUserId": "o", "sandboxId": "dsbx_OWNED"}}
+            )
+        )
+        async with httpx.AsyncClient() as client:
+            ok = await verify_sandbox_read_access(client, "c1", "dsbx_OTHER", "u-collab", "tok")
+        assert ok is False
+
+    @respx.mock
+    async def test_denies_when_not_authorized(self, convex_settings):
+        # resolveForCollab returns null for viewer/none/owner-without-harness.
+        respx.post(f"{CONVEX_URL}/api/query").mock(
+            return_value=httpx.Response(200, json={"value": None})
+        )
+        async with httpx.AsyncClient() as client:
+            ok = await verify_sandbox_read_access(client, "c1", "dsbx_1", "u-collab", "tok")
+        assert ok is False
+
+    async def test_denies_without_conversation(self, convex_settings):
+        async with httpx.AsyncClient() as client:
+            ok = await verify_sandbox_read_access(client, "", "dsbx_1", "u-collab", "tok")
+        assert ok is False
 
 
 class TestSaveAssistantMessageRequester:

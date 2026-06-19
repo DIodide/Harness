@@ -110,10 +110,15 @@ export function SandboxPanel() {
 		sandboxId,
 		agentParts,
 		agentIsStreaming,
+		readOnly,
 	} = panel;
 	// File/Terminal/Git tabs need an attached sandbox; the Agents tab is always
-	// available (agent mode can run without a harness sandbox).
-	const tabs = sandboxId ? [...SANDBOX_TABS, AGENTS_TAB] : [AGENTS_TAB];
+	// available (agent mode can run without a harness sandbox). A read-only
+	// collaborator gets Files only — Terminal and Git are execution/mutation.
+	const sandboxTabs = readOnly
+		? SANDBOX_TABS.filter((t) => t.id === "files")
+		: SANDBOX_TABS;
+	const tabs = sandboxId ? [...sandboxTabs, AGENTS_TAB] : [AGENTS_TAB];
 	const effectiveTab = tabs.some((t) => t.id === activeTab)
 		? activeTab
 		: AGENTS_TAB.id;
@@ -291,8 +296,11 @@ export function SandboxPanel() {
 					</AnimatePresence>
 				)}
 
-				{/* Terminal — always mounted, hidden via CSS to preserve state */}
-				{sandboxId && (
+				{/* Terminal — always mounted, hidden via CSS to preserve state.
+				    Never mount it for a read-only collaborator: WebTerminal
+				    auto-connects on mount, which would open rejected WS connects
+				    to the owner's sandbox terminal. */}
+				{sandboxId && !readOnly && (
 					<div
 						className={cn(
 							"flex flex-1 flex-col overflow-hidden",

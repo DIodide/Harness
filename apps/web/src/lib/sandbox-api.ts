@@ -102,7 +102,23 @@ async function sandboxFetch<T>(
 	}
 }
 
-export function createSandboxApi(getToken: () => Promise<string | null>) {
+export function createSandboxApi(
+	getToken: () => Promise<string | null>,
+	// When set, READ calls authorize via the conversation's editor grant
+	// (collaborators aren't the sandbox owner): `?conversationId=` selects the
+	// conversation and `X-Share-Token` carries the link secret (header, not URL).
+	collab?: { conversationId?: string | null; shareToken?: string | null },
+) {
+	const convId = collab?.conversationId ?? null;
+	const shareToken = collab?.shareToken ?? null;
+	const scope = (path: string): string => {
+		if (!convId) return path;
+		const sep = path.includes("?") ? "&" : "?";
+		return `${path}${sep}conversationId=${encodeURIComponent(convId)}`;
+	};
+	const shareHeaders: Record<string, string> = shareToken
+		? { "X-Share-Token": shareToken }
+		: {};
 	return {
 		createSandbox(request: CreateSandboxRequest) {
 			return sandboxFetch<CreateSandboxResponse>("/api/sandbox", getToken, {
@@ -136,15 +152,21 @@ export function createSandboxApi(getToken: () => Promise<string | null>) {
 
 		listFiles(sandboxId: string, path = "/home/daytona") {
 			return sandboxFetch<ListFilesResponse>(
-				`/api/sandbox/${sandboxId}/files?path=${encodeURIComponent(path)}`,
+				scope(
+					`/api/sandbox/${sandboxId}/files?path=${encodeURIComponent(path)}`,
+				),
 				getToken,
+				{ headers: shareHeaders },
 			);
 		},
 
 		readFile(sandboxId: string, path: string) {
 			return sandboxFetch<ReadFileResponse>(
-				`/api/sandbox/${sandboxId}/files/read?path=${encodeURIComponent(path)}`,
+				scope(
+					`/api/sandbox/${sandboxId}/files/read?path=${encodeURIComponent(path)}`,
+				),
 				getToken,
+				{ headers: shareHeaders },
 			);
 		},
 
@@ -211,17 +233,25 @@ export function createSandboxApi(getToken: () => Promise<string | null>) {
 
 		searchFiles(sandboxId: string, pattern: string, path = "/home/daytona") {
 			return sandboxFetch<SearchResponse>(
-				`/api/sandbox/${sandboxId}/files/search?path=${encodeURIComponent(path)}&pattern=${encodeURIComponent(pattern)}`,
+				scope(
+					`/api/sandbox/${sandboxId}/files/search?path=${encodeURIComponent(path)}&pattern=${encodeURIComponent(pattern)}`,
+				),
 				getToken,
+				{ headers: shareHeaders },
 			);
 		},
 
 		async downloadUrl(sandboxId: string, path: string): Promise<string> {
 			const token = await getToken();
 			const res = await fetch(
-				`${API_URL}/api/sandbox/${sandboxId}/files/download?path=${encodeURIComponent(path)}`,
+				`${API_URL}${scope(
+					`/api/sandbox/${sandboxId}/files/download?path=${encodeURIComponent(path)}`,
+				)}`,
 				{
-					headers: token ? { Authorization: `Bearer ${token}` } : {},
+					headers: {
+						...(token ? { Authorization: `Bearer ${token}` } : {}),
+						...shareHeaders,
+					},
 				},
 			);
 			if (!res.ok) {
@@ -235,8 +265,11 @@ export function createSandboxApi(getToken: () => Promise<string | null>) {
 
 		gitStatus(sandboxId: string, path = "/home/daytona") {
 			return sandboxFetch<GitStatusResponse>(
-				`/api/sandbox/${sandboxId}/git/status?path=${encodeURIComponent(path)}`,
+				scope(
+					`/api/sandbox/${sandboxId}/git/status?path=${encodeURIComponent(path)}`,
+				),
 				getToken,
+				{ headers: shareHeaders },
 			);
 		},
 
@@ -264,22 +297,31 @@ export function createSandboxApi(getToken: () => Promise<string | null>) {
 
 		gitDiff(sandboxId: string, path: string, staged = false) {
 			return sandboxFetch<{ diff: string }>(
-				`/api/sandbox/${sandboxId}/git/diff?path=${encodeURIComponent(path)}&staged=${staged}`,
+				scope(
+					`/api/sandbox/${sandboxId}/git/diff?path=${encodeURIComponent(path)}&staged=${staged}`,
+				),
 				getToken,
+				{ headers: shareHeaders },
 			);
 		},
 
 		gitLog(sandboxId: string, path: string, count = 20) {
 			return sandboxFetch<{ commits: GitCommit[] }>(
-				`/api/sandbox/${sandboxId}/git/log?path=${encodeURIComponent(path)}&count=${count}`,
+				scope(
+					`/api/sandbox/${sandboxId}/git/log?path=${encodeURIComponent(path)}&count=${count}`,
+				),
 				getToken,
+				{ headers: shareHeaders },
 			);
 		},
 
 		gitBranches(sandboxId: string, path: string) {
 			return sandboxFetch<{ branches: string[] }>(
-				`/api/sandbox/${sandboxId}/git/branches?path=${encodeURIComponent(path)}`,
+				scope(
+					`/api/sandbox/${sandboxId}/git/branches?path=${encodeURIComponent(path)}`,
+				),
 				getToken,
+				{ headers: shareHeaders },
 			);
 		},
 	};

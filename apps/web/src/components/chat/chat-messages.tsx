@@ -1,4 +1,5 @@
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
+import { useNavigate } from "@tanstack/react-router";
 import { ChevronDown, ChevronRight, Sparkles } from "lucide-react";
 import { motion } from "motion/react";
 import React, {
@@ -258,6 +259,7 @@ export function ChatMessages({
 	activeConversation,
 	forkedFromConversationId,
 	forkedFromConversationTitle,
+	forkedFromShareToken,
 	forkedAtMessageCount,
 	onNavigateToConversation,
 	isStreaming,
@@ -344,6 +346,7 @@ export function ChatMessages({
 		| undefined;
 	forkedFromConversationId?: Id<"conversations">;
 	forkedFromConversationTitle?: string;
+	forkedFromShareToken?: string;
 	forkedAtMessageCount?: number;
 	onNavigateToConversation: (convoId: Id<"conversations"> | null) => void;
 	isStreaming: boolean;
@@ -355,6 +358,7 @@ export function ChatMessages({
 	/** Shared view: resolve attachment URLs through the token-scoped query. */
 	shareToken?: string;
 }) {
+	const navigate = useNavigate();
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null);
 	// "Pinned to bottom" — when true, auto-scroll follows new content.
@@ -930,11 +934,23 @@ export function ChatMessages({
 											Branched from{" "}
 											<button
 												type="button"
-												onClick={() =>
-													onNavigateToConversation(
-														forkedFromConversationId ?? null,
-													)
-												}
+												onClick={() => {
+													// A fork can ONLY come from a share link, so the
+													// forker never owns the original — route them back to
+													// the shared page, not an empty owner-gated /chat. (A
+													// since-revoked link lands on the neutral "not
+													// available" page, which is the correct UX.)
+													if (forkedFromShareToken) {
+														navigate({
+															to: "/share/$token",
+															params: { token: forkedFromShareToken },
+														});
+													} else {
+														onNavigateToConversation(
+															forkedFromConversationId ?? null,
+														);
+													}
+												}}
 												className="font-medium text-foreground underline underline-offset-2 hover:text-foreground/80"
 											>
 												{forkedFromConversationTitle}

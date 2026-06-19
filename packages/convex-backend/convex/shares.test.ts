@@ -294,6 +294,9 @@ describe("shares.forkSharedConversation", () => {
 		});
 		expect(convo?.userId).toBe("u-forker");
 		expect(convo?.forkedFromConversationId).toBe(convoId);
+		// The fork remembers its share link so "jump to original" can send the
+		// forker back to the shared page (they don't own the original).
+		expect(convo?.forkedFromShareToken).toBe(TOKEN);
 		expect(msgs).toHaveLength(2);
 		// Copied messages are re-stamped to the forker.
 		expect(msgs.every((m) => m.userId === "u-forker")).toBe(true);

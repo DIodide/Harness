@@ -467,9 +467,22 @@ export const getSharedConversation = query({
 		// editor's composer picks the default-loop vs ACP-agent send path. Just
 		// the agent id (a non-secret label) — no harness internals leak.
 		let agent: string | null = null;
+		let sandboxId: string | null = null;
 		if (convo.lastHarnessId) {
 			const harness = await ctx.db.get(convo.lastHarnessId);
 			agent = harness?.agent ?? "default";
+			// The owner's Daytona sandbox id, ONLY for a signed-in editor (so the
+			// read-only file panel can name it in its URL path). It's not a
+			// capability — every sandbox route independently re-gates ownership /
+			// the editor grant — but expose it minimally regardless. NEVER the MCP
+			// authToken / agentCredentialId, which stay server-side.
+			if (
+				identity != null &&
+				grant.role === "editor" &&
+				harness?.daytonaSandboxId
+			) {
+				sandboxId = harness.daytonaSandboxId;
+			}
 		}
 		return {
 			conversationId: convo._id,
@@ -481,6 +494,9 @@ export const getSharedConversation = query({
 			ownerImageUrl: grant.ownerImageUrl ?? null,
 			// "default" | "claude-code" | "codex" | ... | null (no harness yet).
 			agent,
+			// Owner's Daytona sandbox id for the read-only file panel (signed-in
+			// editor only; null otherwise).
+			sandboxId,
 		};
 	},
 });
@@ -582,6 +598,13 @@ export const forkSharedConversation = mutation({
 			lastMessageAt: Date.now(),
 			forkedFromConversationId: grant.conversationId,
 			forkedAtMessageCount: messagesToCopy.length,
+			// Remember the share link so "jump to original" can return the forker
+			// to the SHARED page (they don't own the original — navigating to it in
+			// /chat would show an empty owner-gated conversation). Only public-link
+			// grants carry a token; per-user grants don't.
+			...(grant.publicToken
+				? { forkedFromShareToken: grant.publicToken }
+				: {}),
 		});
 
 		for (const msg of messagesToCopy) {
