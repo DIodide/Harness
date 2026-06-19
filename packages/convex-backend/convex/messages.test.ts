@@ -186,6 +186,47 @@ describe("messages.removeFrom", () => {
 	});
 });
 
+describe("messages.removeAfter (rewind)", () => {
+	it("keeps the target message and deletes only what's below it", async () => {
+		const t = makeT();
+		const { user, conversationId } = await seedConversation(t, "u-a");
+		const ids: string[] = [];
+		for (const [role, content] of [
+			["user", "q1"],
+			["assistant", "a1"],
+			["user", "q2"],
+			["assistant", "a2"],
+		] as const) {
+			ids.push(
+				await user.mutation(api.messages.send, {
+					conversationId,
+					role,
+					content,
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 2)); // distinct _creationTime
+		}
+		// Rewind to q2 → keep q1, a1, q2; drop only a2.
+		await user.mutation(api.messages.removeAfter, { id: ids[2] });
+		const left = await user.query(api.messages.list, { conversationId });
+		expect(left.map((m) => m.content)).toEqual(["q1", "a1", "q2"]);
+	});
+
+	it("rejects when the conversation isn't owned by the caller", async () => {
+		const t = makeT();
+		const { user, conversationId } = await seedConversation(t, "u-a");
+		const msgId = await user.mutation(api.messages.send, {
+			conversationId,
+			role: "user",
+			content: "q",
+		});
+		const b = t.asUser("u-b");
+		await expect(
+			b.mutation(api.messages.removeAfter, { id: msgId }),
+		).rejects.toThrow(/Not found/);
+	});
+});
+
 describe("messages.patchMessageUsage (internal)", () => {
 	it("patches usage on the last assistant message", async () => {
 		const t = makeT();
