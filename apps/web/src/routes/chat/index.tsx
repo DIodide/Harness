@@ -101,7 +101,10 @@ export const Route = createFileRoute("/chat/")({
 	}),
 	beforeLoad: async ({ context, search }) => {
 		if (!context.userId) {
-			throw redirect({ to: "/sign-in" });
+			// SSR may not see the Clerk session yet — defer to the client auth
+			// gate instead of bouncing to /sign-in (which loops /app↔/chat for
+			// a signed-in user). Mirrors /app.
+			return;
 		}
 		const settings = await context.queryClient.ensureQueryData(
 			convexQuery(api.userSettings.get, {}),
