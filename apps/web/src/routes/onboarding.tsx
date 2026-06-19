@@ -80,6 +80,7 @@ import {
 	type SandboxConfig,
 	waitForSandboxRecord,
 } from "../lib/sandbox";
+import { SHARE_RETURN_KEY } from "../lib/share";
 import type { SkillEntry } from "../lib/skills";
 import { RECOMMENDED_SKILLS } from "../lib/skills";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "../lib/system-prompt";
@@ -295,10 +296,24 @@ function OnboardingPage() {
 				} catch {
 					// non-fatal: the workspaces page self-heals on load
 				}
-				navigate({
-					to: "/workspaces",
-					search: { harnessId: id as string, workspaceId },
-				});
+				// A brand-new user who came in to fork a shared chat returns to
+				// that shared page (which then auto-resumes the fork), instead of
+				// being stranded in the app with the link lost.
+				let shareReturn: string | null = null;
+				try {
+					shareReturn = sessionStorage.getItem(SHARE_RETURN_KEY);
+				} catch {}
+				if (shareReturn?.startsWith("/share/")) {
+					navigate({
+						to: "/share/$token",
+						params: { token: shareReturn.slice("/share/".length) },
+					});
+				} else {
+					navigate({
+						to: "/workspaces",
+						search: { harnessId: id as string, workspaceId },
+					});
+				}
 			}
 
 			// Fire-and-forget: sync skill details for added skills

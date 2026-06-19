@@ -8,6 +8,14 @@
  * MIN_TOKEN_LENGTH and unguessable.
  */
 
+// sessionStorage keys that carry a "fork this shared chat" intent across the
+// sign-up → onboarding → completion redirect chain (too many hops to thread
+// through router search params). Set on the share page when an anonymous
+// visitor clicks "Sign in to fork"; consumed at onboarding completion (to
+// return to the share) and on the share page (to auto-resume the fork).
+export const FORK_INTENT_KEY = "shareForkIntent";
+export const SHARE_RETURN_KEY = "shareReturn";
+
 /** Generate a high-entropy, URL-safe share token (prefix + 256 bits). */
 export function generateShareToken(): string {
 	const bytes = new Uint8Array(32);
