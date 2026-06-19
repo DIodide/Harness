@@ -14,8 +14,18 @@ const config = defineConfig(({ mode }) => {
 	return {
 		// Inline server-only env vars at build time for Cloudflare Workers.
 		// process.env is empty on Workers, so these must be baked into the bundle.
+		// Clerk's server-side auth() reads CLERK_SECRET_KEY / CLERK_PUBLISHABLE_KEY
+		// from process.env; without them the Worker can't verify the session, so
+		// SSR route guards see no userId and bounce signed-in users in a redirect
+		// loop. Publishable falls back to the VITE_ name the client build uses.
 		define: {
 			"process.env.ARCJET_KEY": JSON.stringify(env.ARCJET_KEY ?? ""),
+			"process.env.CLERK_SECRET_KEY": JSON.stringify(
+				env.CLERK_SECRET_KEY ?? "",
+			),
+			"process.env.CLERK_PUBLISHABLE_KEY": JSON.stringify(
+				env.CLERK_PUBLISHABLE_KEY ?? env.VITE_CLERK_PUBLISHABLE_KEY ?? "",
+			),
 		},
 		resolve: {
 			alias: {
