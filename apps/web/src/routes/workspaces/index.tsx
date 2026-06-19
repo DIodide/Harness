@@ -22,6 +22,7 @@ import {
 	Plus,
 	Search, // Icon for search
 	Settings,
+	Share2,
 	SlidersHorizontal,
 	Sparkles,
 	Trash2,
@@ -43,6 +44,7 @@ import {
 	SandboxPanelToggle,
 } from "../../components/chat/chat-misc";
 import { SettingsDialog } from "../../components/chat/settings-dialog";
+import { ShareDialog } from "../../components/chat/share-dialog";
 import { useChatPaletteCommands } from "../../components/command-palette/commands/chat-commands";
 import { useWorkspaceActionCommands } from "../../components/command-palette/commands/workspace-action-commands";
 import { useWorkspaceSwitchCommands } from "../../components/command-palette/commands/workspace-switch-commands";
@@ -1035,6 +1037,7 @@ function ChatPage() {
 
 				<div className="flex flex-1 flex-col overflow-hidden">
 					<ChatHeader
+						conversationId={activeConvoId}
 						workspace={activeWorkspace}
 						harness={activeHarness}
 						sandboxes={sandboxes ?? []}
@@ -2142,6 +2145,7 @@ function WorkspaceSidebar({
 }
 
 function ChatHeader({
+	conversationId,
 	workspace,
 	harness,
 	sandboxes,
@@ -2155,6 +2159,7 @@ function ChatHeader({
 	onAddSkill,
 	onRemoveSkill,
 }: {
+	conversationId?: Id<"conversations"> | null;
 	workspace?: {
 		_id: Id<"workspaces">;
 		name: string;
@@ -2194,6 +2199,7 @@ function ChatHeader({
 	onAddSkill: (skill: SkillEntry) => void;
 	onRemoveSkill: (skill: SkillEntry) => void;
 }) {
+	const [shareOpen, setShareOpen] = useState(false);
 	const activeSandboxId =
 		activeSandboxSelection !== "harness" && activeSandboxSelection !== "none"
 			? activeSandboxSelection
@@ -2285,6 +2291,30 @@ function ChatHeader({
 					onSwap={onSwapSandbox}
 				/>
 			</div>
+
+			{conversationId && (
+				<div className="flex items-center gap-2">
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant="ghost"
+								size="sm"
+								className="gap-1.5"
+								onClick={() => setShareOpen(true)}
+							>
+								<Share2 size={13} />
+								<span className="text-xs font-medium">Share</span>
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>Share this chat</TooltipContent>
+					</Tooltip>
+					<ShareDialog
+						conversationId={conversationId}
+						open={shareOpen}
+						onOpenChange={setShareOpen}
+					/>
+				</div>
+			)}
 		</header>
 	);
 }

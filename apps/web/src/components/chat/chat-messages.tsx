@@ -263,6 +263,8 @@ export function ChatMessages({
 	isStreaming,
 	scrollToMessageId,
 	onClearScrollTarget,
+	readOnly = false,
+	shareToken,
 }: {
 	conversationId: Id<"conversations">;
 	messages: Array<{
@@ -343,6 +345,11 @@ export function ChatMessages({
 	isStreaming: boolean;
 	scrollToMessageId: Id<"messages"> | null;
 	onClearScrollTarget: () => void;
+	/** Read-only transcript (shared view): hide per-message actions and the
+	 *  edit-version navigation; callers still pass no-op action handlers. */
+	readOnly?: boolean;
+	/** Shared view: resolve attachment URLs through the token-scoped query. */
+	shareToken?: string;
 }) {
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null);
@@ -646,7 +653,10 @@ export function ChatMessages({
 										{msg.role === "user" &&
 											msg.attachments &&
 											msg.attachments.length > 0 && (
-												<MessageAttachments attachments={msg.attachments} />
+												<MessageAttachments
+													attachments={msg.attachments}
+													shareToken={shareToken}
+												/>
 											)}
 										<div
 											className={cn(
@@ -799,88 +809,92 @@ export function ChatMessages({
 												Response interrupted
 											</div>
 										)}
-										<MessageActions
-											content={msg.content}
-											role={msg.role}
-											displayMode={displayMode}
-											isStreaming={isStreaming}
-											usage={
-												msg.role === "assistant" && msg.usage
-													? (msg.usage as UsageData)
-													: undefined
-											}
-											model={
-												msg.role === "assistant"
-													? (msg.model ?? undefined)
-													: undefined
-											}
-											onRegenerate={
-												msg.role === "assistant"
-													? () => {
-															if (!messages) return;
-															const idx = messages.findIndex(
-																(m) => m._id === msg._id,
-															);
-															const history = messages
-																.slice(0, idx)
-																.map((m) => ({
-																	role: m.role,
-																	content: m.content,
-																}));
-															onRegenerate(msg._id, history);
-														}
-													: undefined
-											}
-											onFork={
-												msg.role === "assistant"
-													? () => onFork(msg._id)
-													: undefined
-											}
-											onEditPrompt={
-												msg.role === "user" && i === lastUserMsgIdx
-													? () => onStartEditPrompt(msg._id, msg.content)
-													: undefined
-											}
-										/>
-										{editVersionIdx !== -1 && editAllVersionIds.length > 1 && (
-											<div className="mt-1 flex items-center justify-end gap-1 text-[10px] text-muted-foreground">
-												<button
-													type="button"
-													disabled={editVersionIdx === 0}
-													onClick={() => {
-														skipNextTransition.current = true;
-														onNavigateToConversation(
-															editAllVersionIds[
-																editVersionIdx - 1
-															] as Id<"conversations">,
-														);
-													}}
-													className="disabled:opacity-30 hover:text-foreground"
-												>
-													←
-												</button>
-												<span>
-													{editVersionIdx + 1}/{editAllVersionIds.length}
-												</span>
-												<button
-													type="button"
-													disabled={
-														editVersionIdx === editAllVersionIds.length - 1
-													}
-													onClick={() => {
-														skipNextTransition.current = true;
-														onNavigateToConversation(
-															editAllVersionIds[
-																editVersionIdx + 1
-															] as Id<"conversations">,
-														);
-													}}
-													className="disabled:opacity-30 hover:text-foreground"
-												>
-													→
-												</button>
-											</div>
+										{!readOnly && (
+											<MessageActions
+												content={msg.content}
+												role={msg.role}
+												displayMode={displayMode}
+												isStreaming={isStreaming}
+												usage={
+													msg.role === "assistant" && msg.usage
+														? (msg.usage as UsageData)
+														: undefined
+												}
+												model={
+													msg.role === "assistant"
+														? (msg.model ?? undefined)
+														: undefined
+												}
+												onRegenerate={
+													msg.role === "assistant"
+														? () => {
+																if (!messages) return;
+																const idx = messages.findIndex(
+																	(m) => m._id === msg._id,
+																);
+																const history = messages
+																	.slice(0, idx)
+																	.map((m) => ({
+																		role: m.role,
+																		content: m.content,
+																	}));
+																onRegenerate(msg._id, history);
+															}
+														: undefined
+												}
+												onFork={
+													msg.role === "assistant"
+														? () => onFork(msg._id)
+														: undefined
+												}
+												onEditPrompt={
+													msg.role === "user" && i === lastUserMsgIdx
+														? () => onStartEditPrompt(msg._id, msg.content)
+														: undefined
+												}
+											/>
 										)}
+										{!readOnly &&
+											editVersionIdx !== -1 &&
+											editAllVersionIds.length > 1 && (
+												<div className="mt-1 flex items-center justify-end gap-1 text-[10px] text-muted-foreground">
+													<button
+														type="button"
+														disabled={editVersionIdx === 0}
+														onClick={() => {
+															skipNextTransition.current = true;
+															onNavigateToConversation(
+																editAllVersionIds[
+																	editVersionIdx - 1
+																] as Id<"conversations">,
+															);
+														}}
+														className="disabled:opacity-30 hover:text-foreground"
+													>
+														←
+													</button>
+													<span>
+														{editVersionIdx + 1}/{editAllVersionIds.length}
+													</span>
+													<button
+														type="button"
+														disabled={
+															editVersionIdx === editAllVersionIds.length - 1
+														}
+														onClick={() => {
+															skipNextTransition.current = true;
+															onNavigateToConversation(
+																editAllVersionIds[
+																	editVersionIdx + 1
+																] as Id<"conversations">,
+															);
+														}}
+														className="disabled:opacity-30 hover:text-foreground"
+													>
+														→
+													</button>
+												</div>
+											)}
 									</div>
 									{msg.role === "user" && (
 										<Avatar className="h-7 w-7 shrink-0">

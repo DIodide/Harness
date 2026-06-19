@@ -12,10 +12,29 @@ interface Attachment {
 	fileSize: number;
 }
 
-function AttachmentItem({ attachment }: { attachment: Attachment }) {
-	const { data: url } = useQuery(
-		convexQuery(api.files.getFileUrl, { storageId: attachment.storageId }),
-	);
+function AttachmentItem({
+	attachment,
+	shareToken,
+}: {
+	attachment: Attachment;
+	shareToken?: string;
+}) {
+	// In a shared (possibly anonymous) view we resolve attachment URLs through
+	// the token-scoped query — it works without a signed-in identity and
+	// verifies the storageId actually belongs to the shared conversation.
+	// Only one of the two queries is enabled at a time.
+	const sharedUrl = useQuery({
+		...convexQuery(api.shares.getSharedFileUrl, {
+			token: shareToken ?? "",
+			storageId: attachment.storageId,
+		}),
+		enabled: Boolean(shareToken),
+	});
+	const ownedUrl = useQuery({
+		...convexQuery(api.files.getFileUrl, { storageId: attachment.storageId }),
+		enabled: !shareToken,
+	});
+	const url = shareToken ? sharedUrl.data : ownedUrl.data;
 
 	if (!url) return null;
 
@@ -84,15 +103,22 @@ function AttachmentItem({ attachment }: { attachment: Attachment }) {
 
 export function MessageAttachments({
 	attachments,
+	shareToken,
 }: {
 	attachments: Attachment[];
+	/** When set (shared view), resolve URLs via the token-scoped query. */
+	shareToken?: string;
 }) {
 	if (attachments.length === 0) return null;
 
 	return (
 		<div className="mb-1.5 flex flex-wrap items-end justify-end gap-1.5">
 			{attachments.map((a) => (
-				<AttachmentItem key={a.storageId} attachment={a} />
+				<AttachmentItem
+					key={a.storageId}
+					attachment={a}
+					shareToken={shareToken}
+				/>
 			))}
 		</div>
 	);

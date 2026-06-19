@@ -237,6 +237,34 @@ export default defineSchema({
 		.index("by_user_and_server", ["userId", "mcpServerUrl"])
 		.index("by_user", ["userId"]),
 
+	// Conversation sharing grants. One table covers both modes:
+	//   - public link  → publicToken set, grantedToUserId undefined
+	//   - per-user grant → grantedToUserId set, publicToken undefined
+	// Authorization for a shared conversation is ALWAYS resolved through an
+	// active grant here (never by trusting a denormalized field on the
+	// message/conversation). A grant is active when not revoked and not
+	// expired. `role` gates viewer (read-only) vs editor (collaborate —
+	// Phase 2). The publicToken is a high-entropy client-generated secret
+	// (32 bytes), looked up via the by_token index so it self-throttles
+	// enumeration; the Convex _id is deliberately NOT used as the secret.
+	shareGrants: defineTable({
+		conversationId: v.id("conversations"),
+		// = conversation.userId at mint time (denormalized so the public
+		// query never has to expose the owner id and revocation is cheap).
+		ownerUserId: v.string(),
+		role: v.union(v.literal("viewer"), v.literal("editor")),
+		// Exactly one of these identifies the grantee.
+		grantedToUserId: v.optional(v.string()),
+		publicToken: v.optional(v.string()),
+		createdAt: v.number(),
+		expiresAt: v.optional(v.number()),
+		revokedAt: v.optional(v.number()),
+		lastAccessedAt: v.optional(v.number()),
+	})
+		.index("by_token", ["publicToken"])
+		.index("by_conversation", ["conversationId"])
+		.index("by_grantee", ["grantedToUserId"]),
+
 	skillDetails: defineTable({
 		name: v.string(),
 		skillName: v.string(),
