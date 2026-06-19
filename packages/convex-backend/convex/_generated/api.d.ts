@@ -9,6 +9,7 @@
  */
 
 import type * as agentCredentials from "../agentCredentials.js";
+import type * as agentUsage from "../agentUsage.js";
 import type * as commands from "../commands.js";
 import type * as conversations from "../conversations.js";
 import type * as files from "../files.js";
@@ -33,6 +34,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   agentCredentials: typeof agentCredentials;
+  agentUsage: typeof agentUsage;
   commands: typeof commands;
   conversations: typeof conversations;
   files: typeof files;
