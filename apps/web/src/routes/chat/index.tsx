@@ -943,30 +943,33 @@ function ChatPage() {
 		onToggleSidebar: () => setSidebarOpen((v) => !v),
 	});
 
+	// Hooks must run unconditionally — keep these ABOVE the early return.
+	const isLocalActiveStreaming = activeConvoId
+		? chatStream.streamingConvoIds.has(activeConvoId)
+		: false;
+	// When THIS tab isn't driving the active conversation's turn (a sharee or
+	// another of the owner's tabs is), follow the live token feed so it streams
+	// down here too. Disabled while we're the initiator (token-perfect local
+	// stream renders instead — never both).
+	const { followState: ownerFollow, clearFollow: clearOwnerFollow } =
+		useFollowStream({
+			conversationId: activeConvoId ?? null,
+			enabled: !!activeConvoId && !isLocalActiveStreaming,
+		});
+
 	if (harnessesLoading || !harnesses || harnesses.length === 0) {
 		return <ChatSkeleton />;
 	}
 	const activeConversation = conversations?.find(
 		(c) => c._id === activeConvoId,
 	);
-	const isLocalActiveStreaming = activeConvoId
-		? chatStream.streamingConvoIds.has(activeConvoId)
-		: false;
-	// When THIS tab isn't driving the active conversation's turn (a sharee or
-	// another of the owner's tabs is), follow the live token feed so it streams
-	// down here too. Disabled while we're the initiator (our local stream is
-	// token-perfect — never render both).
-	const { followState: ownerFollow, clearFollow: clearOwnerFollow } =
-		useFollowStream({
-			conversationId: activeConvoId ?? null,
-			enabled: !!activeConvoId && !isLocalActiveStreaming,
-		});
 	const localActiveStreamState = activeConvoId
 		? (streamStates[activeConvoId] ?? EMPTY_STREAM_STATE)
 		: EMPTY_STREAM_STATE;
-	const activeStreamState = isLocalActiveStreaming
-		? localActiveStreamState
-		: (ownerFollow ?? EMPTY_STREAM_STATE);
+	// Prefer the follow feed when present; else local — which covers our own
+	// turn AND the post-done pendingDone window before the persisted row syncs
+	// (so the just-finished bubble never flickers away).
+	const activeStreamState = ownerFollow ?? localActiveStreamState;
 	const isActiveConvoStreaming = isLocalActiveStreaming || ownerFollow != null;
 	const agentActivityCount = countActiveAgents(
 		activeStreamState.parts,
@@ -1073,11 +1076,15 @@ function ChatPage() {
 							agentStatus={activeStreamState.agentStatus}
 							streamPlan={activeStreamState.plan}
 							agentUsage={activeStreamState.agentUsage}
-							onStreamSynced={(cid) =>
-								isLocalActiveStreaming
-									? handleStreamSynced(cid)
-									: clearOwnerFollow()
-							}
+							onStreamSynced={(cid) => {
+								// Run BOTH: by sync time the local stream has already
+								// dropped from streamingConvoIds, so a flag can't tell which
+								// source finished. handleStreamSynced clears any local state
+								// + drains the queue; clearOwnerFollow clears the follow
+								// bubble. Each is a no-op for the other's case.
+								handleStreamSynced(cid);
+								clearOwnerFollow();
+							}}
 							displayMode={
 								(userSettings?.displayMode as DisplayMode) ?? "standard"
 							}

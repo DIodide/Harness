@@ -12,6 +12,7 @@ exactly as before. A shared Redis instance also makes fan-out work across multip
 FastAPI workers/boxes (the reason to pick Streams over an in-process hub).
 """
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -20,10 +21,15 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Display-only events relayed to passive viewers. Interactive events
-# (permission_request / question_request and their resolutions) are
-# DELIBERATELY excluded — only the turn's driver answers them, and they can
-# carry tool/prompt detail a passive viewer shouldn't drive.
+# Display-only events relayed to passive viewers — exactly the transcript a
+# viewer can already see persisted, nothing more. DELIBERATELY excluded:
+#   - permission_request / question_request (+resolutions): only the turn's
+#     driver answers them, and they carry tool/prompt detail to act on.
+#   - mcp_error / sandbox_status: carry the OWNER's infra (MCP server URL,
+#     sandbox id) — a passive sharee must not learn those.
+#   - agent_usage: the owner's agent context-window + real $ cost.
+# The `done` frame's per-turn usage/cost is stripped in `publish` (the persisted
+# shared transcript never exposes usage either).
 FOLLOW_EVENTS = frozenset(
     {
         "turn_start",
@@ -34,10 +40,7 @@ FOLLOW_EVENTS = frozenset(
         "done",
         "error",
         "plan",
-        "agent_usage",
         "status",
-        "sandbox_status",
-        "mcp_error",
     }
 )
 
@@ -48,7 +51,11 @@ _STREAM_MAXLEN = 4000
 # crashed producer can't leave late joiners replaying a frozen partial forever).
 _TURN_TTL_SECONDS = 600
 # Idle stream key expiry — a conversation no one streams into is reclaimed.
-_STREAM_TTL_SECONDS = 3600
+# Generous so even a very long single turn can't self-expire its own key mid-flight.
+_STREAM_TTL_SECONDS = 21600  # 6h
+# Time box on a single bus op in the turn's critical path — a hung Redis must
+# never freeze the initiator's turn; a slow/hung op trips a per-turn breaker.
+_BUS_OP_TIMEOUT = 1.0
 
 _redis = None
 _redis_init = False
@@ -70,6 +77,9 @@ def _client():
                 socket_connect_timeout=2.0,
                 socket_timeout=20.0,
                 health_check_interval=30,
+                # Each /follow holds a connection for its blocking XREAD window —
+                # a generous pool so many concurrent followers don't starve it.
+                max_connections=256,
             )
         except Exception:
             logger.exception("Failed to init Redis client — live fan-out disabled")
@@ -109,6 +119,22 @@ async def start_turn(conversation_id: str) -> None:
         logger.warning("stream start_turn failed for '%s'", conversation_id)
 
 
+def _sanitize(event: str, payload: str) -> str:
+    """Strip owner-only fields from a frame before fan-out. The `done` frame
+    carries per-turn usage/cost (the persisted shared transcript never exposes
+    usage either) — a passive viewer must not see it."""
+    if event != "done":
+        return payload
+    try:
+        obj = json.loads(payload)
+    except Exception:
+        return payload
+    if isinstance(obj, dict) and "usage" in obj:
+        obj = {k: v for k, v in obj.items() if k != "usage"}
+        return json.dumps(obj)
+    return payload
+
+
 async def publish(conversation_id: str, event: str, data) -> None:
     """Tee one display event into the conversation stream. `data` is the same
     JSON string already sent to the initiating client (or a dict)."""
@@ -117,6 +143,7 @@ async def publish(conversation_id: str, event: str, data) -> None:
         return
     try:
         payload = data if isinstance(data, str) else json.dumps(data)
+        payload = _sanitize(event, payload)
         await r.xadd(
             _stream_key(conversation_id),
             {"event": event, "data": payload},
@@ -140,21 +167,39 @@ async def end_turn(conversation_id: str) -> None:
         logger.debug("stream end_turn failed for '%s'", conversation_id)
 
 
+async def _safe(coro) -> bool:
+    """Run a bus op time-boxed. Returns False if it timed out or failed so the
+    caller can stop teeing for the rest of the turn — a hung Redis must NEVER
+    stall the initiator's turn (the SSE to the driver is the critical path)."""
+    try:
+        await asyncio.wait_for(coro, timeout=_BUS_OP_TIMEOUT)
+        return True
+    except Exception:
+        return False
+
+
 async def tee(gen: AsyncIterator[dict], conversation_id: str) -> AsyncIterator[dict]:
     """Wrap a turn's SSE event generator: publish each display event to the bus
     while yielding it unchanged to the initiating client. One wrap per endpoint;
-    a no-op (pure passthrough) when Redis is unconfigured."""
+    a no-op (pure passthrough) when Redis is unconfigured.
+
+    Each bus op is time-boxed; the first hang/failure trips a per-turn breaker so
+    we never pay the timeout twice — the turn streams to the driver regardless.
+    """
     if not enabled():
         async for ev in gen:
             yield ev
         return
-    await start_turn(conversation_id)
+    healthy = await _safe(start_turn(conversation_id))
     try:
         async for ev in gen:
-            await publish(conversation_id, ev.get("event", ""), ev.get("data", "{}"))
+            if healthy:
+                healthy = await _safe(
+                    publish(conversation_id, ev.get("event", ""), ev.get("data", "{}"))
+                )
             yield ev
     finally:
-        await end_turn(conversation_id)
+        await _safe(end_turn(conversation_id))
 
 
 async def follow(conversation_id: str) -> AsyncIterator[dict]:
@@ -169,6 +214,10 @@ async def follow(conversation_id: str) -> AsyncIterator[dict]:
     try:
         turn_start = await r.get(_turn_key(conversation_id))
         if turn_start:
+            # Always lead a replay with a synthetic reset so the client rebuilds
+            # cleanly — even on a reconnect where the real turn_start frame was
+            # already trimmed by MAXLEN (otherwise the tail would double-append).
+            yield {"event": "turn_start", "data": "{}"}
             # Replay the current turn from its start so a late joiner catches up.
             entries = await r.xrange(skey, min=turn_start, max="+")
             for sid, fields in entries:

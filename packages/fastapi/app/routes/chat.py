@@ -1156,6 +1156,11 @@ async def follow_stream(
     valid token. Replays the current turn then tails the conversation's Redis
     stream. Emits nothing (and idles) when Redis is unconfigured.
     """
+    # A fully anonymous caller must present a share token — never fall through to
+    # an identity-less access check (defense against a misconfigured/empty-Convex
+    # backend whose access oracle would otherwise dev-fallback to "owner").
+    if user is None and not token:
+        raise HTTPException(status_code=403, detail="Not authorized")
     user_id = (user or {}).get("sub") or ""
     access = await verify_conversation_access(
         http_client, conversation_id, user_id, token

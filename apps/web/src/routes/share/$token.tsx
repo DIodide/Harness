@@ -330,9 +330,9 @@ function ShareEditorChat({
 		token,
 		enabled: !isLocalStreaming,
 	});
-	const streamState = isLocalStreaming
-		? localStreamState
-		: (followState ?? EMPTY_STREAM_STATE);
+	// Prefer the follow feed; else local (covers our own turn + the post-done
+	// handoff window so the finished bubble never flickers away).
+	const streamState = followState ?? localStreamState;
 	const isStreaming = isLocalStreaming || followState != null;
 
 	const sendShared = useMutation({
@@ -465,9 +465,10 @@ function ShareEditorChat({
 						allConversations={[]}
 						activeConversation={undefined}
 						scrollToMessageId={null}
-						onStreamSynced={() =>
-							isLocalStreaming ? clearStreamState(convoId) : clearFollow()
-						}
+						onStreamSynced={() => {
+							clearStreamState(convoId);
+							clearFollow();
+						}}
 						onRegenerate={handleRegenerate}
 						onFork={handleForkAt}
 						onStartEditPrompt={noop}

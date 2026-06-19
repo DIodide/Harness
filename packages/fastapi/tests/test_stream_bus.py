@@ -39,18 +39,38 @@ class TestDisabled:
 
 
 class TestEventFilter:
-    def test_interactive_events_are_not_followed(self):
-        # A passive viewer must never receive permission/question prompts — only
-        # the turn's driver answers those.
+    def test_owner_only_events_are_not_followed(self):
+        # A passive viewer must never receive interactive prompts (only the
+        # driver answers) NOR the owner's infra/cost (mcp url, sandbox id, $).
         for ev in (
             "permission_request",
             "question_request",
             "permission_resolved",
             "question_resolved",
             "question_answered",
+            "mcp_error",
+            "sandbox_status",
+            "agent_usage",
         ):
             assert ev not in stream_bus.FOLLOW_EVENTS
 
     def test_display_events_are_followed(self):
         for ev in ("turn_start", "token", "thinking", "tool_call", "tool_result", "done", "error"):
             assert ev in stream_bus.FOLLOW_EVENTS
+
+
+class TestSanitize:
+    def test_done_strips_usage_cost(self):
+        out = stream_bus._sanitize(
+            "done", '{"content":"hi","model":"m","usage":{"cost":0.5}}'
+        )
+        import json as _json
+
+        obj = _json.loads(out)
+        assert "usage" not in obj
+        assert obj["content"] == "hi"
+        assert obj["model"] == "m"
+
+    def test_non_done_passthrough(self):
+        p = '{"content":"x"}'
+        assert stream_bus._sanitize("token", p) == p
