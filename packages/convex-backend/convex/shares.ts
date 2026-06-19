@@ -94,6 +94,11 @@ export const ensurePublicLink = mutation({
 		conversationId: v.id("conversations"),
 		role: v.union(v.literal("viewer"), v.literal("editor")),
 		token: v.string(),
+		// Owner's public profile (name + avatar only) for author attribution,
+		// captured client-side from Clerk. Refreshed on each call so it stays
+		// current.
+		ownerName: v.optional(v.string()),
+		ownerImageUrl: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const convo = await assertOwnedConversation(ctx, args.conversationId);
@@ -111,6 +116,11 @@ export const ensurePublicLink = mutation({
 			(g) => g.publicToken !== undefined && isActiveGrant(g),
 		);
 		if (activeLink) {
+			// Keep the owner profile snapshot fresh on re-open.
+			await ctx.db.patch(activeLink._id, {
+				ownerName: args.ownerName,
+				ownerImageUrl: args.ownerImageUrl,
+			});
 			return {
 				token: activeLink.publicToken as string,
 				role: activeLink.role,
@@ -121,6 +131,8 @@ export const ensurePublicLink = mutation({
 		const grantId = await ctx.db.insert("shareGrants", {
 			conversationId: args.conversationId,
 			ownerUserId: convo.userId,
+			ownerName: args.ownerName,
+			ownerImageUrl: args.ownerImageUrl,
 			role: args.role,
 			publicToken: args.token,
 			createdAt: Date.now(),
@@ -153,6 +165,8 @@ export const rotatePublicLink = mutation({
 		conversationId: v.id("conversations"),
 		token: v.string(),
 		role: v.optional(v.union(v.literal("viewer"), v.literal("editor"))),
+		ownerName: v.optional(v.string()),
+		ownerImageUrl: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const convo = await assertOwnedConversation(ctx, args.conversationId);
@@ -175,6 +189,8 @@ export const rotatePublicLink = mutation({
 		await ctx.db.insert("shareGrants", {
 			conversationId: args.conversationId,
 			ownerUserId: convo.userId,
+			ownerName: args.ownerName,
+			ownerImageUrl: args.ownerImageUrl,
 			role,
 			publicToken: args.token,
 			createdAt: Date.now(),
@@ -254,10 +270,18 @@ export const getSharedConversation = query({
 		if (!grant) return null;
 		const convo = await ctx.db.get(grant.conversationId);
 		if (!convo) return null;
+		// Reading identity here is fine — it's optional (null for anonymous),
+		// so this stays a public query. viewerIsOwner lets the UI send the
+		// owner to their own editable chat instead of the read-only view.
+		const identity = await ctx.auth.getUserIdentity();
 		return {
 			conversationId: convo._id,
 			title: convo.title,
 			role: grant.role,
+			viewerIsOwner: identity != null && convo.userId === identity.subject,
+			// Author attribution (name + avatar only — never email).
+			ownerName: grant.ownerName ?? null,
+			ownerImageUrl: grant.ownerImageUrl ?? null,
 		};
 	},
 });

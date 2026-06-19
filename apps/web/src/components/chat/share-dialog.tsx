@@ -1,3 +1,4 @@
+import { useUser } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
@@ -37,6 +38,12 @@ export function ShareDialog({
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 }) {
+	const { user } = useUser();
+	// Author attribution snapshot — name + avatar only (no email).
+	const ownerProfile = {
+		ownerName: user?.fullName ?? user?.firstName ?? undefined,
+		ownerImageUrl: user?.imageUrl ?? undefined,
+	};
 	const { data: grants } = useQuery(
 		convexQuery(api.shares.listShareGrants, open ? { conversationId } : "skip"),
 	);
@@ -59,7 +66,12 @@ export function ShareDialog({
 
 	const handleCreate = () => {
 		ensureLink.mutate(
-			{ conversationId, role: "viewer", token: generateShareToken() },
+			{
+				conversationId,
+				role: "viewer",
+				token: generateShareToken(),
+				...ownerProfile,
+			},
 			{
 				onError: (e) =>
 					toast.error(e instanceof Error ? e.message : "Could not share"),
@@ -80,7 +92,7 @@ export function ShareDialog({
 
 	const handleRotate = () => {
 		rotateLink.mutate(
-			{ conversationId, token: generateShareToken() },
+			{ conversationId, token: generateShareToken(), ...ownerProfile },
 			{
 				onSuccess: () =>
 					toast.success("New link generated — the old one stopped working"),

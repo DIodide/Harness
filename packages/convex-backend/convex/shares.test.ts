@@ -116,6 +116,34 @@ describe("shares public viewing", () => {
 		expect(header).not.toBeNull();
 		expect(header?.title).toBe("Shared chat");
 		expect(header?.role).toBe("viewer");
+		// Anonymous viewer is never the owner.
+		expect(header?.viewerIsOwner).toBe(false);
+	});
+
+	it("reports viewerIsOwner only for the owner, and exposes author name+avatar (no email)", async () => {
+		const { raw, asUser } = makeT();
+		const convoId = await seedConvo(raw, "u-owner");
+		await asUser("u-owner").mutation(api.shares.ensurePublicLink, {
+			conversationId: convoId,
+			role: "viewer",
+			token: TOKEN,
+			ownerName: "Ada Lovelace",
+			ownerImageUrl: "https://img.example/ada.png",
+		});
+		const asOwner = await asUser("u-owner").query(
+			api.shares.getSharedConversation,
+			{ token: TOKEN },
+		);
+		expect(asOwner?.viewerIsOwner).toBe(true);
+		const asOther = await asUser("u-other").query(
+			api.shares.getSharedConversation,
+			{ token: TOKEN },
+		);
+		expect(asOther?.viewerIsOwner).toBe(false);
+		// Author attribution is present; email is never part of the projection.
+		expect(asOther?.ownerName).toBe("Ada Lovelace");
+		expect(asOther?.ownerImageUrl).toBe("https://img.example/ada.png");
+		expect("ownerEmail" in (asOther ?? {})).toBe(false);
 	});
 
 	it("returns the full transcript but strips owner-private fields", async () => {
