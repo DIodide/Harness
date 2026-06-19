@@ -24,7 +24,7 @@ import { type DisplayMode, MessageActions } from "../message-actions";
 import { MessageAttachments } from "../message-attachments";
 import { PendingResponseIndicator } from "../pending-response-indicator";
 import { RoseCurveSpinner } from "../rose-curve-spinner";
-import { Avatar, AvatarFallback } from "../ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { StreamingUsage, ThinkingBlock, ToolCallBlock } from "./message-blocks";
 
 /** Superset of stream parts and persisted Convex parts. */
@@ -295,6 +295,10 @@ export function ChatMessages({
 		};
 		model?: string;
 		interrupted?: boolean;
+		// Author attribution snapshot for collaborator-sent messages (name +
+		// avatar only). Absent on the owner's own messages.
+		authorName?: string;
+		authorImageUrl?: string;
 		attachments?: Array<{
 			storageId: Id<"_storage">;
 			mimeType: string;
@@ -850,7 +854,12 @@ export function ChatMessages({
 														: undefined
 												}
 												onEditPrompt={
-													msg.role === "user" && i === lastUserMsgIdx
+													// Editing a prompt forks-and-resends, which is owner-
+													// centric; collaborators (shareToken set) send and
+													// regenerate but don't rewrite the owner's prompts.
+													msg.role === "user" &&
+													i === lastUserMsgIdx &&
+													!shareToken
 														? () => onStartEditPrompt(msg._id, msg.content)
 														: undefined
 												}
@@ -900,8 +909,16 @@ export function ChatMessages({
 									</div>
 									{msg.role === "user" && (
 										<Avatar className="h-7 w-7 shrink-0">
+											{msg.authorImageUrl && (
+												<AvatarImage
+													src={msg.authorImageUrl}
+													alt={msg.authorName ?? "User"}
+												/>
+											)}
 											<AvatarFallback className="bg-muted text-foreground text-[10px]">
-												U
+												{msg.authorName
+													? msg.authorName.charAt(0).toUpperCase()
+													: "U"}
 											</AvatarFallback>
 										</Avatar>
 									)}

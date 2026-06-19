@@ -206,7 +206,7 @@ function isDeadStatus(status: string | undefined): boolean {
 export async function ensureAgentSession(
 	token: string | null,
 	agent: AgentMode,
-	harness: AgentHarnessConfig,
+	harness: AgentHarnessConfig | null,
 	conversationId: string,
 	signal?: AbortSignal,
 	// Fired right before a cold sandbox provision (POST /sessions) is about to
@@ -215,10 +215,19 @@ export async function ensureAgentSession(
 	// since the gateway's own provisioning status can't arrive until the prompt
 	// SSE opens (after the provision completes).
 	onProvisioning?: () => void,
+	// Editor-grant collaboration: the share link. When set, the collaborator
+	// has NO harness — the server resolves the OWNER's harness and runs the
+	// session under the owner's identity. Harness switching is owner-only, so
+	// the identity/harness keys are pinned ("shared") and never re-switched.
+	shareToken?: string,
 ): Promise<string> {
 	const key = cacheKey(conversationId, agent);
-	const wantedHarness = harnessKey(harness);
-	const wantedIdentity = identityKey(harness);
+	const wantedHarness = shareToken
+		? "shared"
+		: harnessKey(harness as AgentHarnessConfig);
+	const wantedIdentity = shareToken
+		? "shared"
+		: identityKey(harness as AgentHarnessConfig);
 	const cached = sessionCache.get(key);
 
 	if (cached) {
@@ -271,11 +280,11 @@ export async function ensureAgentSession(
 	onProvisioning?.();
 	const created = await api(token, "/sessions", {
 		method: "POST",
-		body: JSON.stringify({
-			agent,
-			harness,
-			conversation_id: conversationId,
-		}),
+		body: JSON.stringify(
+			shareToken
+				? { agent, conversation_id: conversationId, token: shareToken }
+				: { agent, harness, conversation_id: conversationId },
+		),
 		signal,
 	});
 	if (!created.ok) {

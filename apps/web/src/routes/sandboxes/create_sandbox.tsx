@@ -2,12 +2,7 @@ import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useQuery } from "@tanstack/react-query";
-import {
-	createFileRoute,
-	Link,
-	redirect,
-	useNavigate,
-} from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { AlertCircle, ArrowLeft, Loader2 } from "lucide-react";
 import { useState } from "react";
 import toast from "react-hot-toast";
@@ -26,7 +21,11 @@ const API_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 export const Route = createFileRoute("/sandboxes/create_sandbox")({
 	beforeLoad: ({ context }) => {
 		if (!context.userId) {
-			throw redirect({ to: "/sign-in" });
+			// SSR can't see the Clerk session (the prod session cookies are not
+			// shared to the app domain), so context.userId is null even for
+			// signed-in users. Defer to the client auth gate instead of bouncing
+			// to /sign-in, which loops. Mirrors /app.
+			return;
 		}
 	},
 	component: RouteComponent,

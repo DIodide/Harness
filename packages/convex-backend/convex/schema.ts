@@ -140,6 +140,13 @@ export default defineSchema({
 		conversationId: v.id("conversations"),
 		workspaceId: v.optional(v.id("workspaces")),
 		userId: v.optional(v.string()),
+		// Public profile snapshot of the message's author, captured client-side
+		// from Clerk when a collaborator (editor grant) sends into someone
+		// else's shared conversation — there is no users table to resolve a
+		// Clerk subject to a name later. Name + avatar ONLY, never email.
+		// Absent for the owner's own messages (rendered as the owner).
+		authorName: v.optional(v.string()),
+		authorImageUrl: v.optional(v.string()),
 		role: v.union(v.literal("user"), v.literal("assistant")),
 		content: v.string(),
 		reasoning: v.optional(v.string()),

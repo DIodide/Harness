@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { mutation, query } from "./_generated/server";
+import { internalQuery, mutation, query } from "./_generated/server";
 
 /**
  * Conversation sharing.
@@ -78,8 +78,199 @@ function publicMessage(msg: Doc<"messages">) {
 		interrupted: msg.interrupted,
 		interruptionReason: msg.interruptionReason,
 		attachments: msg.attachments,
+		// Author attribution for collaborator-sent messages (name + avatar only,
+		// never email/userId). Absent on the owner's own messages.
+		authorName: msg.authorName,
+		authorImageUrl: msg.authorImageUrl,
 	};
 }
+
+// ── Phase 2: editor-grant collaboration authorization ───────────────────
+
+export type ConversationRole = "owner" | "editor" | "viewer" | "none";
+
+/**
+ * Resolve a (user, conversation) pair to a role. Honors the link-first model
+ * (a signed-in holder of an active editor public token for THIS conversation
+ * is an editor) and per-user grants. Authorization for collaboration is ALWAYS
+ * decided here through an active grant — never by trusting a denormalized field
+ * on the conversation/message. `token` is the share link the caller arrived
+ * through, when any.
+ */
+export async function resolveConversationRole(
+	ctx: QueryCtx | MutationCtx,
+	userId: string,
+	conversationId: Id<"conversations">,
+	token?: string,
+): Promise<ConversationRole> {
+	const convo = await ctx.db.get(conversationId);
+	if (!convo) return "none";
+	if (convo.userId === userId) return "owner";
+
+	let best: "viewer" | "none" = "none";
+
+	// A token only grants anything if it resolves to an active grant on THIS
+	// conversation (a token for another conversation confers nothing here).
+	if (token) {
+		const grant = await grantForToken(ctx, token);
+		if (grant && grant.conversationId === conversationId) {
+			if (grant.role === "editor") return "editor";
+			best = "viewer";
+		}
+	}
+
+	// Per-user grants addressed directly to this user.
+	const grants = await ctx.db
+		.query("shareGrants")
+		.withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
+		.collect();
+	for (const g of grants) {
+		if (!isActiveGrant(g)) continue;
+		if (g.grantedToUserId !== userId) continue;
+		if (g.role === "editor") return "editor";
+		best = "viewer";
+	}
+	return best;
+}
+
+/**
+ * Deploy-key-only access oracle for the FastAPI backend. Returns the caller's
+ * role for a conversation so the backend can authorize a chat/agent run BEFORE
+ * any write or spend. internalQuery (never public) — exactly like
+ * sandboxes.getOwnerByDaytonaId — so clients can never enumerate access for
+ * arbitrary userIds.
+ */
+export const checkConversationAccess = internalQuery({
+	args: {
+		conversationId: v.id("conversations"),
+		userId: v.string(),
+		token: v.optional(v.string()),
+	},
+	handler: async (ctx, args): Promise<ConversationRole> =>
+		resolveConversationRole(ctx, args.userId, args.conversationId, args.token),
+});
+
+/**
+ * Authorize an authenticated mutation to WRITE to a conversation: the owner,
+ * or an active editor grant (link or per-user). Throws the same opaque "Not
+ * found" used everywhere else for viewers / expired / revoked / none, so a
+ * caller can never tell whether a conversation exists. Returns the conversation
+ * so the caller can reuse it.
+ */
+export async function authorizeConversationWrite(
+	ctx: MutationCtx,
+	userId: string,
+	conversationId: Id<"conversations">,
+	token?: string,
+): Promise<Doc<"conversations">> {
+	const role = await resolveConversationRole(
+		ctx,
+		userId,
+		conversationId,
+		token,
+	);
+	if (role !== "owner" && role !== "editor") {
+		throw new Error("Not found");
+	}
+	const convo = await ctx.db.get(conversationId);
+	if (!convo) throw new Error("Not found");
+	return convo;
+}
+
+// Mirror the FastAPI USER_MESSAGE_MAX_LENGTH so an editor-grant collaborator
+// can't write an oversized message straight to Convex (the FastAPI cap only
+// gates the model turn, not this persistence path).
+export const MAX_MESSAGE_CONTENT_CHARS = 16000;
+
+// Avatar URLs are rendered as <img src> to every viewer of a shared chat, so an
+// arbitrary host would be a tracking-pixel beacon. Restrict to the hosts our
+// auth provider actually serves avatars from (Clerk proxies OAuth avatars
+// through img.clerk.com). A disallowed/garbage URL just falls back to initials.
+const ALLOWED_AVATAR_HOSTS = new Set([
+	"img.clerk.com",
+	"images.clerk.dev",
+	"www.gravatar.com",
+]);
+
+// A client-supplied author/owner snapshot is untrusted, so clamp the name and
+// accept only an https avatar URL on a known host. Name + avatar ONLY — never
+// email (locked product decision).
+function clampAuthorName(name?: string): string | undefined {
+	if (!name) return undefined;
+	const trimmed = name.trim().slice(0, 80);
+	return trimmed || undefined;
+}
+function clampAuthorImageUrl(url?: string): string | undefined {
+	if (!url || url.length > 2048) return undefined;
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		return undefined;
+	}
+	if (parsed.protocol !== "https:") return undefined;
+	if (!ALLOWED_AVATAR_HOSTS.has(parsed.hostname)) return undefined;
+	return url;
+}
+
+/**
+ * Collaborator (editor grant) sends a user message into someone else's shared
+ * conversation. Authenticated; authorization is the active editor grant for
+ * `token`. The message is attributed to the SENDER (userId = identity.subject)
+ * with a client-captured name/avatar snapshot. Mirrors `messages.send` but
+ * gated by the grant rather than ownership. The owner's own sends keep using
+ * `messages.send`; this path is exclusively for collaborators.
+ */
+export const sendShared = mutation({
+	args: {
+		token: v.string(),
+		conversationId: v.id("conversations"),
+		content: v.string(),
+		authorName: v.optional(v.string()),
+		authorImageUrl: v.optional(v.string()),
+		attachments: v.optional(
+			v.array(
+				v.object({
+					storageId: v.id("_storage"),
+					mimeType: v.string(),
+					fileName: v.string(),
+					fileSize: v.number(),
+				}),
+			),
+		),
+	},
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+		if (args.content.length > MAX_MESSAGE_CONTENT_CHARS) {
+			throw new Error("Message too long");
+		}
+		const convo = await authorizeConversationWrite(
+			ctx,
+			identity.subject,
+			args.conversationId,
+			args.token,
+		);
+		const id = await ctx.db.insert("messages", {
+			conversationId: args.conversationId,
+			workspaceId: convo.workspaceId,
+			userId: identity.subject,
+			...(clampAuthorName(args.authorName)
+				? { authorName: clampAuthorName(args.authorName) }
+				: {}),
+			...(clampAuthorImageUrl(args.authorImageUrl)
+				? { authorImageUrl: clampAuthorImageUrl(args.authorImageUrl) }
+				: {}),
+			role: "user",
+			content: args.content,
+			...(args.attachments && args.attachments.length > 0
+				? { attachments: args.attachments }
+				: {}),
+		});
+		await ctx.db.patch(args.conversationId, { lastMessageAt: Date.now() });
+		return id;
+	},
+});
 
 // ── Owner: manage shares ───────────────────────────────────────────────
 
@@ -118,8 +309,8 @@ export const ensurePublicLink = mutation({
 		if (activeLink) {
 			// Keep the owner profile snapshot fresh on re-open.
 			await ctx.db.patch(activeLink._id, {
-				ownerName: args.ownerName,
-				ownerImageUrl: args.ownerImageUrl,
+				ownerName: clampAuthorName(args.ownerName),
+				ownerImageUrl: clampAuthorImageUrl(args.ownerImageUrl),
 			});
 			return {
 				token: activeLink.publicToken as string,
@@ -131,8 +322,8 @@ export const ensurePublicLink = mutation({
 		const grantId = await ctx.db.insert("shareGrants", {
 			conversationId: args.conversationId,
 			ownerUserId: convo.userId,
-			ownerName: args.ownerName,
-			ownerImageUrl: args.ownerImageUrl,
+			ownerName: clampAuthorName(args.ownerName),
+			ownerImageUrl: clampAuthorImageUrl(args.ownerImageUrl),
 			role: args.role,
 			publicToken: args.token,
 			createdAt: Date.now(),
@@ -189,8 +380,8 @@ export const rotatePublicLink = mutation({
 		await ctx.db.insert("shareGrants", {
 			conversationId: args.conversationId,
 			ownerUserId: convo.userId,
-			ownerName: args.ownerName,
-			ownerImageUrl: args.ownerImageUrl,
+			ownerName: clampAuthorName(args.ownerName),
+			ownerImageUrl: clampAuthorImageUrl(args.ownerImageUrl),
 			role,
 			publicToken: args.token,
 			createdAt: Date.now(),
@@ -243,16 +434,14 @@ export const listShareGrants = query({
 				q.eq("conversationId", args.conversationId),
 			)
 			.collect();
-		return grants
-			.filter(isActiveGrant)
-			.map((g) => ({
-				_id: g._id,
-				role: g.role,
-				publicToken: g.publicToken ?? null,
-				grantedToUserId: g.grantedToUserId ?? null,
-				createdAt: g.createdAt,
-				lastAccessedAt: g.lastAccessedAt ?? null,
-			}));
+		return grants.filter(isActiveGrant).map((g) => ({
+			_id: g._id,
+			role: g.role,
+			publicToken: g.publicToken ?? null,
+			grantedToUserId: g.grantedToUserId ?? null,
+			createdAt: g.createdAt,
+			lastAccessedAt: g.lastAccessedAt ?? null,
+		}));
 	},
 });
 
@@ -274,6 +463,14 @@ export const getSharedConversation = query({
 		// so this stays a public query. viewerIsOwner lets the UI send the
 		// owner to their own editable chat instead of the read-only view.
 		const identity = await ctx.auth.getUserIdentity();
+		// Surface the agent loop the conversation's current harness runs on so an
+		// editor's composer picks the default-loop vs ACP-agent send path. Just
+		// the agent id (a non-secret label) — no harness internals leak.
+		let agent: string | null = null;
+		if (convo.lastHarnessId) {
+			const harness = await ctx.db.get(convo.lastHarnessId);
+			agent = harness?.agent ?? "default";
+		}
 		return {
 			conversationId: convo._id,
 			title: convo.title,
@@ -282,6 +479,8 @@ export const getSharedConversation = query({
 			// Author attribution (name + avatar only — never email).
 			ownerName: grant.ownerName ?? null,
 			ownerImageUrl: grant.ownerImageUrl ?? null,
+			// "default" | "claude-code" | "codex" | ... | null (no harness yet).
+			agent,
 		};
 	},
 });
@@ -389,8 +588,14 @@ export const forkSharedConversation = mutation({
 			// Drop the source owner's per-message token/cost accounting (`usage`)
 			// and workspace placement; re-stamp ownership to the forker so the
 			// copy is consistently theirs (the search index filters on userId).
-			const { _id, _creationTime, conversationId, workspaceId, usage, ...rest } =
-				msg;
+			const {
+				_id,
+				_creationTime,
+				conversationId,
+				workspaceId,
+				usage,
+				...rest
+			} = msg;
 			await ctx.db.insert("messages", {
 				...rest,
 				userId: identity.subject,

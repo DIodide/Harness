@@ -126,7 +126,12 @@ export const Route = createFileRoute("/workspaces/")({
 	}),
 	beforeLoad: async ({ context }) => {
 		if (!context.userId) {
-			throw redirect({ to: "/sign-in" });
+			// The server may not see the Clerk session (the cookie hasn't
+			// propagated yet, or a custom FrontendAPI domain). Don't bounce to
+			// /sign-in — that ping-pongs /app↔/workspaces↔/sign-in forever when
+			// the client IS signed in. Render and let the client auth gate
+			// decide, mirroring /app.
+			return;
 		}
 		const settings = await context.queryClient.ensureQueryData(
 			convexQuery(api.userSettings.get, {}),
