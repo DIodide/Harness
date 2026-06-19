@@ -6,6 +6,11 @@ import {
 	useMatch,
 	useRouter,
 } from "@tanstack/react-router";
+import { useEffect } from "react";
+import {
+	isChunkLoadError,
+	reloadOnceForStaleChunk,
+} from "../lib/handle-stale-chunk";
 
 export function DefaultCatchBoundary({ error }: ErrorComponentProps) {
 	const router = useRouter();
@@ -14,7 +19,32 @@ export function DefaultCatchBoundary({ error }: ErrorComponentProps) {
 		select: (state) => state.id === rootRouteId,
 	});
 
+	// Safety net for the case where the stale-chunk rejection reaches the
+	// boundary (e.g. `vite:preloadError` didn't fire): one guarded hard reload
+	// picks up the current build, since router.invalidate() can't refetch a 404.
+	const chunkError = isChunkLoadError(error);
+	useEffect(() => {
+		if (chunkError) reloadOnceForStaleChunk();
+	}, [chunkError]);
+
 	console.error(error);
+
+	if (chunkError) {
+		return (
+			<div className="min-w-0 flex-1 p-4 flex flex-col items-center justify-center gap-6">
+				<p className="text-sm text-muted-foreground">
+					Updating to the latest version…
+				</p>
+				<button
+					type="button"
+					onClick={() => window.location.reload()}
+					className={`px-2 py-1 bg-gray-600 dark:bg-gray-700 rounded-sm text-white uppercase font-extrabold`}
+				>
+					Reload
+				</button>
+			</div>
+		);
+	}
 
 	return (
 		<div className="min-w-0 flex-1 p-4 flex flex-col items-center justify-center gap-6">

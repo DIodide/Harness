@@ -1088,6 +1088,7 @@ function ChatPage() {
 									: undefined
 							}
 							forkedAtMessageCount={activeConversation?.forkedAtMessageCount}
+							forkedFromShareToken={activeConversation?.forkedFromShareToken}
 							onNavigateToConversation={handleSelectConversation}
 							isStreaming={isActiveConvoStreaming}
 							scrollToMessageId={scrollToMessageId}

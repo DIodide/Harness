@@ -35,7 +35,20 @@ export function FileExplorer() {
 	const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 	const [showSearch, setShowSearch] = useState(false);
 
-	const api = useMemo(() => createSandboxApi(getToken), [getToken]);
+	const readOnly = panel?.readOnly ?? false;
+	const api = useMemo(
+		() =>
+			createSandboxApi(
+				getToken,
+				readOnly
+					? {
+							conversationId: panel?.conversationId,
+							shareToken: panel?.shareToken,
+						}
+					: undefined,
+			),
+		[getToken, readOnly, panel?.conversationId, panel?.shareToken],
+	);
 	const sandboxId = panel?.sandboxId;
 	const currentDir = panel?.currentDir ?? "/home/daytona";
 
@@ -110,10 +123,13 @@ export function FileExplorer() {
 
 	const handleContextMenu = useCallback(
 		(e: React.MouseEvent, file: SandboxFile) => {
+			// No New/Rename/Delete for a read-only collaborator — let the native
+			// menu through rather than opening the (mutating) file context menu.
+			if (readOnly) return;
 			e.preventDefault();
 			setContextMenu({ x: e.clientX, y: e.clientY, file });
 		},
-		[],
+		[readOnly],
 	);
 
 	const handleRefresh = useCallback(() => {

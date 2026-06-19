@@ -24,6 +24,7 @@ from app.models import (
     AgentQueuePromptRequest,
     AgentSessionCreateRequest,
     AgentSwitchHarnessRequest,
+    harness_config_from_resolved,
 )
 from app.services.agents.credentials import (
     CredentialCryptoError,
@@ -33,16 +34,28 @@ from app.services.agents.credentials import (
 )
 from app.services.agents.registry import AGENT_REGISTRY, AgentCredentialsError
 from app.services.agents.session_manager import (
+    AgentSession,
     SandboxAccessError,
     get_session_manager,
 )
-from app.services.convex import save_assistant_message
+from app.services.convex import (
+    resolve_collab_harness,
+    save_assistant_message,
+    verify_conversation_access,
+)
 from app.services.mcp_client import UserContext, resolve_princeton_netid
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 USER_MESSAGE_MAX_LENGTH = 16000  # mirror /api/chat/stream
+
+# A collaborator's per-turn override may ONLY touch reasoning effort — never
+# model/mode/etc., which would let an editor reconfigure (and bill-escalate on)
+# the owner's session. The sticky /config route stays owner-only for everything;
+# this is the narrow, restored-after-the-turn exception. Mirrors the web
+# isEffortOption() allowlist.
+_EFFORT_CONFIG_IDS = frozenset({"effort", "reasoning_effort"})
 
 # History is replay context only (the manager replays the last 40 entries,
 # truncated, after a harness switch) — cap what we parse and retain so an
@@ -53,6 +66,53 @@ MAX_HISTORY_MESSAGES = 100
 async def _user_context(http_client: httpx.AsyncClient, user: dict) -> UserContext:
     netid = await resolve_princeton_netid(http_client, user)
     return UserContext(user_id=user.get("sub"), princeton_netid=netid)
+
+
+async def _authorize_session(
+    http_client: httpx.AsyncClient, session_id: str, requester_sub: str,
+) -> AgentSession:
+    """Return the session iff `requester_sub` is the owner or a still-valid
+    editor-grant collaborator. Sessions always run under the OWNER's id; a
+    collaborator's grant is RE-VERIFIED live here (against the token they joined
+    with) so a revoked share loses access immediately. Raises KeyError → 404."""
+    manager = get_session_manager()
+    session = manager.peek(session_id)
+    if session is None:
+        raise KeyError(session_id)
+    if session.user_id == requester_sub:
+        return session  # owner fast-path
+    token = session.collaborator_tokens.get(requester_sub)
+    if not token:
+        raise KeyError(session_id)
+    role = await verify_conversation_access(
+        http_client, session.conversation_id, requester_sub, token
+    )
+    if role in ("owner", "editor"):
+        return session
+    # Grant revoked/expired since they joined — forget them and deny.
+    session.collaborator_tokens.pop(requester_sub, None)
+    raise KeyError(session_id)
+
+
+async def _session_user_ctx(
+    http_client: httpx.AsyncClient, session: AgentSession, user: dict,
+) -> UserContext:
+    """The UserContext a session action runs under: the owner's own (full,
+    with netid) when the owner acts, or the owner's identity with NO netid when
+    a collaborator acts — never borrow the collaborator's Princeton netid for
+    the owner's run."""
+    if session.user_id == user["sub"]:
+        return await _user_context(http_client, user)
+    return UserContext(user_id=session.user_id, princeton_netid=None)
+
+
+def _require_session_owner(session: AgentSession, requester_sub: str) -> None:
+    """Reject collaborators from owner-only actions (reconfigure/close the
+    owner's session). Collaborators may drive turns, not re-wire the session."""
+    if session.user_id != requester_sub:
+        raise HTTPException(
+            status_code=403, detail="Only the conversation owner can do that"
+        )
 
 
 # Cap on a single tool call's accumulated result (terminal output) kept in
@@ -279,29 +339,68 @@ async def create_session(
     user: dict = Depends(get_current_user),
     http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
-    user_ctx = await _user_context(http_client, user)
+    requester = user["sub"]
+    # Authorize against the conversation before binding/provisioning anything.
+    access = await verify_conversation_access(
+        http_client, body.conversation_id, requester, body.token
+    )
+    if access not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="Not authorized for this conversation")
+
+    if access == "editor":
+        # Collaborator: resolve the OWNER's harness server-side and run the
+        # session under the OWNER's identity (credentials, sandbox, billing,
+        # warm runtime all key to the owner). Never trust a client harness.
+        resolved = await resolve_collab_harness(
+            http_client, body.conversation_id, requester, body.token
+        )
+        agent_id = (resolved or {}).get("agent")
+        if not resolved or not agent_id or agent_id == "default":
+            raise HTTPException(
+                status_code=403, detail="This conversation is not an agent chat"
+            )
+        harness = harness_config_from_resolved(resolved)
+        owner_id = resolved["ownerUserId"]
+        user_ctx = UserContext(user_id=owner_id, princeton_netid=None)
+    else:
+        if body.harness is None:
+            raise HTTPException(status_code=422, detail="harness is required")
+        harness = body.harness
+        agent_id = body.agent
+        owner_id = requester
+        user_ctx = await _user_context(http_client, user)
+
     manager = get_session_manager()
     try:
         session = await manager.create(
-            user_id=user["sub"],
-            agent_id=body.agent,
-            harness=body.harness,
+            user_id=owner_id,
+            agent_id=agent_id,
+            harness=harness,
             conversation_id=body.conversation_id,
             user_ctx=user_ctx,
         )
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Unknown agent '{body.agent}'")
+        raise HTTPException(status_code=404, detail=f"Unknown agent '{agent_id}'")
     except SandboxAccessError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except AgentCredentialsError as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+    # Register the collaborator on the (possibly pre-existing, owner-owned)
+    # session so their later prompts/cancels re-verify the live grant.
+    if access == "editor":
+        manager.note_collaborator(session.id, requester, body.token)
     return _session_payload(session)
 
 
 @router.get("/sessions/{session_id}")
-async def get_session(session_id: str, user: dict = Depends(get_current_user)):
+async def get_session(
+    session_id: str,
+    user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+):
     try:
-        session = get_session_manager().get(session_id, user["sub"])
+        session = await _authorize_session(http_client, session_id, user["sub"])
     except KeyError:
         raise HTTPException(status_code=404, detail="Session not found")
     return _session_payload(session)
@@ -318,12 +417,25 @@ async def prompt(
         raise HTTPException(status_code=422, detail="Message too long")
     manager = get_session_manager()
     try:
-        session = manager.get(session_id, user["sub"])
+        session = await _authorize_session(http_client, session_id, user["sub"])
     except KeyError:
         raise HTTPException(status_code=404, detail="Session not found")
-    user_ctx = await _user_context(http_client, user)
+    # Run the turn under the session OWNER's identity (credentials/MCP/billing);
+    # a collaborator drives it but never lends their own identity to the run.
+    effective_user_id = session.user_id
+    user_ctx = await _session_user_ctx(http_client, session, user)
+    requester_sub = user["sub"]
+    requester_token = session.collaborator_tokens.get(requester_sub)
+
+    # Per-turn effort: a collaborator can't persist the owner's sticky session
+    # config, so they pass a per-turn override. Snapshot the current value, apply
+    # for this turn only, and restore in the finally — the session config is the
+    # owner's and must not be mutated past the collaborator's single turn.
+    prev_effort: str | None = None
+    applied_effort_cfg: str | None = None
 
     async def event_stream():
+        nonlocal prev_effort, applied_effort_cfg
         content = ""
         parts: list[dict] = []
         terminal_event = None  # "done" | "error" once the turn concluded
@@ -331,10 +443,33 @@ async def prompt(
         # completes) must become distinct parts, not one merged blob.
         last_text_mid = last_reasoning_mid = object()
         stop_reason = None
+        if body.effort_config_id in _EFFORT_CONFIG_IDS and body.effort_value:
+            prev_effort = next(
+                (
+                    o.get("currentValue")
+                    for o in session.config_options
+                    if o.get("id") == body.effort_config_id
+                ),
+                None,
+            )
+            # Only override when there's a prior value to restore to — otherwise
+            # the collaborator's choice could persist on the owner's session past
+            # the turn (the restore below is gated on prev_effort is not None).
+            if prev_effort is not None and prev_effort != body.effort_value:
+                try:
+                    await manager.set_config_option(
+                        session_id,
+                        effective_user_id,
+                        body.effort_config_id,
+                        body.effort_value,
+                    )
+                    applied_effort_cfg = body.effort_config_id
+                except Exception:
+                    logger.warning("Per-turn effort apply failed; using current effort")
         try:
             async for event in manager.prompt(
                 session_id,
-                user["sub"],
+                effective_user_id,
                 body.message,
                 user_ctx,
                 history=[
@@ -507,7 +642,17 @@ async def prompt(
                     model=f"acp:{session.agent_id}",
                     interrupted=interruption is not None,
                     interruption_reason=interruption,
+                    requester_user_id=requester_sub,
+                    requester_token=requester_token,
                 )
+            # Restore the owner's effort if this turn overrode it.
+            if applied_effort_cfg and prev_effort is not None:
+                try:
+                    await manager.set_config_option(
+                        session_id, effective_user_id, applied_effort_cfg, prev_effort,
+                    )
+                except Exception:
+                    logger.warning("Per-turn effort restore failed")
 
     return EventSourceResponse(event_stream())
 
@@ -517,10 +662,12 @@ async def answer_permission(
     session_id: str,
     body: AgentPermissionAnswer,
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     try:
+        session = await _authorize_session(http_client, session_id, user["sub"])
         await get_session_manager().answer_permission(
-            session_id, user["sub"], body.request_id, body.option_id, body.cancelled,
+            session_id, session.user_id, body.request_id, body.option_id, body.cancelled,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="No such pending permission request")
@@ -532,11 +679,13 @@ async def answer_question(
     session_id: str,
     body: AgentQuestionAnswer,
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Answer an agent question (AskUserQuestion / MCP form elicitation)."""
     try:
+        session = await _authorize_session(http_client, session_id, user["sub"])
         await get_session_manager().answer_question(
-            session_id, user["sub"], body.request_id, body.action, body.content,
+            session_id, session.user_id, body.request_id, body.action, body.content,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="No such pending question")
@@ -548,12 +697,19 @@ async def set_config_option(
     session_id: str,
     body: AgentConfigOptionRequest,
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
-    """Set an ACP session config option (session/set_config_option)."""
+    """Set an ACP session config option (session/set_config_option). Owner-only
+    — collaborators drive turns but don't reconfigure the owner's session."""
     manager = get_session_manager()
     try:
+        session = await _authorize_session(http_client, session_id, user["sub"])
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _require_session_owner(session, user["sub"])
+    try:
         options = await manager.set_config_option(
-            session_id, user["sub"], body.config_id, body.value,
+            session_id, session.user_id, body.config_id, body.value,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -570,6 +726,7 @@ async def queue_prompt(
     session_id: str,
     body: AgentQueuePromptRequest,
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Queue an extra prompt onto an in-flight turn (promptQueueing agents).
 
@@ -578,7 +735,8 @@ async def queue_prompt(
     if len(body.message) > USER_MESSAGE_MAX_LENGTH:
         raise HTTPException(status_code=422, detail="Message too long")
     try:
-        await get_session_manager().queue_prompt(session_id, user["sub"], body.message)
+        session = await _authorize_session(http_client, session_id, user["sub"])
+        await get_session_manager().queue_prompt(session_id, session.user_id, body.message)
     except KeyError:
         raise HTTPException(status_code=404, detail="Session not found")
     except (RuntimeError, PermissionError) as e:
@@ -587,9 +745,14 @@ async def queue_prompt(
 
 
 @router.post("/sessions/{session_id}/cancel")
-async def cancel(session_id: str, user: dict = Depends(get_current_user)):
+async def cancel(
+    session_id: str,
+    user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+):
     try:
-        await get_session_manager().cancel(session_id, user["sub"])
+        session = await _authorize_session(http_client, session_id, user["sub"])
+        await get_session_manager().cancel(session_id, session.user_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"ok": True}
@@ -602,21 +765,40 @@ async def switch_harness(
     user: dict = Depends(get_current_user),
     http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
-    user_ctx = await _user_context(http_client, user)
     manager = get_session_manager()
     try:
-        await manager.switch_harness(session_id, user["sub"], body.harness, user_ctx)
+        session = await _authorize_session(http_client, session_id, user["sub"])
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    # Owner-only: a collaborator must not re-wire the owner's session (and never
+    # has the owner's harness to switch to anyway).
+    _require_session_owner(session, user["sub"])
+    user_ctx = await _user_context(http_client, user)
+    try:
+        await manager.switch_harness(session_id, session.user_id, body.harness, user_ctx)
     except KeyError:
         raise HTTPException(status_code=404, detail="Session not found")
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    return _session_payload(manager.get(session_id, user["sub"]))
+    return _session_payload(manager.get(session_id, session.user_id))
 
 
 @router.delete("/sessions/{session_id}")
-async def close_session(session_id: str, user: dict = Depends(get_current_user)):
+async def close_session(
+    session_id: str,
+    user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+):
+    manager = get_session_manager()
     try:
-        await get_session_manager().close(session_id, user["sub"])
+        session = await _authorize_session(http_client, session_id, user["sub"])
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    # Owner-only: closing kills the shared runtime; a collaborator leaving must
+    # not tear down the owner's (and other collaborators') session.
+    _require_session_owner(session, user["sub"])
+    try:
+        await manager.close(session_id, session.user_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"ok": True}

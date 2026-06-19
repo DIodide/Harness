@@ -15,7 +15,19 @@ export function FileSearch({ onClose }: { onClose: () => void }) {
 	const [searched, setSearched] = useState(false);
 	const inputRef = useRef<HTMLInputElement>(null);
 
-	const api = useMemo(() => createSandboxApi(getToken), [getToken]);
+	const api = useMemo(
+		() =>
+			createSandboxApi(
+				getToken,
+				panel?.readOnly
+					? {
+							conversationId: panel?.conversationId,
+							shareToken: panel?.shareToken,
+						}
+					: undefined,
+			),
+		[getToken, panel?.readOnly, panel?.conversationId, panel?.shareToken],
+	);
 	const sandboxId = panel?.sandboxId;
 	const searchPath = panel?.currentDir ?? "/home/daytona";
 

@@ -1,5 +1,10 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
+import {
+	authorizeConversationWrite,
+	MAX_MESSAGE_CONTENT_CHARS,
+	resolveConversationRole,
+} from "./shares";
 
 export const list = query({
 	args: { conversationId: v.id("conversations") },
@@ -37,6 +42,9 @@ export const send = mutation({
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
+		if (args.content.length > MAX_MESSAGE_CONTENT_CHARS) {
+			throw new Error("Message too long");
+		}
 		const convo = await ctx.db.get(args.conversationId);
 		if (!convo || convo.userId !== identity.subject) {
 			throw new Error("Not found");
@@ -68,7 +76,9 @@ export const send = mutation({
 });
 
 export const remove = mutation({
-	args: { id: v.id("messages") },
+	// `token` lets an editor-grant collaborator delete from a shared
+	// conversation (owners pass nothing). Authorization is the active grant.
+	args: { id: v.id("messages"), token: v.optional(v.string()) },
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
@@ -76,10 +86,12 @@ export const remove = mutation({
 		const message = await ctx.db.get(args.id);
 		if (!message) throw new Error("Not found");
 
-		const convo = await ctx.db.get(message.conversationId);
-		if (!convo || convo.userId !== identity.subject) {
-			throw new Error("Not found");
-		}
+		await authorizeConversationWrite(
+			ctx,
+			identity.subject,
+			message.conversationId,
+			args.token,
+		);
 
 		await ctx.db.delete(args.id);
 	},
@@ -92,7 +104,9 @@ export const remove = mutation({
  * it are orphaned when the new response is appended at the end.
  */
 export const removeFrom = mutation({
-	args: { id: v.id("messages") },
+	// `token` lets an editor-grant collaborator regenerate (which truncates)
+	// from a shared conversation (owners pass nothing).
+	args: { id: v.id("messages"), token: v.optional(v.string()) },
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
@@ -100,10 +114,12 @@ export const removeFrom = mutation({
 		const message = await ctx.db.get(args.id);
 		if (!message) throw new Error("Not found");
 
-		const convo = await ctx.db.get(message.conversationId);
-		if (!convo || convo.userId !== identity.subject) {
-			throw new Error("Not found");
-		}
+		await authorizeConversationWrite(
+			ctx,
+			identity.subject,
+			message.conversationId,
+			args.token,
+		);
 
 		const inConvo = await ctx.db
 			.query("messages")
@@ -121,11 +137,15 @@ export const removeFrom = mutation({
 
 /**
  * Frontend-callable mutation to save a partial assistant message when the user
- * interrupts a streaming response. Auth-gated to the conversation owner.
+ * interrupts a streaming response. Authorized to the owner OR an editor-grant
+ * collaborator (who pass the share `token`). The assistant message is always
+ * owner-attributed (userId = convo.userId) so it stays in the owner's search
+ * index, regardless of who interrupted.
  */
 export const saveInterruptedMessage = mutation({
 	args: {
 		conversationId: v.id("conversations"),
+		token: v.optional(v.string()),
 		content: v.string(),
 		reasoning: v.optional(v.string()),
 		toolCalls: v.optional(
@@ -172,14 +192,17 @@ export const saveInterruptedMessage = mutation({
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
-		const convo = await ctx.db.get(args.conversationId);
-		if (!convo || convo.userId !== identity.subject)
-			throw new Error("Not found");
+		const convo = await authorizeConversationWrite(
+			ctx,
+			identity.subject,
+			args.conversationId,
+			args.token,
+		);
 
 		await ctx.db.insert("messages", {
 			conversationId: args.conversationId,
 			workspaceId: convo.workspaceId,
-			userId: identity.subject,
+			userId: convo.userId,
 			role: "assistant",
 			content: args.content,
 			interrupted: true,
@@ -249,10 +272,27 @@ export const saveAssistantMessage = internalMutation({
 		model: v.optional(v.string()),
 		interrupted: v.optional(v.boolean()),
 		interruptionReason: v.optional(v.string()),
+		// Defense-in-depth: the FastAPI backend passes who triggered the turn
+		// (and the share token they used, when a collaborator). The message is
+		// still owner-attributed, but the mutation re-verifies that a non-owner
+		// requester actually holds an editor grant — so a forgotten FastAPI gate
+		// can never inject an assistant message into a stranger's thread.
+		requesterUserId: v.optional(v.string()),
+		requesterToken: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const convo = await ctx.db.get(args.conversationId);
 		if (!convo) throw new Error("Conversation not found");
+
+		if (args.requesterUserId && args.requesterUserId !== convo.userId) {
+			const role = await resolveConversationRole(
+				ctx,
+				args.requesterUserId,
+				args.conversationId,
+				args.requesterToken,
+			);
+			if (role !== "editor") throw new Error("Not authorized");
+		}
 
 		await ctx.db.insert("messages", {
 			conversationId: args.conversationId,

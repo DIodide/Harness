@@ -124,6 +124,10 @@ export default defineSchema({
 		lastMessageAt: v.number(),
 		forkedFromConversationId: v.optional(v.id("conversations")),
 		forkedAtMessageCount: v.optional(v.number()),
+		// Share link a fork came from, so "jump to original" returns the forker to
+		// the shared page instead of an empty owner-gated /chat (set only when
+		// forked via a public link).
+		forkedFromShareToken: v.optional(v.string()),
 		editParentConversationId: v.optional(v.id("conversations")),
 		editParentMessageCount: v.optional(v.number()),
 		isCreationSession: v.optional(v.boolean()),
@@ -140,6 +144,13 @@ export default defineSchema({
 		conversationId: v.id("conversations"),
 		workspaceId: v.optional(v.id("workspaces")),
 		userId: v.optional(v.string()),
+		// Public profile snapshot of the message's author, captured client-side
+		// from Clerk when a collaborator (editor grant) sends into someone
+		// else's shared conversation — there is no users table to resolve a
+		// Clerk subject to a name later. Name + avatar ONLY, never email.
+		// Absent for the owner's own messages (rendered as the owner).
+		authorName: v.optional(v.string()),
+		authorImageUrl: v.optional(v.string()),
 		role: v.union(v.literal("user"), v.literal("assistant")),
 		content: v.string(),
 		reasoning: v.optional(v.string()),
@@ -379,4 +390,36 @@ export default defineSchema({
 		.index("by_user_day", ["userId", "day"])
 		.index("by_user_week", ["userId", "week"])
 		.index("by_conversation", ["conversationId"]),
+
+	// Per-credential usage for ACP agents (Claude Code, Codex, Cursor). Unlike
+	// usageLedger/usageBudgets (OpenRouter spend Harness pays for and caps),
+	// agent cost is billed to the USER's own agent account, so this is purely
+	// informational — never a budget gate. Cost is the SDK's client-side
+	// `total_cost_usd` ESTIMATE (per-turn), not an authoritative bill. One row
+	// per (acpSession, turn); `turnKey` dedupes a usage_update that fires more
+	// than once per turn or on reconnect. Period totals are summed from these
+	// rows in the query (no rollup table — keeps it correct + simple).
+	agentUsageLedger: defineTable({
+		userId: v.string(),
+		agentCredentialId: v.id("agentCredentials"),
+		agent: v.string(), // "claude-code" | "codex" | "cursor"
+		conversationId: v.id("conversations"),
+		acpSessionId: v.optional(v.string()),
+		model: v.optional(v.string()),
+		usedTokens: v.number(), // usage_update.used (this turn's token total)
+		contextSize: v.optional(v.number()), // usage_update.size (context window)
+		costUsd: v.number(),
+		currency: v.string(),
+		isEstimate: v.boolean(), // SDK client-side estimate, not a bill
+		// Latest Anthropic per-account rate-limit snapshot (_meta._claude/rateLimit),
+		// authoritative-ish quota state; shape is upstream-defined so kept opaque.
+		rateLimit: v.optional(v.any()),
+		turnKey: v.string(), // "<acpSessionId>:<turnIndex>" — idempotency key
+		day: v.string(), // "2026-06-19"
+		week: v.string(), // "2026-W25"
+		recordedAt: v.number(),
+	})
+		.index("by_turnKey", ["turnKey"]) // idempotency lookup
+		.index("by_user", ["userId"]) // getMyAgentUsage
+		.index("by_credential", ["agentCredentialId"]), // cascade-delete on credential removal
 });

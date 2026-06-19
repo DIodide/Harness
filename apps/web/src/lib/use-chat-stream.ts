@@ -181,7 +181,12 @@ export type MessageContent = string | Array<Record<string, unknown>>;
 
 export interface ChatStreamRequest {
 	messages: Array<{ role: string; content: MessageContent }>;
-	harness: {
+	/**
+	 * The caller's own harness. Omitted by an editor-grant collaborator on a
+	 * shared conversation — when `token` is set the server IGNORES any harness
+	 * and resolves the OWNER's harness server-side (billed to the owner).
+	 */
+	harness?: {
 		model: string;
 		mcp_servers: Array<{
 			name: string;
@@ -210,6 +215,18 @@ export interface ChatStreamRequest {
 	 * the user's own agent account — no OpenRouter usage tracking applies.
 	 */
 	agent?: AgentMode;
+	/**
+	 * Editor-grant collaboration: the share link the (signed-in) collaborator
+	 * arrived through. Routes the run through the shared-conversation auth path
+	 * (the server resolves the owner's harness and bills the owner).
+	 */
+	token?: string;
+	/**
+	 * Per-turn reasoning-effort override (agent mode). Used by editor
+	 * collaborators, who can't persist the owner's sticky session config — the
+	 * server applies it for this turn only and restores afterward.
+	 */
+	effort?: { configId: string; value: string };
 }
 
 /**
@@ -323,6 +340,12 @@ async function runAgentStream(
 				message,
 				history,
 				...(blocks.length > 0 ? { blocks } : {}),
+				...(body.effort
+					? {
+							effort_config_id: body.effort.configId,
+							effort_value: body.effort.value,
+						}
+					: {}),
 			}),
 			signal: controller.signal,
 		});
@@ -338,10 +361,11 @@ async function runAgentStream(
 	let sessionId = await ensureAgentSession(
 		token,
 		agent,
-		body.harness as never,
+		(body.harness ?? null) as never,
 		convoId,
 		controller.signal,
 		onProvisioning,
+		body.token,
 	);
 	let response = await prompt(sessionId);
 	if (response.status === 404) {
@@ -350,10 +374,11 @@ async function runAgentStream(
 		sessionId = await ensureAgentSession(
 			token,
 			agent,
-			body.harness as never,
+			(body.harness ?? null) as never,
 			convoId,
 			controller.signal,
 			onProvisioning,
+			body.token,
 		);
 		response = await prompt(sessionId);
 	}

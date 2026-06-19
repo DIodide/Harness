@@ -3,12 +3,18 @@ import json
 import logging
 
 import httpx
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 from app.config import settings
 from app.dependencies import get_current_user, get_http_client
-from app.models import ChatRequest
-from app.services.convex import query_convex, save_assistant_message, patch_message_usage
+from app.models import ChatRequest, harness_config_from_resolved
+from app.services.convex import (
+    query_convex,
+    save_assistant_message,
+    patch_message_usage,
+    resolve_collab_harness,
+    verify_conversation_access,
+)
 from app.services.mcp_client import UserContext, call_tool, resolve_princeton_netid, list_tools
 from app.services.mcp_oauth import get_valid_token, GITHUB_STANDALONE_URL
 from app.services.openrouter import stream_chat, get_max_tokens
@@ -330,22 +336,53 @@ async def chat_stream(
         user.get("sub", "unknown"),
         body.conversation_id,
     )
+    # body.harness is None for an editor-grant collaborator (the server resolves
+    # the owner's harness below) — never dereference it unguarded.
     logger.info(
         "Harness config: sandbox_enabled=%s, sandbox_id=%s, sandbox_config=%s, daytona_key=%s",
-        body.harness.sandbox_enabled,
-        body.harness.sandbox_id,
-        body.harness.sandbox_config,
+        body.harness.sandbox_enabled if body.harness else None,
+        body.harness.sandbox_id if body.harness else None,
+        body.harness.sandbox_config if body.harness else None,
         bool(settings.daytona_api_key),
     )
 
-    user_id = user.get("sub")
-    netid = await resolve_princeton_netid(http_client, user)
-    if not netid:
-        logger.warning(
-            "No Princeton netid for user '%s' (primary email: '%s')",
-            user_id,
-            user.get("email", "<MISSING>"),
+    requester_user_id = user.get("sub")
+    user_id = requester_user_id
+
+    # ── Authorization gate (closes the cross-user write/inject hole) ──
+    # Every chat run must be authorized against its conversation BEFORE any
+    # persistence or spend. Owner OR active editor grant only.
+    access = await verify_conversation_access(
+        http_client, body.conversation_id, requester_user_id, body.token
+    )
+    if access not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="Not authorized for this conversation")
+
+    # A collaborator must not be shown the owner's infrastructure details (MCP
+    # server URLs, sandbox id) in stream frames — non-secret, but the owner's.
+    is_collab = access == "editor"
+    if access == "editor":
+        # Collaborator turn: NEVER trust a client-supplied harness — resolve the
+        # owner's harness server-side and bill/resolve everything as the owner.
+        resolved = await resolve_collab_harness(
+            http_client, body.conversation_id, requester_user_id, body.token
         )
+        if not resolved:
+            raise HTTPException(status_code=403, detail="Not authorized for this conversation")
+        body.harness = harness_config_from_resolved(resolved)
+        user_id = resolved["ownerUserId"]
+        # Don't borrow the collaborator's Princeton netid for the owner's run.
+        netid = None
+    else:
+        if body.harness is None:
+            raise HTTPException(status_code=422, detail="harness is required")
+        netid = await resolve_princeton_netid(http_client, user)
+        if not netid:
+            logger.warning(
+                "No Princeton netid for user '%s' (primary email: '%s')",
+                user_id,
+                user.get("email", "<MISSING>"),
+            )
     user_ctx = UserContext(
         user_id=user_id,
         princeton_netid=netid,
@@ -409,14 +446,15 @@ async def chat_stream(
             if not tools:
                 tools = None
 
-            # Notify frontend about MCP servers that failed to connect
+            # Notify frontend about MCP servers that failed to connect. The URL
+            # is the OWNER's infrastructure — omit it for a collaborator.
             for failure in mcp_failures:
                 yield {
                     "event": "mcp_error",
                     "data": json.dumps(
                         {
                             "server_name": failure.server_name,
-                            "server_url": failure.server_url,
+                            "server_url": None if is_collab else failure.server_url,
                             "reason": failure.reason,
                         }
                     ),
@@ -482,7 +520,14 @@ async def chat_stream(
                 )
                 yield {
                     "event": "sandbox_status",
-                    "data": json.dumps({"sandbox_id": sandbox_id, "status": "active"}),
+                    "data": json.dumps(
+                        {
+                            # Owner's sandbox id — confers no capability (all
+                            # sandbox routes re-check ownership) but it's theirs.
+                            "sandbox_id": None if is_collab else sandbox_id,
+                            "status": "active",
+                        }
+                    ),
                 }
 
         # Resolve GitHub OAuth credentials for sandbox git operations.
@@ -867,6 +912,8 @@ async def chat_stream(
                     parts=all_parts or None,
                     usage=usage_for_convex,
                     model=collected_model,
+                    requester_user_id=requester_user_id,
+                    requester_token=body.token,
                 )
 
                 # Record usage for budget tracking

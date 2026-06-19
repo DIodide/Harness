@@ -1,4 +1,5 @@
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
+import { useNavigate } from "@tanstack/react-router";
 import { ChevronDown, ChevronRight, Sparkles } from "lucide-react";
 import { motion } from "motion/react";
 import React, {
@@ -24,7 +25,7 @@ import { type DisplayMode, MessageActions } from "../message-actions";
 import { MessageAttachments } from "../message-attachments";
 import { PendingResponseIndicator } from "../pending-response-indicator";
 import { RoseCurveSpinner } from "../rose-curve-spinner";
-import { Avatar, AvatarFallback } from "../ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { StreamingUsage, ThinkingBlock, ToolCallBlock } from "./message-blocks";
 
 /** Superset of stream parts and persisted Convex parts. */
@@ -258,6 +259,7 @@ export function ChatMessages({
 	activeConversation,
 	forkedFromConversationId,
 	forkedFromConversationTitle,
+	forkedFromShareToken,
 	forkedAtMessageCount,
 	onNavigateToConversation,
 	isStreaming,
@@ -295,6 +297,10 @@ export function ChatMessages({
 		};
 		model?: string;
 		interrupted?: boolean;
+		// Author attribution snapshot for collaborator-sent messages (name +
+		// avatar only). Absent on the owner's own messages.
+		authorName?: string;
+		authorImageUrl?: string;
 		attachments?: Array<{
 			storageId: Id<"_storage">;
 			mimeType: string;
@@ -340,6 +346,7 @@ export function ChatMessages({
 		| undefined;
 	forkedFromConversationId?: Id<"conversations">;
 	forkedFromConversationTitle?: string;
+	forkedFromShareToken?: string;
 	forkedAtMessageCount?: number;
 	onNavigateToConversation: (convoId: Id<"conversations"> | null) => void;
 	isStreaming: boolean;
@@ -351,6 +358,7 @@ export function ChatMessages({
 	/** Shared view: resolve attachment URLs through the token-scoped query. */
 	shareToken?: string;
 }) {
+	const navigate = useNavigate();
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null);
 	// "Pinned to bottom" — when true, auto-scroll follows new content.
@@ -850,7 +858,12 @@ export function ChatMessages({
 														: undefined
 												}
 												onEditPrompt={
-													msg.role === "user" && i === lastUserMsgIdx
+													// Editing a prompt forks-and-resends, which is owner-
+													// centric; collaborators (shareToken set) send and
+													// regenerate but don't rewrite the owner's prompts.
+													msg.role === "user" &&
+													i === lastUserMsgIdx &&
+													!shareToken
 														? () => onStartEditPrompt(msg._id, msg.content)
 														: undefined
 												}
@@ -900,8 +913,16 @@ export function ChatMessages({
 									</div>
 									{msg.role === "user" && (
 										<Avatar className="h-7 w-7 shrink-0">
+											{msg.authorImageUrl && (
+												<AvatarImage
+													src={msg.authorImageUrl}
+													alt={msg.authorName ?? "User"}
+												/>
+											)}
 											<AvatarFallback className="bg-muted text-foreground text-[10px]">
-												U
+												{msg.authorName
+													? msg.authorName.charAt(0).toUpperCase()
+													: "U"}
 											</AvatarFallback>
 										</Avatar>
 									)}
@@ -913,11 +934,23 @@ export function ChatMessages({
 											Branched from{" "}
 											<button
 												type="button"
-												onClick={() =>
-													onNavigateToConversation(
-														forkedFromConversationId ?? null,
-													)
-												}
+												onClick={() => {
+													// A fork can ONLY come from a share link, so the
+													// forker never owns the original — route them back to
+													// the shared page, not an empty owner-gated /chat. (A
+													// since-revoked link lands on the neutral "not
+													// available" page, which is the correct UX.)
+													if (forkedFromShareToken) {
+														navigate({
+															to: "/share/$token",
+															params: { token: forkedFromShareToken },
+														});
+													} else {
+														onNavigateToConversation(
+															forkedFromConversationId ?? null,
+														);
+													}
+												}}
 												className="font-medium text-foreground underline underline-offset-2 hover:text-foreground/80"
 											>
 												{forkedFromConversationTitle}

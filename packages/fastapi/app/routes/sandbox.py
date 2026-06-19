@@ -13,9 +13,9 @@ import shlex
 
 import httpx
 from daytona_sdk import DaytonaNotFoundError
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import Response
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, get_http_client
 from app.models import (
     SandboxCreateRequest,
     SandboxExecuteRequest,
@@ -30,6 +30,7 @@ from app.services.convex import (
     SandboxRecordError,
     create_sandbox_record,
     verify_sandbox_owner,
+    verify_sandbox_read_access,
 )
 from app.services.daytona_service import (
     RESOURCE_TIERS,
@@ -47,12 +48,36 @@ def _get_service() -> DaytonaService:
 
 
 async def _assert_sandbox_owner(sandbox_id: str, user: dict) -> None:
-    """Raise 403 if the authenticated user does not own the sandbox."""
+    """Raise 403 if the authenticated user does not own the sandbox. Used by
+    every MUTATING / lifecycle / terminal route — collaborators never pass."""
     user_id = user.get("sub")
     if not await verify_sandbox_owner(sandbox_id, user_id):
         raise HTTPException(
             status_code=403, detail="You do not have access to this sandbox"
         )
+
+
+async def _assert_sandbox_read_access(
+    sandbox_id: str,
+    user: dict,
+    conversation_id: str | None,
+    token: str | None,
+    http_client: httpx.AsyncClient,
+) -> None:
+    """Authorize a READ-ONLY sandbox op: the owner, OR an editor-grant
+    collaborator on `conversation_id` whose owner's harness is bound to this
+    sandbox. Only the read routes use this; mutating routes stay owner-only, so
+    even a forged write to a browsable sandbox still 403s."""
+    sub = user.get("sub")
+    if await verify_sandbox_owner(sandbox_id, sub):
+        return
+    if conversation_id and await verify_sandbox_read_access(
+        http_client, conversation_id, sandbox_id, sub, token
+    ):
+        return
+    raise HTTPException(
+        status_code=403, detail="You do not have access to this sandbox"
+    )
 
 
 @router.post("")
@@ -123,10 +148,15 @@ async def create_sandbox(
 @router.get("/{sandbox_id}")
 async def get_sandbox(
     sandbox_id: str,
+    conversation_id: str | None = Query(default=None),
+    x_share_token: str | None = Header(default=None),
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Get sandbox details and status."""
-    await _assert_sandbox_owner(sandbox_id, user)
+    await _assert_sandbox_read_access(
+        sandbox_id, user, conversation_id, x_share_token, http_client
+    )
     service = _get_service()
     try:
         sandbox = service.get_sandbox(sandbox_id)
@@ -252,10 +282,15 @@ async def run_command(
 async def list_files(
     sandbox_id: str,
     path: str = Query(default="/home/daytona"),
+    conversation_id: str | None = Query(default=None),
+    x_share_token: str | None = Header(default=None),
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """List files in a sandbox directory."""
-    await _assert_sandbox_owner(sandbox_id, user)
+    await _assert_sandbox_read_access(
+        sandbox_id, user, conversation_id, x_share_token, http_client
+    )
     service = _get_service()
     try:
         files = service.list_files(sandbox_id, path)
@@ -275,10 +310,15 @@ async def list_files(
 async def read_file(
     sandbox_id: str,
     path: str = Query(...),
+    conversation_id: str | None = Query(default=None),
+    x_share_token: str | None = Header(default=None),
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Read a file from a sandbox."""
-    await _assert_sandbox_owner(sandbox_id, user)
+    await _assert_sandbox_read_access(
+        sandbox_id, user, conversation_id, x_share_token, http_client
+    )
     service = _get_service()
     try:
         content = service.read_file(sandbox_id, path)
@@ -309,10 +349,15 @@ async def write_file(
 async def download_file(
     sandbox_id: str,
     path: str = Query(...),
+    conversation_id: str | None = Query(default=None),
+    x_share_token: str | None = Header(default=None),
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Download a raw file from a sandbox (images, binaries, etc.)."""
-    await _assert_sandbox_owner(sandbox_id, user)
+    await _assert_sandbox_read_access(
+        sandbox_id, user, conversation_id, x_share_token, http_client
+    )
     service = _get_service()
     try:
         data = service.download_file_bytes(sandbox_id, path)
@@ -322,7 +367,9 @@ async def download_file(
         return Response(
             content=data,
             media_type=content_type,
-            headers={"Cache-Control": "public, max-age=300"},
+            # private: a collaborator may now read the owner's sandbox files —
+            # keep them out of shared/proxy caches.
+            headers={"Cache-Control": "private, max-age=60"},
         )
     except HTTPException:
         raise
@@ -388,10 +435,15 @@ async def search_files(
     sandbox_id: str,
     path: str = Query(default="/home/daytona"),
     pattern: str = Query(...),
+    conversation_id: str | None = Query(default=None),
+    x_share_token: str | None = Header(default=None),
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Search file contents in a sandbox (grep-like)."""
-    await _assert_sandbox_owner(sandbox_id, user)
+    await _assert_sandbox_read_access(
+        sandbox_id, user, conversation_id, x_share_token, http_client
+    )
     service = _get_service()
     try:
         matches = service.search_file_contents(sandbox_id, path, pattern)
@@ -405,10 +457,15 @@ async def search_files(
 async def git_status(
     sandbox_id: str,
     path: str = Query(...),
+    conversation_id: str | None = Query(default=None),
+    x_share_token: str | None = Header(default=None),
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Get git status for a repo in a sandbox."""
-    await _assert_sandbox_owner(sandbox_id, user)
+    await _assert_sandbox_read_access(
+        sandbox_id, user, conversation_id, x_share_token, http_client
+    )
     service = _get_service()
     # First check if this is a git repo via a simple command
     try:
@@ -477,10 +534,15 @@ async def git_diff(
     sandbox_id: str,
     path: str = Query(...),
     staged: bool = Query(default=False),
+    conversation_id: str | None = Query(default=None),
+    x_share_token: str | None = Header(default=None),
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Get git diff."""
-    await _assert_sandbox_owner(sandbox_id, user)
+    await _assert_sandbox_read_access(
+        sandbox_id, user, conversation_id, x_share_token, http_client
+    )
     service = _get_service()
     try:
         diff = service.git_diff(sandbox_id, path, staged=staged)
@@ -495,10 +557,15 @@ async def git_log(
     sandbox_id: str,
     path: str = Query(...),
     count: int = Query(default=20),
+    conversation_id: str | None = Query(default=None),
+    x_share_token: str | None = Header(default=None),
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Get git log."""
-    await _assert_sandbox_owner(sandbox_id, user)
+    await _assert_sandbox_read_access(
+        sandbox_id, user, conversation_id, x_share_token, http_client
+    )
     service = _get_service()
     try:
         commits = service.git_log(sandbox_id, path, count=count)
@@ -512,10 +579,15 @@ async def git_log(
 async def git_branches(
     sandbox_id: str,
     path: str = Query(...),
+    conversation_id: str | None = Query(default=None),
+    x_share_token: str | None = Header(default=None),
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """List git branches."""
-    await _assert_sandbox_owner(sandbox_id, user)
+    await _assert_sandbox_read_access(
+        sandbox_id, user, conversation_id, x_share_token, http_client
+    )
     service = _get_service()
     try:
         result = service.git_branches(sandbox_id, path)

@@ -13,6 +13,7 @@ from app.services.usage import (
     _next_daily_reset,
     _next_weekly_reset,
     check_user_budget,
+    record_agent_usage,
     record_usage,
 )
 
@@ -239,3 +240,83 @@ class TestRecordUsage:
                 {"cost": 0.001},
             )
         # no exception propagates
+
+
+def _agent_kwargs(**over):
+    base = dict(
+        user_id="u1",
+        agent_credential_id="cred1",
+        agent="claude-code",
+        conversation_id="c1",
+        acp_session_id="sess1",
+        model="claude-opus-4-8",
+        used_tokens=1234,
+        context_size=80000,
+        cost=0.0456,
+        currency="USD",
+        turn_key="sess1:3",
+        rate_limit=None,
+    )
+    base.update(over)
+    return base
+
+
+class TestRecordAgentUsage:
+    async def test_skips_when_not_configured(self, no_convex_settings):
+        async with httpx.AsyncClient() as client:
+            await record_agent_usage(client, **_agent_kwargs())
+        # no exception — noop when Convex isn't configured
+
+    @respx.mock
+    async def test_posts_agent_usage_with_all_fields(self, convex_settings):
+        route = respx.post(f"{CONVEX_URL}/api/mutation").mock(
+            return_value=httpx.Response(200, json={"value": None})
+        )
+        async with httpx.AsyncClient() as client:
+            await record_agent_usage(
+                client, **_agent_kwargs(rate_limit={"remaining": 10})
+            )
+        import json as _json
+        body = _json.loads(route.calls.last.request.content)
+        assert body["path"] == "agentUsage:record"
+        a = body["args"]
+        assert a["agentCredentialId"] == "cred1"
+        assert a["agent"] == "claude-code"
+        assert a["conversationId"] == "c1"
+        assert a["acpSessionId"] == "sess1"
+        assert a["model"] == "claude-opus-4-8"
+        assert a["usedTokens"] == 1234
+        assert a["contextSize"] == 80000
+        assert a["costUsd"] == 0.0456
+        assert a["turnKey"] == "sess1:3"
+        assert a["rateLimit"] == {"remaining": 10}
+        assert "day" in a and "week" in a
+
+    @respx.mock
+    async def test_omits_optional_fields_when_none(self, convex_settings):
+        route = respx.post(f"{CONVEX_URL}/api/mutation").mock(
+            return_value=httpx.Response(200, json={"value": None})
+        )
+        async with httpx.AsyncClient() as client:
+            await record_agent_usage(
+                client,
+                **_agent_kwargs(
+                    acp_session_id=None, model=None, context_size=None, rate_limit=None
+                ),
+            )
+        import json as _json
+        a = _json.loads(route.calls.last.request.content)["args"]
+        for k in ("acpSessionId", "model", "contextSize", "rateLimit"):
+            assert k not in a
+        # required fields still present
+        assert a["usedTokens"] == 1234
+        assert a["costUsd"] == 0.0456
+
+    @respx.mock
+    async def test_swallows_http_errors(self, convex_settings):
+        respx.post(f"{CONVEX_URL}/api/mutation").mock(
+            return_value=httpx.Response(500, text="nope")
+        )
+        async with httpx.AsyncClient() as client:
+            await record_agent_usage(client, **_agent_kwargs())
+        # fail-soft: no exception propagates

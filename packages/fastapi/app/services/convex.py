@@ -85,10 +85,15 @@ async def save_assistant_message(
     model: str | None = None,
     interrupted: bool = False,
     interruption_reason: str | None = None,
+    requester_user_id: str | None = None,
+    requester_token: str | None = None,
 ) -> None:
     """Save an assistant message to Convex via the HTTP API.
 
     Uses the deploy key for admin auth, which allows calling internal mutations.
+    `requester_user_id`/`requester_token` identify who triggered the turn so
+    the mutation can re-verify a non-owner collaborator actually holds an editor
+    grant (defense-in-depth) — the message itself stays owner-attributed.
     """
     if not settings.convex_url or not settings.convex_deploy_key:
         logger.warning("Convex not configured — skipping message save")
@@ -114,6 +119,10 @@ async def save_assistant_message(
         args["interrupted"] = True
     if interruption_reason:
         args["interruptionReason"] = interruption_reason
+    if requester_user_id:
+        args["requesterUserId"] = requester_user_id
+    if requester_token:
+        args["requesterToken"] = requester_token
 
     try:
         resp = await http_client.post(
@@ -186,6 +195,105 @@ async def patch_message_usage(
         logger.exception(
             "Failed to patch usage for conversation '%s'", conversation_id
         )
+
+
+async def verify_conversation_access(
+    http_client: httpx.AsyncClient,
+    conversation_id: str,
+    user_id: str,
+    token: str | None = None,
+) -> str:
+    """Resolve the caller's role on a conversation: 'owner'|'editor'|'viewer'|'none'.
+
+    The authorization gate for every chat/agent write+spend path. Fails CLOSED
+    (returns 'none') on any error when Convex is configured — this is an
+    AUTHORIZATION decision, so it mirrors verify_sandbox_owner, NOT the
+    deliberately fail-OPEN check_user_budget. `token` is the share link the
+    collaborator arrived through (link-first editor grants).
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        if settings.convex_url or settings.convex_deploy_key:
+            logger.error(
+                "Convex partially configured — denying conversation access check",
+            )
+            return "none"
+        logger.warning("Convex not configured — skipping access check (dev only)")
+        return "owner"
+
+    args: dict = {"conversationId": conversation_id, "userId": user_id}
+    if token:
+        args["token"] = token
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/query",
+            headers={"Authorization": f"Convex {settings.convex_deploy_key}"},
+            json={
+                "path": "shares:checkConversationAccess",
+                "args": args,
+                "format": "json",
+            },
+            timeout=5.0,
+        )
+        resp.raise_for_status()
+        role = resp.json().get("value")
+        if role not in ("owner", "editor", "viewer", "none"):
+            logger.warning("checkConversationAccess returned %r — denying", role)
+            return "none"
+        return role
+    except Exception:
+        logger.exception(
+            "Failed to verify conversation access for '%s' — denying (fail-closed)",
+            conversation_id,
+        )
+        return "none"
+
+
+async def resolve_collab_harness(
+    http_client: httpx.AsyncClient,
+    conversation_id: str,
+    requester_user_id: str,
+    token: str | None,
+) -> dict | None:
+    """Resolve the OWNER's harness for an authorized collaborator's turn.
+
+    Server-side only (deploy key) — the collaborator's browser never receives
+    the owner's harness/secrets. Returns None on any denial or missing harness
+    (the caller must treat None as 'not authorized / nothing to run').
+    """
+    args: dict = {
+        "conversationId": conversation_id,
+        "requesterUserId": requester_user_id,
+    }
+    if token:
+        args["token"] = token
+    return await query_convex(http_client, "harnesses:resolveForCollab", args)
+
+
+async def verify_sandbox_read_access(
+    http_client: httpx.AsyncClient,
+    conversation_id: str,
+    sandbox_id: str,
+    user_id: str,
+    token: str | None,
+) -> bool:
+    """Allow READ-ONLY sandbox access for an editor-grant collaborator on
+    `conversation_id` whose owner's harness is bound to `sandbox_id`.
+
+    Fails CLOSED. The sandbox id is BOUND to the conversation: a collaborator
+    can only read the sandbox their conversation's owner actually uses — never
+    an arbitrary sandbox id they name. resolve_collab_harness returns None for
+    viewer/none (so this grants editors only) and resolves the OWNER's sandbox
+    id server-side.
+    """
+    if not conversation_id:
+        return False
+    resolved = await resolve_collab_harness(
+        http_client, conversation_id, user_id, token
+    )
+    if not resolved:
+        return False
+    owner_sandbox = resolved.get("sandboxId")
+    return bool(owner_sandbox) and owner_sandbox == sandbox_id
 
 
 async def verify_sandbox_owner(

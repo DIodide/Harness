@@ -11,11 +11,14 @@ import toast from "react-hot-toast";
 import { DefaultCatchBoundary } from "./components/DefaultCatchBoundary";
 import { NotFound } from "./components/NotFound";
 import { env } from "./env";
+import { registerStaleChunkRecovery } from "./lib/handle-stale-chunk";
 import { routeTree } from "./routeTree.gen";
 
 export function getRouter() {
 	if (typeof document !== "undefined") {
 		notifyManager.setScheduler(window.requestAnimationFrame);
+		// Auto-recover stale dynamic-import chunks after a redeploy (see helper).
+		registerStaleChunkRecovery();
 	}
 
 	const convex = new ConvexReactClient(env.VITE_CONVEX_URL, {
