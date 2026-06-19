@@ -50,6 +50,13 @@ logger = logging.getLogger(__name__)
 
 USER_MESSAGE_MAX_LENGTH = 16000  # mirror /api/chat/stream
 
+# A collaborator's per-turn override may ONLY touch reasoning effort — never
+# model/mode/etc., which would let an editor reconfigure (and bill-escalate on)
+# the owner's session. The sticky /config route stays owner-only for everything;
+# this is the narrow, restored-after-the-turn exception. Mirrors the web
+# isEffortOption() allowlist.
+_EFFORT_CONFIG_IDS = frozenset({"effort", "reasoning_effort"})
+
 # History is replay context only (the manager replays the last 40 entries,
 # truncated, after a harness switch) — cap what we parse and retain so an
 # oversized payload can't bypass the message-length guard.
@@ -436,7 +443,7 @@ async def prompt(
         # completes) must become distinct parts, not one merged blob.
         last_text_mid = last_reasoning_mid = object()
         stop_reason = None
-        if body.effort_config_id and body.effort_value:
+        if body.effort_config_id in _EFFORT_CONFIG_IDS and body.effort_value:
             prev_effort = next(
                 (
                     o.get("currentValue")
@@ -445,16 +452,20 @@ async def prompt(
                 ),
                 None,
             )
-            try:
-                await manager.set_config_option(
-                    session_id,
-                    effective_user_id,
-                    body.effort_config_id,
-                    body.effort_value,
-                )
-                applied_effort_cfg = body.effort_config_id
-            except Exception:
-                logger.warning("Per-turn effort apply failed; using current effort")
+            # Only override when there's a prior value to restore to — otherwise
+            # the collaborator's choice could persist on the owner's session past
+            # the turn (the restore below is gated on prev_effort is not None).
+            if prev_effort is not None and prev_effort != body.effort_value:
+                try:
+                    await manager.set_config_option(
+                        session_id,
+                        effective_user_id,
+                        body.effort_config_id,
+                        body.effort_value,
+                    )
+                    applied_effort_cfg = body.effort_config_id
+                except Exception:
+                    logger.warning("Per-turn effort apply failed; using current effort")
         try:
             async for event in manager.prompt(
                 session_id,

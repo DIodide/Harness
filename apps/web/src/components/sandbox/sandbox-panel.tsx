@@ -296,8 +296,11 @@ export function SandboxPanel() {
 					</AnimatePresence>
 				)}
 
-				{/* Terminal — always mounted, hidden via CSS to preserve state */}
-				{sandboxId && (
+				{/* Terminal — always mounted, hidden via CSS to preserve state.
+				    Never mount it for a read-only collaborator: WebTerminal
+				    auto-connects on mount, which would open rejected WS connects
+				    to the owner's sandbox terminal. */}
+				{sandboxId && !readOnly && (
 					<div
 						className={cn(
 							"flex flex-1 flex-col overflow-hidden",
