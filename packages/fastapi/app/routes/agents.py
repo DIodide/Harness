@@ -43,6 +43,7 @@ from app.services.convex import (
     save_assistant_message,
     verify_conversation_access,
 )
+from app.services import stream_bus
 from app.services.mcp_client import UserContext, resolve_princeton_netid
 
 router = APIRouter()
@@ -654,7 +655,10 @@ async def prompt(
                 except Exception:
                     logger.warning("Per-turn effort restore failed")
 
-    return EventSourceResponse(event_stream())
+    # Tee display events into the Redis bus for live fan-out to passive viewers.
+    return EventSourceResponse(
+        stream_bus.tee(event_stream(), session.conversation_id)
+    )
 
 
 @router.post("/sessions/{session_id}/permission")

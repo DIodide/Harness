@@ -3,10 +3,14 @@ import json
 import logging
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 from app.config import settings
-from app.dependencies import get_current_user, get_http_client
+from app.dependencies import (
+    get_current_user,
+    get_current_user_optional,
+    get_http_client,
+)
 from app.models import ChatRequest, harness_config_from_resolved
 from app.services.convex import (
     query_convex,
@@ -25,6 +29,7 @@ from app.services.sandbox_tools import (
     execute_sandbox_tool,
 )
 from app.services.daytona_service import get_daytona_service
+from app.services import stream_bus
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -1130,7 +1135,46 @@ async def chat_stream(
             "data": json.dumps({"message": "Max tool call iterations reached"}),
         }
 
-    return EventSourceResponse(event_generator())
+    # Tee every display event into the Redis bus so passive viewers (the owner's
+    # other tabs, a sharee, a late joiner) see the same tokens render live.
+    return EventSourceResponse(
+        stream_bus.tee(event_generator(), body.conversation_id)
+    )
+
+
+@router.get("/follow")
+async def follow_stream(
+    conversation_id: str = Query(...),
+    token: str | None = Query(default=None),
+    user: dict | None = Depends(get_current_user_optional),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+):
+    """Read-only live token feed for a PASSIVE viewer of a conversation.
+
+    Authorized exactly like a shared read: the owner (JWT) or an active grant
+    (editor/viewer) for the share `token` — including an anonymous viewer with a
+    valid token. Replays the current turn then tails the conversation's Redis
+    stream. Emits nothing (and idles) when Redis is unconfigured.
+    """
+    # A fully anonymous caller must present a share token — never fall through to
+    # an identity-less access check (defense against a misconfigured/empty-Convex
+    # backend whose access oracle would otherwise dev-fallback to "owner").
+    if user is None and not token:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    user_id = (user or {}).get("sub") or ""
+    access = await verify_conversation_access(
+        http_client, conversation_id, user_id, token
+    )
+    if access not in ("owner", "editor", "viewer"):
+        raise HTTPException(
+            status_code=403, detail="Not authorized for this conversation"
+        )
+
+    async def gen():
+        async for ev in stream_bus.follow(conversation_id):
+            yield {"event": ev["event"], "data": ev["data"]}
+
+    return EventSourceResponse(gen())
 
 
 async def _save_interrupted(
