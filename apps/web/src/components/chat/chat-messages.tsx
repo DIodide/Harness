@@ -569,7 +569,9 @@ export function ChatMessages({
 		return (
 			<div className="flex flex-1 items-center justify-center">
 				<p className="text-sm text-muted-foreground">
-					Send a message to start the conversation.
+					{readOnly
+						? "This conversation has no messages yet."
+						: "Send a message to start the conversation."}
 				</p>
 			</div>
 		);

@@ -252,6 +252,11 @@ export default defineSchema({
 		// = conversation.userId at mint time (denormalized so the public
 		// query never has to expose the owner id and revocation is cheap).
 		ownerUserId: v.string(),
+		// Owner's public profile snapshot for author attribution on the shared
+		// view (name + avatar ONLY — never email; captured client-side from
+		// Clerk at share time since there is no users table). Best-effort.
+		ownerName: v.optional(v.string()),
+		ownerImageUrl: v.optional(v.string()),
 		role: v.union(v.literal("viewer"), v.literal("editor")),
 		// Exactly one of these identifies the grantee.
 		grantedToUserId: v.optional(v.string()),
