@@ -351,13 +351,14 @@ class AcpConnection:
             timeout=60.0,
         )
 
-    async def new_session(self, cwd: str, mcp_servers: list[dict]) -> dict:
+    async def new_session(
+        self, cwd: str, mcp_servers: list[dict], meta: dict | None = None
+    ) -> dict:
         """Returns the full session/new result (sessionId, configOptions, modes)."""
-        return await self.request(
-            "session/new",
-            {"cwd": cwd, "mcpServers": mcp_servers},
-            timeout=120.0,
-        )
+        params: dict = {"cwd": cwd, "mcpServers": mcp_servers}
+        if meta:
+            params["_meta"] = meta
+        return await self.request("session/new", params, timeout=120.0)
 
     async def set_config_option(
         self, session_id: str, config_id: str, value: str,

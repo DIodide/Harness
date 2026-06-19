@@ -578,6 +578,131 @@ def normalize_session_update(update: dict) -> dict | None:
     return None
 
 
+# claude-agent-acp re-emits raw Claude Agent SDK messages as a `_claude/sdkMessage`
+# notification when session/new opts in via `_meta.claudeCode.emitRawSDKMessages`.
+# `type` is a plain string in the filter schema, so listing both the documented
+# top-level shape (`type: "task_*"`) and the older system+subtype shape costs
+# nothing — whichever the running SDK uses matches, the other matches nothing.
+SDK_TASK_MESSAGE_FILTERS = [
+    {"type": "task_started"},
+    {"type": "task_progress"},
+    {"type": "task_updated"},
+    {"type": "task_notification"},
+    {"type": "system", "subtype": "task_started"},
+    {"type": "system", "subtype": "task_progress"},
+    {"type": "system", "subtype": "task_updated"},
+    {"type": "system", "subtype": "task_notification"},
+]
+
+_TASK_PHASES = {"task_started", "task_progress", "task_updated", "task_notification"}
+_TASK_TERMINAL = {"completed", "failed", "killed", "cancelled"}
+
+
+def _first_str(message: dict, *keys: str) -> str | None:
+    """First present, non-empty string value among `keys` (defensive: the SDK
+    task-message schema varies across versions / camel vs snake case)."""
+    for key in keys:
+        value = message.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def normalize_sdk_task_message(message: dict) -> list[dict]:
+    """Map a Claude Agent SDK task-lifecycle message into Harness SSE events.
+
+    Claude's Workflow tool (multi-agent orchestration) and Task subagents run
+    *inside* the agent; claude-agent-acp drops their ``task_started/progress/
+    updated/notification`` SDK messages, so their activity is otherwise
+    invisible. With emitRawSDKMessages on we receive them here and reuse the
+    existing subagent ``tool_call``/``tool_result`` vocabulary so each workflow
+    agent renders in the timeline and the Agents panel with live status.
+
+    Every field is read permissively — the exact schema is external and
+    version-dependent — and anything unrecognized degrades to ``[]``.
+    """
+    if not isinstance(message, dict):
+        return []
+    mtype = message.get("type")
+    phase = message.get("subtype") if mtype == "system" else mtype
+    if phase not in _TASK_PHASES:
+        return []
+    task_id = _first_str(message, "task_id", "taskId", "uuid")
+    if not task_id:
+        return []
+    # Namespaced so it can never collide with an ACP toolCallId from the normal
+    # session/update path (these are a parallel id space).
+    call_id = f"wf-task:{task_id}"
+    # If the spawning tool-use id is known, nest under it; the frontend falls
+    # back to top-level when the parent isn't present in the turn.
+    parent = _first_str(
+        message, "tool_use_id", "toolUseId", "parent_tool_use_id", "parentToolUseId"
+    )
+    parent_field = {"parent_id": parent} if parent else {}
+
+    if phase == "task_started":
+        subagent_type = _first_str(message, "subagent_type", "subagentType", "task_type")
+        description = (
+            _first_str(message, "description", "prompt") or subagent_type or "Subagent"
+        )
+        args = {
+            k: v
+            for k, v in {
+                "subagent_type": subagent_type,
+                "description": _first_str(message, "description"),
+                "prompt": _first_str(message, "prompt"),
+            }.items()
+            if v
+        }
+        return [
+            {
+                "event": "tool_call",
+                "data": {
+                    "call_id": call_id,
+                    "tool": description,
+                    "arguments": args,
+                    "kind": "subagent",
+                    "status": "in_progress",
+                    "locations": [],
+                    **parent_field,
+                },
+            }
+        ]
+
+    # task_updated / task_notification can be terminal; task_progress never is.
+    status = message.get("status")
+    if isinstance(status, dict):  # tolerate a {status: {status: ...}} patch shape
+        status = status.get("status")
+    if not isinstance(status, str):
+        status = None
+    summary = _first_str(
+        message, "summary", "result", "description", "last_tool_name", "output"
+    )
+    output_file = _first_str(message, "output_file", "outputFile")
+
+    if phase != "task_progress" and status in _TASK_TERMINAL:
+        result = summary or status
+        if output_file:
+            result = f"{result}\n\n→ {output_file}".strip()
+        return [
+            {
+                "event": "tool_result",
+                "data": {
+                    "call_id": call_id,
+                    "status": "failed" if status in {"failed", "killed"} else "completed",
+                    "result": result,
+                },
+            }
+        ]
+
+    # Non-terminal progress: append a live activity line, keep the call running.
+    # `append` never blanks an existing result and won't mark the call finished.
+    data: dict = {"call_id": call_id, "append": True, "status": "in_progress"}
+    if summary:
+        data["output_delta"] = summary.rstrip("\n") + "\n"
+    return [{"event": "tool_result", "data": data}]
+
+
 def parse_elicitation_fields(requested_schema: dict) -> list[dict]:
     """Flatten an ACP form-elicitation JSON schema into UI-friendly fields.
 
@@ -1236,9 +1361,18 @@ class AgentSessionManager:
                 servers,
                 session.relay_generation,
             )
+        # Opt claude-agent-acp into re-emitting Claude Agent SDK task-lifecycle
+        # messages (otherwise dropped), so Workflow/subagent activity becomes
+        # visible. Scoped to claude-code; other agents don't read this _meta.
+        session_meta: dict | None = None
+        if session.agent_id == "claude-code":
+            session_meta = {
+                "claudeCode": {"emitRawSDKMessages": SDK_TASK_MESSAGE_FILTERS}
+            }
         result = await session.connection.new_session(
             cwd=(session.runtime.cwd if session.runtime else SANDBOX_WORKSPACE),
             mcp_servers=acp_servers,
+            meta=session_meta,
         )
         session.acp_session_id = result["sessionId"]
         session.config_options = result.get("configOptions") or []
@@ -1479,6 +1613,14 @@ class AgentSessionManager:
             if session.agent_id == "cursor" and method.startswith("cursor/"):
                 if await self._handle_cursor_notification(session, method, params):
                     return
+            if method == "_claude/sdkMessage":
+                # Raw Claude Agent SDK messages (emitRawSDKMessages). Surface
+                # Workflow/subagent task lifecycle that the adapter otherwise
+                # drops. These arrive mid-turn, so the session id is assigned.
+                if params.get("sessionId") == session.acp_session_id:
+                    for event in normalize_sdk_task_message(params.get("message") or {}):
+                        await session.event_queue.put(event)
+                return
             if method != "session/update":
                 return
             if params.get("sessionId") != session.acp_session_id:
