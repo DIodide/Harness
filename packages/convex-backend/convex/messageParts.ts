@@ -12,8 +12,16 @@
  *
  * Gateway reference: `content = "".join(text_parts)` — text parts only, joined
  * with no separator (session_manager.py). reasoning/tool_call parts contribute
- * nothing to `content`, which is why dropping ONLY trailing reasoning/tool_call
- * parts leaves the agent's context unchanged.
+ * nothing to `content`.
+ *
+ * This join is the CANONICAL faithful content for a (truncated) parts list. It
+ * matches the ACP gateway exactly. The default OpenRouter path (chat.py) instead
+ * persists only the LAST agentic iteration's text as `content` while appending
+ * one text part per iteration to parts[], so for a multi-iteration message the
+ * stored `content` can be SHORTER than this join. That divergence is pre-existing
+ * (independent of rewind); the seam UI surfaces it honestly by computing
+ * "does the agent's context change?" as (recomputed content !== stored content),
+ * and a mid-message cut writes this canonical (faithful) join either way.
  */
 
 type AnyPart = { type: string; content?: string };

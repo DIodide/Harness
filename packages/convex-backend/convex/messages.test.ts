@@ -308,6 +308,35 @@ describe("messages.truncatePart (mid-message rewind)", () => {
 		expect(left[1].parts?.length).toBe(2);
 	});
 
+	it("recomputes content as the faithful join even when stored content diverged (OpenRouter last-iteration case)", async () => {
+		const t = makeT();
+		const { user, conversationId } = await seedConversation(t, "u-a");
+		await user.mutation(api.messages.send, {
+			conversationId,
+			role: "user",
+			content: "q1",
+		});
+		await new Promise((r) => setTimeout(r, 2));
+		// The default OpenRouter path stores only the LAST iteration's text as
+		// content ("B") while parts[] holds one text part per iteration.
+		const a1 = await t.raw.run(async (ctx) =>
+			ctx.db.insert("messages", {
+				conversationId,
+				role: "assistant" as const,
+				content: "B",
+				parts: partsAB,
+			}),
+		);
+		// Keep [text A, tool] -> content recomputes to the join of kept text ("A"),
+		// NOT the stale stored "B".
+		await user.mutation(api.messages.truncatePart, {
+			id: a1 as Id<"messages">,
+			keepPartCount: 2,
+		});
+		const left = await user.query(api.messages.list, { conversationId });
+		expect(left.map((m) => m.content)).toEqual(["q1", "A"]);
+	});
+
 	it("rejects keepPartCount out of range (0 or >= parts.length)", async () => {
 		const t = makeT();
 		const { user, a1 } = await seedWithAssistantParts(t);

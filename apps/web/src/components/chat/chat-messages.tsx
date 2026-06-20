@@ -20,6 +20,7 @@ import type { AgentPlanEntry } from "../../lib/agent-mode";
 import {
 	computeSeams,
 	describeDropped,
+	hasRenderableAfter,
 	type SeamPart,
 	summarizeDropped,
 } from "../../lib/message-seams";
@@ -253,20 +254,33 @@ function SubagentActivity({
  */
 function Seam({
 	dropped,
-	onPreview,
+	open,
+	onOpen,
+	onClose,
+	onHover,
 	onRewind,
 	onFork,
 }: {
 	dropped: ReturnType<typeof summarizeDropped>;
-	onPreview: (active: boolean) => void;
+	open: boolean;
+	onOpen: () => void;
+	onClose: () => void;
+	onHover: (active: boolean) => void;
 	onRewind: () => void;
 	onFork: () => void;
 }) {
-	const [open, setOpen] = useState(false);
-	const close = useCallback(() => {
-		setOpen(false);
-		onPreview(false);
-	}, [onPreview]);
+	// Move focus into the confirm (and let Escape dismiss it) when it opens, so a
+	// keyboard user isn't stranded after the trigger button unmounts.
+	const primaryRef = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		if (open) primaryRef.current?.focus();
+	}, [open]);
+
+	// Escape dismisses the confirm from whichever button has focus (the buttons
+	// are the focusable, interactive elements — keep the handler on them).
+	const onKeyDown = (e: React.KeyboardEvent) => {
+		if (e.key === "Escape") onClose();
+	};
 
 	if (open) {
 		return (
@@ -276,16 +290,18 @@ function Seam({
 				</div>
 				<div className="mt-0.5 text-[11px] text-muted-foreground">
 					{dropped.contentChanges
-						? "Removes that text from the agent's context."
-						: "This only changes your view — the agent's context is unchanged."}
+						? "Changes what the agent sees on the next turn."
+						: "Only changes your view — the agent's context is unchanged."}
 				</div>
 				<div className="mt-2 flex items-center gap-2">
 					<button
 						type="button"
+						ref={primaryRef}
 						onClick={() => {
 							onFork();
-							close();
+							onClose();
 						}}
+						onKeyDown={onKeyDown}
 						className="flex items-center gap-1 rounded bg-foreground px-2 py-1 text-[11px] text-background transition-colors hover:bg-foreground/90"
 					>
 						<GitBranch size={11} /> Rewind &amp; fork
@@ -294,15 +310,17 @@ function Seam({
 						type="button"
 						onClick={() => {
 							onRewind();
-							close();
+							onClose();
 						}}
+						onKeyDown={onKeyDown}
 						className="flex items-center gap-1 rounded border border-destructive/40 px-2 py-1 text-[11px] text-destructive transition-colors hover:bg-destructive/10"
 					>
 						<RotateCcw size={11} /> Rewind
 					</button>
 					<button
 						type="button"
-						onClick={close}
+						onClick={onClose}
+						onKeyDown={onKeyDown}
 						className="px-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
 					>
 						Cancel
@@ -315,14 +333,11 @@ function Seam({
 	return (
 		<button
 			type="button"
-			onMouseEnter={() => onPreview(true)}
-			onMouseLeave={() => onPreview(false)}
-			onFocus={() => onPreview(true)}
-			onBlur={() => onPreview(false)}
-			onClick={() => {
-				setOpen(true);
-				onPreview(true);
-			}}
+			onMouseEnter={() => onHover(true)}
+			onMouseLeave={() => onHover(false)}
+			onFocus={() => onHover(true)}
+			onBlur={() => onHover(false)}
+			onClick={onOpen}
 			aria-label="Rewind to here"
 			className="group/seam relative flex h-3 w-full items-center opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
 		>
@@ -343,17 +358,26 @@ function Seam({
  */
 function AssistantParts({
 	parts,
+	originalContent,
 	rewind,
 }: {
 	parts: RenderablePart[];
+	originalContent: string;
 	rewind?: {
 		onRewindToPart: (keepPartCount: number) => void;
 		onForkToPart: (keepPartCount: number) => void;
 	};
 }) {
-	const [hoverKeep, setHoverKeep] = useState<number | null>(null);
+	// Open-confirm and hover state are keyed by top-level block index (unique per
+	// block; keep-counts can collide). An open confirm pins the dim preview so a
+	// later hover elsewhere can't clear it out from under the open confirm.
+	const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+	const [openIdx, setOpenIdx] = useState<number | null>(null);
 	const organized = useMemo(() => organizeParts(parts), [parts]);
 	const seams = useMemo(() => computeSeams(parts as SeamPart[]), [parts]);
+
+	const activeIdx = openIdx ?? hoverIdx;
+	const activeKeep = activeIdx != null ? seams.keepCounts[activeIdx] : null;
 
 	return (
 		<>
@@ -363,7 +387,7 @@ function AssistantParts({
 						? (part.call_id ?? part.tool)
 						: `${part.type}-${partIdx}-${part.content?.slice(0, 24)}`;
 				const dimmed =
-					hoverKeep != null && seams.firstFlatIdx[partIdx] >= hoverKeep;
+					activeKeep != null && seams.firstFlatIdx[partIdx] >= activeKeep;
 
 				let block: React.ReactNode = null;
 				if (part.type === "reasoning" && part.content) {
@@ -392,8 +416,13 @@ function AssistantParts({
 				}
 				if (block == null) return null;
 
-				const showSeam = rewind != null && partIdx < organized.length - 1;
 				const keep = seams.keepCounts[partIdx];
+				// Only offer a seam that actually drops something the user can see:
+				// never the last block, never a degenerate keep===length seam (e.g.
+				// an interleaved subagent whose child is last), and never one that
+				// would drop only empty/non-rendering parts.
+				const showSeam =
+					rewind != null && hasRenderableAfter(parts as SeamPart[], keep);
 
 				return (
 					<React.Fragment key={key}>
@@ -402,8 +431,15 @@ function AssistantParts({
 						</div>
 						{showSeam && rewind && (
 							<Seam
-								dropped={summarizeDropped(parts as SeamPart[], keep)}
-								onPreview={(active) => setHoverKeep(active ? keep : null)}
+								dropped={summarizeDropped(
+									parts as SeamPart[],
+									keep,
+									originalContent,
+								)}
+								open={openIdx === partIdx}
+								onOpen={() => setOpenIdx(partIdx)}
+								onClose={() => setOpenIdx(null)}
+								onHover={(active) => setHoverIdx(active ? partIdx : null)}
 								onRewind={() => rewind.onRewindToPart(keep)}
 								onFork={() => rewind.onForkToPart(keep)}
 							/>
@@ -880,7 +916,14 @@ export function ChatMessages({
 														(msg as Record<string, unknown>)
 															.parts as RenderablePart[]
 													}
+													originalContent={msg.content}
 													rewind={
+														// Mid-message seams only on the LAST message in
+														// the thread: truncating an earlier assistant
+														// message also deletes every later turn, which
+														// the per-message "view-only" copy can't honestly
+														// account for. v1 keeps this to the latest turn.
+														i === messages.length - 1 &&
 														!readOnly &&
 														!shareToken &&
 														!isStreaming &&
