@@ -908,6 +908,7 @@ function ChatPage() {
 							onRewindFork={forkAtMessage}
 							onRewindToPart={handleRewindToPart}
 							onForkToPart={forkAtPart}
+							seamsEnabled={userSettings?.rewindSeams ?? true}
 							onStartEditPrompt={handleStartEditPrompt}
 							onCancelEditPrompt={handleCancelEditPrompt}
 							onSaveEditPrompt={handleSaveEditPrompt}

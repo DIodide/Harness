@@ -356,6 +356,9 @@ export default defineSchema({
 		workspacesMode: v.optional(
 			v.union(v.literal("basic"), v.literal("workspaces")),
 		),
+		// Show the mid-message rewind "seams" (cut points between an assistant
+		// message's blocks). Defaults on; absent = on.
+		rewindSeams: v.optional(v.boolean()),
 	}).index("by_user", ["userId"]),
 
 	usageBudgets: defineTable({

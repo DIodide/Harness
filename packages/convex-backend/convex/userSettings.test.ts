@@ -24,6 +24,7 @@ describe("userSettings.get", () => {
 			modelSelectorMode: "session",
 			chatConfigScope: "harness",
 			workspacesMode: "workspaces",
+			rewindSeams: true,
 		});
 	});
 
@@ -49,7 +50,15 @@ describe("userSettings.get", () => {
 			modelSelectorMode: "harness",
 			chatConfigScope: "harness",
 			workspacesMode: "workspaces",
+			rewindSeams: true,
 		});
+	});
+
+	it("round-trips rewindSeams = false", async () => {
+		const a = makeT().asUser("user-a");
+		await a.mutation(api.userSettings.update, { rewindSeams: false });
+		const settings = await a.query(api.userSettings.get, {});
+		expect(settings.rewindSeams).toBe(false);
 	});
 });
 
