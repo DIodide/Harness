@@ -11,6 +11,7 @@
 import type * as agentCredentials from "../agentCredentials.js";
 import type * as agentUsage from "../agentUsage.js";
 import type * as commands from "../commands.js";
+import type * as compactions from "../compactions.js";
 import type * as conversations from "../conversations.js";
 import type * as files from "../files.js";
 import type * as harnessConfigRatings from "../harnessConfigRatings.js";
@@ -37,6 +38,7 @@ declare const fullApi: ApiFromModules<{
   agentCredentials: typeof agentCredentials;
   agentUsage: typeof agentUsage;
   commands: typeof commands;
+  compactions: typeof compactions;
   conversations: typeof conversations;
   files: typeof files;
   harnessConfigRatings: typeof harnessConfigRatings;

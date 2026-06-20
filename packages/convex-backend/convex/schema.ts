@@ -135,6 +135,10 @@ export default defineSchema({
 		editParentConversationId: v.optional(v.id("conversations")),
 		editParentMessageCount: v.optional(v.number()),
 		isCreationSession: v.optional(v.boolean()),
+		// Set on a conversation cloned from a compaction summary ("new session
+		// from summary") — provenance + lets the agent route seed its context
+		// from the summary instead of the full transcript.
+		seededFromCompactionId: v.optional(v.id("compactions")),
 	})
 		.index("by_user", ["userId"])
 		.index("by_user_last_message", ["userId", "lastMessageAt"])
@@ -143,6 +147,27 @@ export default defineSchema({
 			searchField: "title",
 			filterFields: ["userId", "workspaceId"],
 		}),
+
+	// Claude Code context-compaction events. Append-only — a record per
+	// /compact (manual) or auto-compaction, captured from the ACP stream. Drives
+	// observability (the dev can SEE the summary) and the clone-from-summary
+	// flow. Kept OUT of messages.parts so it's never copied by the fork mutation.
+	compactions: defineTable({
+		conversationId: v.id("conversations"),
+		workspaceId: v.optional(v.id("workspaces")),
+		userId: v.string(),
+		// The compaction summary prose (may be "" if only metadata was captured).
+		summary: v.string(),
+		trigger: v.union(v.literal("manual"), v.literal("auto")),
+		// Thread position when it fired — the clone-seed anchor + timeline slot.
+		atMessageCount: v.optional(v.number()),
+		preTokens: v.optional(v.number()),
+		postTokens: v.optional(v.number()),
+		model: v.optional(v.string()),
+		createdAt: v.number(),
+	})
+		.index("by_conversation", ["conversationId"])
+		.index("by_user", ["userId"]),
 
 	messages: defineTable({
 		conversationId: v.id("conversations"),

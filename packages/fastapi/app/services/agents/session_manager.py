@@ -165,6 +165,10 @@ class AgentSession:
     # Harness-side transcript for context replay across harness switches.
     transcript: list[dict] = field(default_factory=list)
     pending_replay: bool = False
+    # Compaction metadata from the most recent `compact_boundary` SDK message,
+    # held until the summary user-message arrives so the two can be merged into
+    # one `compaction` event. None between compactions.
+    pending_compaction: dict | None = None
     # MCP relay: index → real server config. The agent only ever sees
     # http://127.0.0.1:<shim>/mcp/<generation>/<index>; Daytona egress
     # restrictions and MCP credentials are both handled backend-side.
@@ -606,6 +610,15 @@ SDK_TASK_MESSAGE_FILTERS = [
     {"type": "system", "subtype": "task_progress"},
     {"type": "system", "subtype": "task_updated"},
     {"type": "system", "subtype": "task_notification"},
+    # Context compaction. Verified live on claude-agent-acp@0.44.0: the
+    # `compact_boundary` system message carries the metadata (trigger,
+    # pre/post tokens) but NOT the summary; the summary prose arrives as a
+    # synthetic `type:"user"` message (string content) that the adapter
+    # normally drops from session/update but DOES forward raw here. We filter
+    # to the actual compaction summary in normalize on the receiving side.
+    {"type": "system", "subtype": "compact_boundary"},
+    {"type": "compact_boundary"},
+    {"type": "user"},
 ]
 
 _TASK_PHASES = {"task_started", "task_progress", "task_updated", "task_notification"}
@@ -724,6 +737,58 @@ def normalize_sdk_task_message(message: dict) -> list[dict]:
     return [{"event": "tool_result", "data": data}]
 
 
+# Claude Code injects the post-compaction summary as a synthetic user message
+# whose content begins with this exact preamble (verified live on
+# claude-agent-acp@0.44.0). It's the reliable, version-stable signature that
+# distinguishes the compaction summary from an ordinary user-message echo.
+COMPACTION_SUMMARY_PREAMBLE = (
+    "This session is being continued from a previous conversation"
+)
+# Generous cap so a pathological summary can't bloat an event / Convex doc.
+_MAX_COMPACTION_SUMMARY_CHARS = 100_000
+
+
+def _sdk_user_message_text(message: dict) -> str:
+    """Extract the text of a raw SDK `type:"user"` message. Content is a string
+    for the compaction-summary message and a list of blocks for normal echoes."""
+    inner = message.get("message")
+    content = inner.get("content") if isinstance(inner, dict) else None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            b.get("text") or ""
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return ""
+
+
+def parse_sdk_compaction(message: dict) -> dict | None:
+    """Classify a raw SDK message as a compaction `boundary` (metadata) or
+    `summary` (the prose), or None. Defensive — degrades to None on any
+    unexpected shape (the notification handler swallows exceptions anyway)."""
+    if not isinstance(message, dict):
+        return None
+    mtype = message.get("type")
+    subtype = message.get("subtype")
+    if subtype == "compact_boundary" or mtype == "compact_boundary":
+        cm = message.get("compact_metadata")
+        cm = cm if isinstance(cm, dict) else {}
+        trigger = cm.get("trigger")
+        return {
+            "kind": "boundary",
+            "trigger": trigger if trigger in ("manual", "auto") else None,
+            "pre_tokens": cm.get("pre_tokens"),
+            "post_tokens": cm.get("post_tokens"),
+        }
+    if mtype == "user":
+        text = _sdk_user_message_text(message)
+        if text.lstrip().startswith(COMPACTION_SUMMARY_PREAMBLE):
+            return {"kind": "summary", "summary": text[:_MAX_COMPACTION_SUMMARY_CHARS]}
+    return None
+
+
 def parse_elicitation_fields(requested_schema: dict) -> list[dict]:
     """Flatten an ACP form-elicitation JSON schema into UI-friendly fields.
 
@@ -768,7 +833,32 @@ def parse_elicitation_fields(requested_schema: dict) -> list[dict]:
 
 
 def _build_replay_preamble(transcript: list[dict]) -> str:
-    """Context block replayed into a fresh ACP session after a harness switch."""
+    """Context block replayed into a fresh ACP session.
+
+    Two shapes: the usual harness-switch replay of the recent conversation, or
+    a "new session from summary" clone seeded with a single compaction summary
+    — detected by its canonical preamble and replayed IN FULL (not truncated at
+    4000 like the per-message switch replay) with summary-appropriate framing.
+    """
+    if (
+        len(transcript) == 1
+        and isinstance(transcript[0].get("content"), str)
+        and transcript[0]["content"].lstrip().startswith(COMPACTION_SUMMARY_PREAMBLE)
+    ):
+        summary = transcript[0]["content"]
+        if len(summary) > 16000:
+            summary = summary[:16000] + " …[truncated]"
+        return "\n".join(
+            [
+                "<conversation_history>",
+                "You are continuing a previous conversation. Below is a compacted",
+                "summary of everything that happened so far — treat it as full",
+                "context and continue naturally; do not mention this restoration:",
+                "",
+                summary,
+                "</conversation_history>",
+            ]
+        )
     lines = [
         "<conversation_history>",
         "You are continuing an ongoing conversation. The user has switched the",
@@ -1683,6 +1773,43 @@ class AgentSessionManager:
             rate_limit=rate_limit,
         )
 
+    async def _handle_sdk_compaction(self, session: AgentSession, message: dict) -> None:
+        """Merge the two compaction SDK frames into one `compaction` SSE event.
+
+        The `compact_boundary` (metadata: trigger, token deltas) arrives first;
+        the summary prose follows as a synthetic user-message. Stash the
+        metadata on the boundary, then emit the merged event when the summary
+        lands — gated on a preceding boundary so a user message that merely
+        starts with the same preamble can't be mistaken for a compaction.
+        Best-effort; exceptions here are swallowed by the notification caller.
+        """
+        parsed = parse_sdk_compaction(message)
+        if parsed is None:
+            return
+        if parsed["kind"] == "boundary":
+            session.pending_compaction = {
+                "trigger": parsed.get("trigger"),
+                "pre_tokens": parsed.get("pre_tokens"),
+                "post_tokens": parsed.get("post_tokens"),
+            }
+            return
+        # kind == "summary": only real if a boundary was just seen this turn.
+        meta = session.pending_compaction
+        if meta is None:
+            return
+        session.pending_compaction = None
+        await session.event_queue.put(
+            {
+                "event": "compaction",
+                "data": {
+                    "summary": parsed["summary"],
+                    "trigger": meta.get("trigger") or "manual",
+                    "pre_tokens": meta.get("pre_tokens"),
+                    "post_tokens": meta.get("post_tokens"),
+                },
+            }
+        )
+
     async def _handle_cursor_notification(
         self, session: AgentSession, method: str, params: dict
     ) -> bool:
@@ -1743,8 +1870,10 @@ class AgentSessionManager:
                 # Workflow/subagent task lifecycle that the adapter otherwise
                 # drops. These arrive mid-turn, so the session id is assigned.
                 if params.get("sessionId") == session.acp_session_id:
-                    for event in normalize_sdk_task_message(params.get("message") or {}):
+                    raw = params.get("message") or {}
+                    for event in normalize_sdk_task_message(raw):
                         await session.event_queue.put(event)
+                    await self._handle_sdk_compaction(session, raw)
                 return
             if method != "session/update":
                 return
@@ -2024,6 +2153,10 @@ class AgentSessionManager:
             # Drain any stale events from a previous turn.
             while not session.event_queue.empty():
                 session.event_queue.get_nowait()
+            # A compaction's boundary→summary pair always lands within a single
+            # turn; clear any stale boundary metadata so it can't be paired with
+            # a later turn's user message that merely echoes the summary preamble.
+            session.pending_compaction = None
 
             outgoing = message
             if session.pending_replay and session.transcript:

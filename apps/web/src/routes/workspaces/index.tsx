@@ -289,6 +289,14 @@ function ChatPage() {
 			activeConvoId ? { conversationId: activeConvoId } : "skip",
 		),
 	);
+	// Context-compaction records for the active conversation (observability +
+	// the clone-from-summary choice).
+	const { data: activeCompactions } = useQuery(
+		convexQuery(
+			api.compactions.listByConversation,
+			activeConvoId ? { conversationId: activeConvoId } : "skip",
+		),
+	);
 	const activeMessagesRef = useRef(activeMessages);
 	useEffect(() => {
 		activeMessagesRef.current = activeMessages;
@@ -807,6 +815,34 @@ function ChatPage() {
 		[userSettings, conversations, harnesses, startNewChat, setActiveConvoId],
 	);
 
+	// "New session from summary": clone a fresh conversation seeded with a
+	// compaction summary, then open it.
+	const [isStartingClone, setIsStartingClone] = useState(false);
+	const cloneFromCompaction = useMutation({
+		mutationFn: useConvexMutation(api.compactions.cloneFromCompaction),
+	});
+	const handleStartFromSummary = useCallback(
+		async (compactionId: string) => {
+			setIsStartingClone(true);
+			try {
+				const newId = await cloneFromCompaction.mutateAsync({
+					compactionId: compactionId as Id<"compactions">,
+					harnessId: activeHarnessId ?? undefined,
+				});
+				handleSelectConversation(newId as Id<"conversations">);
+			} catch (error) {
+				toast.error(
+					error instanceof Error
+						? error.message
+						: "Could not start session from summary",
+				);
+			} finally {
+				setIsStartingClone(false);
+			}
+		},
+		[cloneFromCompaction, activeHarnessId, handleSelectConversation],
+	);
+
 	// State handlers for searching
 	const [scrollToMessageId, setScrollToMessageId] =
 		useState<Id<"messages"> | null>(null);
@@ -1136,6 +1172,9 @@ function ChatPage() {
 							isStreaming={isActiveConvoStreaming}
 							scrollToMessageId={scrollToMessageId}
 							onClearScrollTarget={() => setScrollToMessageId(null)}
+							compactions={activeCompactions ?? []}
+							onStartFromSummary={handleStartFromSummary}
+							isStartingClone={isStartingClone}
 						/>
 					) : (
 						<EmptyChat
