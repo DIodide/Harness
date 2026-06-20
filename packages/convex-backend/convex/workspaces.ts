@@ -1,7 +1,7 @@
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
 
 async function assertOwnedWorkspace(
 	ctx: MutationCtx,
@@ -22,9 +22,7 @@ export const list = query({
 
 		return await ctx.db
 			.query("workspaces")
-			.withIndex("by_user_last_used", (q) =>
-				q.eq("userId", identity.subject),
-			)
+			.withIndex("by_user_last_used", (q) => q.eq("userId", identity.subject))
 			.order("desc")
 			.collect();
 	},
@@ -43,40 +41,67 @@ export const get = query({
 });
 
 /**
- * Every user gets a "Default" workspace so conversations always have a
- * home. Idempotent: returns the user's most recently used workspace when
- * one exists, otherwise creates the Default (optionally linking the
- * harness that onboarding just created).
+ * Resolve the user's Default workspace, creating/backfilling it so EXACTLY ONE
+ * exists and is flagged `isDefault`. Idempotent. Backfill for accounts predating
+ * the flag: adopt an existing "Default"-named workspace if present, else create a
+ * fresh one (never flag an arbitrarily-named existing workspace). Returns its id.
+ */
+export async function getOrCreateDefaultWorkspace(
+	ctx: MutationCtx,
+	userId: string,
+	harnessId?: Id<"harnesses">,
+): Promise<Id<"workspaces">> {
+	const all = await ctx.db
+		.query("workspaces")
+		.withIndex("by_user", (q) => q.eq("userId", userId))
+		.collect();
+
+	const flagged = all.find((w) => w.isDefault);
+	if (flagged) return flagged._id;
+
+	// Backfill an account predating the flag: adopt ONLY a workspace
+	// conventionally named "Default" (what old onboarding created). Never flag an
+	// arbitrarily-named workspace (e.g. "Production") — that would silently make a
+	// workspace the user could previously delete permanently undeletable. If
+	// there's no "Default", fall through and create a fresh one.
+	const adopt = all.find((w) => w.name === "Default");
+	if (adopt) {
+		await ctx.db.patch(adopt._id, { isDefault: true });
+		return adopt._id;
+	}
+
+	let linkHarness = harnessId;
+	if (linkHarness) {
+		const harness = await ctx.db.get(linkHarness);
+		if (!harness || harness.userId !== userId) linkHarness = undefined;
+	}
+	const now = Date.now();
+	return await ctx.db.insert("workspaces", {
+		userId,
+		name: "Default",
+		isDefault: true,
+		...(linkHarness ? { harnessId: linkHarness } : {}),
+		createdAt: now,
+		lastUsedAt: now,
+	});
+}
+
+/**
+ * Every user gets an undeletable "Default" workspace so conversations always
+ * have a home. Idempotent; returns the Default workspace id (creating or
+ * backfilling it). `harnessId` links the harness onboarding just created when
+ * the Default is first created.
  */
 export const ensureDefault = mutation({
 	args: { harnessId: v.optional(v.id("harnesses")) },
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
-
-		const existing = await ctx.db
-			.query("workspaces")
-			.withIndex("by_user_last_used", (q) => q.eq("userId", identity.subject))
-			.order("desc")
-			.first();
-		if (existing) return existing._id;
-
-		let harnessId = args.harnessId;
-		if (harnessId) {
-			const harness = await ctx.db.get(harnessId);
-			if (!harness || harness.userId !== identity.subject) {
-				harnessId = undefined;
-			}
-		}
-
-		const now = Date.now();
-		return await ctx.db.insert("workspaces", {
-			userId: identity.subject,
-			name: "Default",
-			...(harnessId ? { harnessId } : {}),
-			createdAt: now,
-			lastUsedAt: now,
-		});
+		return await getOrCreateDefaultWorkspace(
+			ctx,
+			identity.subject,
+			args.harnessId,
+		);
 	},
 });
 
@@ -190,7 +215,16 @@ export const remove = mutation({
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error("Unauthenticated");
 
-		await assertOwnedWorkspace(ctx, args.id, identity.subject);
+		const workspace = await assertOwnedWorkspace(
+			ctx,
+			args.id,
+			identity.subject,
+		);
+		// The Default workspace is permanent — it's every conversation's fallback
+		// home. Its harness/sandbox stay editable via `update`.
+		if (workspace.isDefault) {
+			throw new Error("The Default workspace can't be deleted");
+		}
 
 		const conversations = await ctx.db
 			.query("conversations")

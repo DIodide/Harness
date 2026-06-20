@@ -110,6 +110,10 @@ export default defineSchema({
 		harnessId: v.optional(v.id("harnesses")),
 		sandboxId: v.optional(v.id("sandboxes")),
 		color: v.optional(v.string()),
+		// The account's Default workspace — exactly one per user, CANNOT be
+		// deleted (its harness/sandbox stay editable). A conversation always has
+		// a workspace home; the Default is the fallback.
+		isDefault: v.optional(v.boolean()),
 		createdAt: v.number(),
 		lastUsedAt: v.number(),
 	})
