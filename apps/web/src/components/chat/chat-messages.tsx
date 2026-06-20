@@ -497,6 +497,7 @@ export function ChatMessages({
 	onRewindFork,
 	onRewindToPart,
 	onForkToPart,
+	seamsEnabled = true,
 	onStartEditPrompt,
 	onCancelEditPrompt,
 	onSaveEditPrompt,
@@ -586,6 +587,8 @@ export function ChatMessages({
 	/** Branch a NEW conversation whose last message is this assistant message
 	 *  truncated to `keepPartCount` flat parts. */
 	onForkToPart?: (messageId: Id<"messages">, keepPartCount: number) => void;
+	/** User setting: show mid-message rewind seams (default true). */
+	seamsEnabled?: boolean;
 	onStartEditPrompt: (messageId: Id<"messages">, content: string) => void;
 	onCancelEditPrompt: () => void;
 	onSaveEditPrompt: (messageId: Id<"messages">, newContent: string) => void;
@@ -956,6 +959,7 @@ export function ChatMessages({
 														// message also deletes every later turn, which
 														// the per-message "view-only" copy can't honestly
 														// account for. v1 keeps this to the latest turn.
+														seamsEnabled &&
 														i === messages.length - 1 &&
 														!readOnly &&
 														!shareToken &&

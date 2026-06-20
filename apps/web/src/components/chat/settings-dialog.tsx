@@ -177,6 +177,27 @@ export function SettingsDialog({
 								</SelectContent>
 							</Select>
 						</div>
+						<label
+							htmlFor="rewind-seams"
+							className="flex items-center justify-between gap-3 py-1.5"
+						>
+							<div>
+								<p className="text-xs font-medium text-foreground">
+									Mid-message rewind
+								</p>
+								<p className="text-[11px] text-muted-foreground">
+									Show cut points between an assistant message's steps so you
+									can rewind or fork partway through a turn.
+								</p>
+							</div>
+							<Checkbox
+								id="rewind-seams"
+								checked={userSettings?.rewindSeams ?? true}
+								onCheckedChange={(checked) => {
+									updateSettings.mutate({ rewindSeams: checked === true });
+								}}
+							/>
+						</label>
 					</div>
 
 					<Separator />
