@@ -47,6 +47,23 @@ MAX_TOOL_ITERATIONS = 120
 # loop. Reset whenever the model produces tool calls or finishes normally.
 MAX_CONSECUTIVE_TRUNCATIONS = 20
 
+
+def content_from_parts(parts: list[dict] | None) -> str:
+    """Faithful flat `content` = concatenation of all text parts.
+
+    Mirrors the TS `contentFromParts` (convex/messageParts.ts) and the ACP
+    gateway's `content = "".join(text_parts)` (session_manager.py): text parts
+    only, joined with no separator. reasoning/tool_call parts contribute nothing.
+
+    This is the canonical value for an assistant message's persisted `content`,
+    enforcing the invariant `content == content_from_parts(parts)` on every
+    persistence path so the rendered parts[] and the model's transcript agree.
+    """
+    if not parts:
+        return ""
+    return "".join(p.get("content", "") for p in parts if p.get("type") == "text")
+
+
 SKILL_TOOL_NAME = "get_skill_content"
 
 SKILL_TOOL_DEFINITION = {
@@ -907,11 +924,18 @@ async def chat_stream(
                     if cost is not None:
                         usage_for_convex["cost"] = cost
 
+                # Faithful flat content == join of ALL iterations' text parts.
+                # By here line ~847 has appended the final iteration's text, so
+                # all_parts is complete. Use the SAME value for the persisted
+                # content and the done event below so they cannot drift (the
+                # convexHasMessage handshake compares them — see done_data).
+                faithful_content = content_from_parts(all_parts)
+
                 # Save to Convex first, then notify client
                 await save_assistant_message(
                     http_client,
                     body.conversation_id,
-                    collected_content,
+                    faithful_content,
                     reasoning=all_reasoning or None,
                     tool_calls=all_tool_calls_history or None,
                     parts=all_parts or None,
@@ -933,7 +957,12 @@ async def chat_stream(
                         usage_data=collected_usage,
                     )
 
-                done_data: dict = {"content": collected_content}
+                # MUST equal the persisted content: the frontend's
+                # convexHasMessage check compares lastMsg.content (the join
+                # we just saved) against pendingDoneContent (this value). If
+                # they diverge, the streaming bubble never clears for a
+                # multi-iteration turn (chat-stream-context.tsx / chat-messages.tsx).
+                done_data: dict = {"content": faithful_content}
                 if usage_for_convex:
                     done_data["usage"] = usage_for_convex
                 if collected_model:
@@ -1189,7 +1218,27 @@ async def _save_interrupted(
     collected_model: str | None,
     reason: str,
 ) -> None:
-    """Persist partial assistant state when the stream ends before a normal finish."""
+    """Persist partial assistant state when the stream ends before a normal finish.
+
+    Self-reconciling: callers pass the in-flight `content` (this iteration's
+    streamed-but-maybe-not-yet-parted text) plus `parts`. We append `content` as
+    a trailing text part IFF it isn't already the last text part, then derive the
+    persisted content from the reconciled parts via content_from_parts(). This
+    guarantees `content == content_from_parts(parts)` with no text lost or
+    duplicated at every interrupted call site:
+      * mid-stream exceptions (line ~847 hadn't run): in-flight text is appended.
+      * consecutive-truncation abort (after ~847): identical last part -> skipped.
+      * max-iterations (content==""): nothing appended -> content == join(parts).
+    """
+    reconciled = list(parts or [])
+    if content and not (
+        reconciled
+        and reconciled[-1].get("type") == "text"
+        and reconciled[-1].get("content") == content
+    ):
+        reconciled.append({"type": "text", "content": content})
+    faithful = content_from_parts(reconciled)
+
     usage_for_convex: dict | None = None
     if collected_usage:
         usage_for_convex = {
@@ -1205,10 +1254,10 @@ async def _save_interrupted(
         await save_assistant_message(
             http_client,
             body.conversation_id,
-            content,
+            faithful,
             reasoning=reasoning or None,
             tool_calls=tool_calls_history or None,
-            parts=parts or None,
+            parts=reconciled or None,
             usage=usage_for_convex,
             model=collected_model,
             interrupted=True,
