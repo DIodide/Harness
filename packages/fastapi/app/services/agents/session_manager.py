@@ -2227,6 +2227,36 @@ class AgentSessionManager:
         session = self.get(session_id, user_id)
         await self._teardown(session, park=True)
 
+    async def reset_conversation(self, user_id: str, conversation_id: str) -> int:
+        """Tear down any live ACP session for a conversation so the NEXT prompt
+        opens a fresh session, re-seeded from the (now-truncated) history.
+
+        Used by rewind: a Convex message delete can't touch the agent's
+        in-sandbox context, and reusing the warm session would keep the rewound
+        turns (its transcript is non-empty, so seed-from-history is skipped).
+        Tearing the session down (parking the runtime so the next prompt stays
+        warm) forces a fresh session + fresh ACP session that drops them.
+        Keyed by conversation, not agent, so a session-only agent override is
+        never missed. Returns how many sessions were reset.
+        """
+        # Only tear down IDLE sessions: a session that's prompting/provisioning,
+        # has a turn starting (turn_guard), or holds its lock must not be ripped
+        # out from under a live turn — same guard the reaper/_claim_parked use.
+        # (The client already blocks rewind while streaming; this is the
+        # server-side backstop.)
+        targets = [
+            s
+            for s in self._sessions.values()
+            if s.user_id == user_id
+            and s.conversation_id == conversation_id
+            and s.status == "ready"
+            and s.turn_guard == 0
+            and not s.lock.locked()
+        ]
+        for session in targets:
+            await self._teardown(session, park=True)
+        return len(targets)
+
     async def _teardown(self, session: AgentSession, park: bool = False) -> None:
         """End a session. With park=True a healthy runtime is kept warm for
         the user's next conversation instead of being destroyed."""

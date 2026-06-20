@@ -420,6 +420,40 @@ export function forgetAgentSession(
 	sessionCache.delete(cacheKey(conversationId, agent));
 }
 
+/** Forget EVERY cached ACP session for a conversation (all agents) — agent-
+ *  agnostic, so a session-only agent override is covered too. Used by rewind. */
+export function forgetAllAgentSessions(conversationId: string): void {
+	const prefix = `${conversationId}:`;
+	for (const key of [...sessionCache.keys()]) {
+		if (key.startsWith(prefix)) sessionCache.delete(key);
+	}
+}
+
+/** Tear down the caller's live ACP session(s) for a conversation server-side
+ *  (rewind) so the next prompt reopens fresh, re-seeded from the truncated
+ *  history. Retries once; returns whether the reset succeeded so the caller can
+ *  decide whether the agent context is trustworthy. (`api` resolves on 4xx/5xx,
+ *  so we MUST check `response.ok` — a swallowed error would leave the stale
+ *  session reusable with the rewound turns.) */
+export async function resetServerAgentSessions(
+	token: string | null,
+	conversationId: string,
+): Promise<boolean> {
+	for (let attempt = 0; attempt < 2; attempt++) {
+		try {
+			const response = await api(
+				token,
+				`/sessions/by-conversation/${conversationId}/reset`,
+				{ method: "POST" },
+			);
+			if (response.ok) return true;
+		} catch {
+			// network failure — retry once, then give up
+		}
+	}
+	return false;
+}
+
 export async function answerAgentPermission(
 	token: string | null,
 	sessionId: string,

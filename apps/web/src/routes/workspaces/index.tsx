@@ -107,6 +107,7 @@ import {
 } from "../../lib/harness-stream";
 import type { McpAuthType } from "../../lib/mcp";
 import { ariaKeyShortcut, formatShortcut, useIsMac } from "../../lib/platform";
+import { resetAgentSessionForRewind } from "../../lib/rewind";
 import {
 	SandboxPanelProvider,
 	useSandboxPanel,
@@ -896,6 +897,37 @@ function ChatPage() {
 		[activeConvoId, forkConversation, handleSelectConversation],
 	);
 
+	// removeAfter (exclusive): rewind keeps the target user message and deletes
+	// only what's below it (vs removeFrom, inclusive, used by regenerate).
+	const truncateAfterMessage = useMutation({
+		mutationFn: useConvexMutation(api.messages.removeAfter),
+	});
+
+	// Normal rewind: truncate the thread to a user message in place, then reset
+	// the live agent session so Claude Code's next turn rebuilds from the
+	// truncated history (no-op for the default OpenRouter loop). No auto-stream.
+	const handleRewind = useCallback(
+		async (messageId: Id<"messages">) => {
+			if (!activeConvoId) return;
+			if (
+				chatStream.streamingConvoIds.has(activeConvoId) ||
+				streamStatesRef.current[activeConvoId]?.pendingDoneContent != null
+			) {
+				return;
+			}
+			await truncateAfterMessage.mutateAsync({ id: messageId });
+			const token = await getToken();
+			await resetAgentSessionForRewind(token, activeConvoId);
+		},
+		[
+			activeConvoId,
+			chatStream,
+			truncateAfterMessage,
+			streamStatesRef,
+			getToken,
+		],
+	);
+
 	const editForkAndSend = useMutation({
 		mutationFn: useConvexMutation(api.conversations.editForkAndSend),
 	});
@@ -1143,6 +1175,8 @@ function ChatPage() {
 							}
 							onRegenerate={handleRegenerate}
 							onFork={handleFork}
+							onRewind={handleRewind}
+							onRewindFork={handleFork}
 							onStartEditPrompt={handleStartEditPrompt}
 							onCancelEditPrompt={handleCancelEditPrompt}
 							onSaveEditPrompt={handleSaveEditPrompt}

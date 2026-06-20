@@ -787,6 +787,19 @@ async def switch_harness(
     return _session_payload(manager.get(session_id, session.user_id))
 
 
+@router.post("/sessions/by-conversation/{conversation_id}/reset")
+async def reset_conversation_sessions(
+    conversation_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Rewind: tear down the caller's live ACP session(s) for a conversation so
+    the next prompt reopens fresh (re-seeded from the truncated history). Only
+    affects the caller's own sessions. Idempotent — returns 0 if none live."""
+    manager = get_session_manager()
+    count = await manager.reset_conversation(user["sub"], conversation_id)
+    return {"reset": count}
+
+
 @router.delete("/sessions/{session_id}")
 async def close_session(
     session_id: str,

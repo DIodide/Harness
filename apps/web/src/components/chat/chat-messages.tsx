@@ -249,6 +249,8 @@ export function ChatMessages({
 	displayMode,
 	onRegenerate,
 	onFork,
+	onRewind,
+	onRewindFork,
 	onStartEditPrompt,
 	onCancelEditPrompt,
 	onSaveEditPrompt,
@@ -325,6 +327,10 @@ export function ChatMessages({
 		history: Array<{ role: string; content: string }>,
 	) => void;
 	onFork: (messageId: Id<"messages">) => void;
+	/** Rewind the thread to a user message (truncate everything after it). */
+	onRewind?: (messageId: Id<"messages">) => void;
+	/** Branch a new conversation at a user message, leaving the original. */
+	onRewindFork?: (messageId: Id<"messages">) => void;
 	onStartEditPrompt: (messageId: Id<"messages">, content: string) => void;
 	onCancelEditPrompt: () => void;
 	onSaveEditPrompt: (messageId: Id<"messages">, newContent: string) => void;
@@ -855,6 +861,18 @@ export function ChatMessages({
 												onFork={
 													msg.role === "assistant"
 														? () => onFork(msg._id)
+														: undefined
+												}
+												onRewind={
+													// Owner-only for v1 (collaborators via token is a
+													// follow-up). Under EVERY user message.
+													msg.role === "user" && !shareToken && onRewind
+														? () => onRewind(msg._id)
+														: undefined
+												}
+												onRewindFork={
+													msg.role === "user" && !shareToken && onRewindFork
+														? () => onRewindFork(msg._id)
 														: undefined
 												}
 												onEditPrompt={

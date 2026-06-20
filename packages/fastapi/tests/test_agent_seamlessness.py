@@ -379,3 +379,32 @@ class TestConfigPreservation:
         assert applied.get("model") == "opus"  # offered + changed → re-applied
         assert "effort" not in applied  # equals current → skipped
         assert "mode" not in applied  # not offered by the new session → skipped
+
+
+def test_reset_conversation_tears_down_only_matching_live_sessions():
+    """rewind: reset_conversation closes the caller's live session(s) for a
+    conversation (agent-agnostic), leaving other conversations/users alone."""
+    mgr = AgentSessionManager()
+    s_match = _make_session(id="s1", user_id="u1", conversation_id="c1", status="ready")
+    s_match_codex = _make_session(
+        id="s2", user_id="u1", conversation_id="c1", agent_id="codex", status="ready"
+    )
+    s_closed = _make_session(
+        id="s3", user_id="u1", conversation_id="c1", status="closed"
+    )
+    s_other_convo = _make_session(
+        id="s4", user_id="u1", conversation_id="c2", status="ready"
+    )
+    s_other_user = _make_session(
+        id="s5", user_id="u2", conversation_id="c1", status="ready"
+    )
+    for s in (s_match, s_match_codex, s_closed, s_other_convo, s_other_user):
+        mgr._sessions[s.id] = s
+
+    count = asyncio.run(mgr.reset_conversation("u1", "c1"))
+
+    assert count == 2  # only the two LIVE sessions for (u1, c1)
+    assert "s1" not in mgr._sessions
+    assert "s2" not in mgr._sessions  # agent-agnostic — the codex session too
+    assert "s4" in mgr._sessions  # different conversation untouched
+    assert "s5" in mgr._sessions  # different user untouched

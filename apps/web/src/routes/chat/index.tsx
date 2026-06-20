@@ -83,6 +83,7 @@ import {
 } from "../../lib/harness-stream";
 import type { McpAuthType } from "../../lib/mcp";
 import { fetchCommandsFromApi, sanitizeServerName } from "../../lib/mcp";
+import { resetAgentSessionForRewind } from "../../lib/rewind";
 import {
 	SandboxPanelProvider,
 	useSandboxPanel,
@@ -862,6 +863,40 @@ function ChatPage() {
 		[activeConvoId, forkConversation, handleSelectConversation],
 	);
 
+	// removeAfter (exclusive): rewind keeps the target user message and deletes
+	// only what's below it. Distinct from removeFrom (inclusive) used by
+	// regenerate.
+	const truncateAfterMessage = useMutation({
+		mutationFn: useConvexMutation(api.messages.removeAfter),
+	});
+
+	// Normal rewind: truncate the thread to a user message in place, then reset
+	// the live agent session (server-side, keyed by conversation) so its next
+	// turn rebuilds from the truncated history. Does NOT auto-stream — re-sending
+	// is the user's explicit choice. No-op for the stateless OpenRouter loop.
+	const handleRewind = useCallback(
+		async (messageId: Id<"messages">) => {
+			if (!activeConvoId) return;
+			// Same in-flight guard as regenerate.
+			if (
+				chatStream.streamingConvoIds.has(activeConvoId) ||
+				streamStatesRef.current[activeConvoId]?.pendingDoneContent != null
+			) {
+				return;
+			}
+			await truncateAfterMessage.mutateAsync({ id: messageId });
+			const token = await getToken();
+			await resetAgentSessionForRewind(token, activeConvoId);
+		},
+		[
+			activeConvoId,
+			chatStream,
+			truncateAfterMessage,
+			streamStatesRef,
+			getToken,
+		],
+	);
+
 	const editForkAndSend = useMutation({
 		mutationFn: useConvexMutation(api.conversations.editForkAndSend),
 	});
@@ -1093,6 +1128,8 @@ function ChatPage() {
 							}
 							onRegenerate={handleRegenerate}
 							onFork={handleFork}
+							onRewind={handleRewind}
+							onRewindFork={handleFork}
 							onStartEditPrompt={handleStartEditPrompt}
 							onCancelEditPrompt={handleCancelEditPrompt}
 							onSaveEditPrompt={handleSaveEditPrompt}

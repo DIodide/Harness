@@ -136,6 +136,46 @@ export const removeFrom = mutation({
 });
 
 /**
+ * Rewind a thread TO a message: delete every message strictly AFTER it,
+ * keeping the target itself. Unlike `removeFrom` (inclusive, used by
+ * regenerate), this is exclusive — rewinding to a user message keeps that
+ * message so the thread ends there. Same authorization as `removeFrom`
+ * (owner, or an editor-grant collaborator via `token`).
+ *
+ * Deletes by POSITION in the canonical (by_conversation) order rather than a
+ * `_creationTime` comparison, so same-millisecond siblings (e.g. messages
+ * copied in one transaction) are handled correctly.
+ */
+export const removeAfter = mutation({
+	args: { id: v.id("messages"), token: v.optional(v.string()) },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+
+		const message = await ctx.db.get(args.id);
+		if (!message) throw new Error("Not found");
+
+		await authorizeConversationWrite(
+			ctx,
+			identity.subject,
+			message.conversationId,
+			args.token,
+		);
+
+		const inConvo = await ctx.db
+			.query("messages")
+			.withIndex("by_conversation", (q) =>
+				q.eq("conversationId", message.conversationId),
+			)
+			.collect();
+		const targetIdx = inConvo.findIndex((m) => m._id === args.id);
+		for (let i = targetIdx + 1; i < inConvo.length; i++) {
+			await ctx.db.delete(inConvo[i]._id);
+		}
+	},
+});
+
+/**
  * Frontend-callable mutation to save a partial assistant message when the user
  * interrupts a streaming response. Authorized to the owner OR an editor-grant
  * collaborator (who pass the share `token`). The assistant message is always
