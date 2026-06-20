@@ -2,6 +2,7 @@ import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
+import { contentFromParts } from "./messageParts";
 import { getOrCreateDefaultWorkspace } from "./workspaces";
 
 export const list = query({
@@ -135,6 +136,13 @@ export const fork = mutation({
 	args: {
 		conversationId: v.id("conversations"),
 		upToMessageId: v.id("messages"),
+		// "Rewind & fork into the middle of an assistant message": when set, the
+		// LAST copied message (must be the boundary assistant message, with
+		// parts) is copied TRUNCATED to this many flat parts, with `content`
+		// recomputed to match. The original conversation is untouched — a fork
+		// has no live agent session, so there is nothing to reset and zero
+		// desync risk, which is why fork is the safe primary for mid-message.
+		truncateLastPartCount: v.optional(v.number()),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -165,11 +173,37 @@ export const fork = mutation({
 			userId: identity.subject,
 			lastMessageAt: Date.now(),
 			forkedFromConversationId: args.conversationId,
+			// Message COUNT is unchanged by a mid-message truncation (the boundary
+			// message is kept, just shortened), so version-sibling bookkeeping
+			// stays valid.
 			forkedAtMessageCount: messagesToCopy.length,
 		});
 
-		for (const msg of messagesToCopy) {
+		for (let i = 0; i < messagesToCopy.length; i++) {
+			const msg = messagesToCopy[i];
 			const { _id, _creationTime, conversationId, ...rest } = msg;
+			const isLast = i === messagesToCopy.length - 1;
+			if (
+				isLast &&
+				args.truncateLastPartCount != null &&
+				msg.role === "assistant" &&
+				msg.parts
+			) {
+				const keep = Math.floor(args.truncateLastPartCount);
+				if (keep >= 1 && keep < msg.parts.length) {
+					const trimmedParts = msg.parts.slice(0, keep);
+					await ctx.db.insert("messages", {
+						...rest,
+						parts: trimmedParts,
+						content: contentFromParts(trimmedParts),
+						reasoning: undefined,
+						toolCalls: undefined,
+						conversationId: newConvoId,
+						workspaceId: convo.workspaceId,
+					});
+					continue;
+				}
+			}
 			await ctx.db.insert("messages", {
 				...rest,
 				conversationId: newConvoId,

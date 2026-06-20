@@ -1,6 +1,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.*s");
@@ -243,6 +244,107 @@ describe("messages.removeAfter (rewind)", () => {
 		const b = t.asUser("u-b");
 		await expect(
 			b.mutation(api.messages.removeAfter, { id: msgId }),
+		).rejects.toThrow(/Not found/);
+	});
+});
+
+describe("messages.truncatePart (mid-message rewind)", () => {
+	// flat parts: text "A", tool_call, text "B" → content "AB"
+	const partsAB = [
+		{ type: "text" as const, content: "A" },
+		{ type: "tool_call" as const, tool: "Read", call_id: "c1" },
+		{ type: "text" as const, content: "B" },
+	];
+
+	async function seedWithAssistantParts(t: ReturnType<typeof makeT>) {
+		const { user, conversationId } = await seedConversation(t, "u-a");
+		const q1 = await user.mutation(api.messages.send, {
+			conversationId,
+			role: "user",
+			content: "q1",
+		});
+		await new Promise((r) => setTimeout(r, 2));
+		const a1 = await t.raw.run(async (ctx) =>
+			ctx.db.insert("messages", {
+				conversationId,
+				role: "assistant" as const,
+				content: "AB",
+				parts: partsAB,
+			}),
+		);
+		await new Promise((r) => setTimeout(r, 2));
+		// a trailing turn that must be deleted by the truncation
+		await user.mutation(api.messages.send, {
+			conversationId,
+			role: "user",
+			content: "q2",
+		});
+		return { user, conversationId, q1, a1 };
+	}
+
+	it("keeps the first N parts, recomputes content, and deletes later messages", async () => {
+		const t = makeT();
+		const { user, conversationId, a1 } = await seedWithAssistantParts(t);
+		// Keep only the first part (text "A").
+		await user.mutation(api.messages.truncatePart, {
+			id: a1 as Id<"messages">,
+			keepPartCount: 1,
+		});
+		const left = await user.query(api.messages.list, { conversationId });
+		expect(left.map((m) => m.content)).toEqual(["q1", "A"]);
+		expect(left[1].parts?.length).toBe(1);
+	});
+
+	it("recomputes content from kept TEXT parts only (skips tool/reasoning)", async () => {
+		const t = makeT();
+		const { user, conversationId, a1 } = await seedWithAssistantParts(t);
+		// Keep parts [text A, tool_call] — content is text-only, so "A".
+		await user.mutation(api.messages.truncatePart, {
+			id: a1 as Id<"messages">,
+			keepPartCount: 2,
+		});
+		const left = await user.query(api.messages.list, { conversationId });
+		expect(left.map((m) => m.content)).toEqual(["q1", "A"]);
+		expect(left[1].parts?.length).toBe(2);
+	});
+
+	it("rejects keepPartCount out of range (0 or >= parts.length)", async () => {
+		const t = makeT();
+		const { user, a1 } = await seedWithAssistantParts(t);
+		await expect(
+			user.mutation(api.messages.truncatePart, {
+				id: a1 as Id<"messages">,
+				keepPartCount: 0,
+			}),
+		).rejects.toThrow(/out of range/);
+		await expect(
+			user.mutation(api.messages.truncatePart, {
+				id: a1 as Id<"messages">,
+				keepPartCount: 3,
+			}),
+		).rejects.toThrow(/out of range/);
+	});
+
+	it("rejects truncating a user (non-assistant) message", async () => {
+		const t = makeT();
+		const { user, q1 } = await seedWithAssistantParts(t);
+		await expect(
+			user.mutation(api.messages.truncatePart, {
+				id: q1 as Id<"messages">,
+				keepPartCount: 1,
+			}),
+		).rejects.toThrow(/assistant/);
+	});
+
+	it("rejects a caller who doesn't own the conversation", async () => {
+		const t = makeT();
+		const { a1 } = await seedWithAssistantParts(t);
+		const b = t.asUser("u-b");
+		await expect(
+			b.mutation(api.messages.truncatePart, {
+				id: a1 as Id<"messages">,
+				keepPartCount: 1,
+			}),
 		).rejects.toThrow(/Not found/);
 	});
 });
