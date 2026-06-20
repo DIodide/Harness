@@ -114,6 +114,7 @@ import {
 import type { SkillEntry } from "../../lib/skills";
 import type { BudgetExceededInfo } from "../../lib/use-chat-stream";
 import { toPersistableParts } from "../../lib/use-chat-stream";
+import { useFollowStream } from "../../lib/use-follow-stream";
 import { cn } from "../../lib/utils";
 import { getWorkspaceColorHex } from "../../lib/workspace-colors";
 
@@ -979,18 +980,31 @@ function ChatPage() {
 		onToggleSidebar: () => setSidebarOpen((v) => !v),
 	});
 
+	// Hooks must run unconditionally — keep these ABOVE the early return.
+	const isLocalActiveStreaming = activeConvoId
+		? chatStream.streamingConvoIds.has(activeConvoId)
+		: false;
+	// When THIS tab isn't driving the active conversation's turn (another tab or
+	// a sharee is), follow the live token feed so it streams down here too.
+	const { followState: ownerFollow, clearFollow: clearOwnerFollow } =
+		useFollowStream({
+			conversationId: activeConvoId ?? null,
+			enabled: !!activeConvoId && !isLocalActiveStreaming,
+		});
+
 	if (harnessesLoading || !harnesses || harnesses.length === 0) {
 		return <ChatSkeleton />;
 	}
 	const activeConversation = conversations?.find(
 		(c) => c._id === activeConvoId,
 	);
-	const activeStreamState = activeConvoId
+	const localActiveStreamState = activeConvoId
 		? (streamStates[activeConvoId] ?? EMPTY_STREAM_STATE)
 		: EMPTY_STREAM_STATE;
-	const isActiveConvoStreaming = activeConvoId
-		? chatStream.streamingConvoIds.has(activeConvoId)
-		: false;
+	// Prefer the follow feed; else local — covers our own turn AND the post-done
+	// handoff window before the persisted row syncs.
+	const activeStreamState = ownerFollow ?? localActiveStreamState;
+	const isActiveConvoStreaming = isLocalActiveStreaming || ownerFollow != null;
 	const agentActivityCount = countActiveAgents(
 		activeStreamState.parts,
 		isActiveConvoStreaming,
@@ -1120,7 +1134,10 @@ function ChatPage() {
 							agentStatus={activeStreamState.agentStatus}
 							streamPlan={activeStreamState.plan}
 							agentUsage={activeStreamState.agentUsage}
-							onStreamSynced={handleStreamSynced}
+							onStreamSynced={(cid) => {
+								handleStreamSynced(cid);
+								clearOwnerFollow();
+							}}
 							displayMode={
 								(userSettings?.displayMode as DisplayMode) ?? "standard"
 							}
