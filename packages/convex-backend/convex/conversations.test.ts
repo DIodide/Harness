@@ -209,6 +209,93 @@ describe("conversations.fork", () => {
 		});
 	});
 
+	it("truncates the boundary assistant message when truncateLastPartCount is set, leaving the original intact", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("u-a");
+		const h = await a.mutation(api.harnesses.create, baseHarness());
+		const id = await a.mutation(api.conversations.create, {
+			title: "c",
+			harnessId: h,
+		});
+		const ids = await raw.run(async (ctx) => {
+			const m1 = await ctx.db.insert("messages", {
+				conversationId: id,
+				role: "user",
+				content: "q1",
+				userId: "u-a",
+			});
+			const m2 = await ctx.db.insert("messages", {
+				conversationId: id,
+				role: "assistant",
+				content: "AB",
+				userId: "u-a",
+				parts: [
+					{ type: "text" as const, content: "A" },
+					{ type: "tool_call" as const, tool: "Read", call_id: "c1" },
+					{ type: "text" as const, content: "B" },
+				],
+			});
+			return [m1, m2];
+		});
+
+		const newConvId = await a.mutation(api.conversations.fork, {
+			conversationId: id,
+			upToMessageId: ids[1],
+			truncateLastPartCount: 1,
+		});
+		await raw.run(async (ctx) => {
+			const copied = await ctx.db
+				.query("messages")
+				.withIndex("by_conversation", (q) => q.eq("conversationId", newConvId))
+				.collect();
+			expect(copied.map((m) => m.content)).toEqual(["q1", "A"]);
+			expect(copied[1].parts?.length).toBe(1);
+			// Original conversation must be untouched.
+			const orig = await ctx.db
+				.query("messages")
+				.withIndex("by_conversation", (q) => q.eq("conversationId", id))
+				.collect();
+			expect(orig.map((m) => m.content)).toEqual(["q1", "AB"]);
+			expect(orig[1].parts?.length).toBe(3);
+		});
+	});
+
+	it("ignores truncateLastPartCount when out of range (copies the full message)", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("u-a");
+		const h = await a.mutation(api.harnesses.create, baseHarness());
+		const id = await a.mutation(api.conversations.create, {
+			title: "c",
+			harnessId: h,
+		});
+		const ids = await raw.run(async (ctx) => {
+			const m1 = await ctx.db.insert("messages", {
+				conversationId: id,
+				role: "assistant",
+				content: "AB",
+				userId: "u-a",
+				parts: [
+					{ type: "text" as const, content: "A" },
+					{ type: "text" as const, content: "B" },
+				],
+			});
+			return [m1];
+		});
+		const newConvId = await a.mutation(api.conversations.fork, {
+			conversationId: id,
+			upToMessageId: ids[0],
+			truncateLastPartCount: 5, // >= parts.length → no truncation
+		});
+		await raw.run(async (ctx) => {
+			const copied = await ctx.db
+				.query("messages")
+				.withIndex("by_conversation", (q) => q.eq("conversationId", newConvId))
+				.collect();
+			expect(copied[0].content).toBe("AB");
+			expect(copied[0].parts?.length).toBe(2);
+		});
+	});
+
 	it("throws when the target message isn't in the conversation", async () => {
 		const { raw, asUser } = makeT();
 		const a = asUser("u-a");

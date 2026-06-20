@@ -16,6 +16,7 @@ import type * as files from "../files.js";
 import type * as harnessConfigRatings from "../harnessConfigRatings.js";
 import type * as harnesses from "../harnesses.js";
 import type * as mcpOAuthTokens from "../mcpOAuthTokens.js";
+import type * as messageParts from "../messageParts.js";
 import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
 import type * as sandboxes from "../sandboxes.js";
@@ -41,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   harnessConfigRatings: typeof harnessConfigRatings;
   harnesses: typeof harnesses;
   mcpOAuthTokens: typeof mcpOAuthTokens;
+  messageParts: typeof messageParts;
   messages: typeof messages;
   migrations: typeof migrations;
   sandboxes: typeof sandboxes;

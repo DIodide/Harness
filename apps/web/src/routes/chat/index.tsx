@@ -849,10 +849,8 @@ function ChatPage() {
 
 	// Fork-at-message ("Fork" on an assistant message + "Rewind & fork" on a
 	// user message) and in-place rewind, shared with the /workspaces route.
-	const { handleRewind, forkAtMessage } = useRewind(
-		activeConvoId,
-		handleSelectConversation,
-	);
+	const { handleRewind, forkAtMessage, handleRewindToPart, forkAtPart } =
+		useRewind(activeConvoId, handleSelectConversation);
 
 	const editForkAndSend = useMutation({
 		mutationFn: useConvexMutation(api.conversations.editForkAndSend),
@@ -1087,6 +1085,8 @@ function ChatPage() {
 							onFork={forkAtMessage}
 							onRewind={handleRewind}
 							onRewindFork={forkAtMessage}
+							onRewindToPart={handleRewindToPart}
+							onForkToPart={forkAtPart}
 							onStartEditPrompt={handleStartEditPrompt}
 							onCancelEditPrompt={handleCancelEditPrompt}
 							onSaveEditPrompt={handleSaveEditPrompt}
