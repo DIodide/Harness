@@ -2239,12 +2239,19 @@ class AgentSessionManager:
         Keyed by conversation, not agent, so a session-only agent override is
         never missed. Returns how many sessions were reset.
         """
+        # Only tear down IDLE sessions: a session that's prompting/provisioning,
+        # has a turn starting (turn_guard), or holds its lock must not be ripped
+        # out from under a live turn — same guard the reaper/_claim_parked use.
+        # (The client already blocks rewind while streaming; this is the
+        # server-side backstop.)
         targets = [
             s
             for s in self._sessions.values()
             if s.user_id == user_id
             and s.conversation_id == conversation_id
-            and s.status not in ("error", "closed")
+            and s.status == "ready"
+            and s.turn_guard == 0
+            and not s.lock.locked()
         ]
         for session in targets:
             await self._teardown(session, park=True)
