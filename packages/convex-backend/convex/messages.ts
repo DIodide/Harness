@@ -314,7 +314,18 @@ export const saveInterruptedMessage = mutation({
 			workspaceId: convo.workspaceId,
 			userId: convo.userId,
 			role: "assistant",
-			content: args.content,
+			// Enforce the invariant content == contentFromParts(parts) here too,
+			// rather than trusting the client-supplied content — the one
+			// frontend-callable persistence path. The streaming client already
+			// keeps state.content in lockstep with its text parts, so for a
+			// well-behaved caller this recompute equals what it sent (the
+			// `convexHasMessage` handshake, which compares lastMsg.content to the
+			// client's pendingDoneContent, still matches). Falls back to the raw
+			// content only when no parts were captured.
+			content:
+				args.parts && args.parts.length > 0
+					? contentFromParts(args.parts)
+					: args.content,
 			interrupted: true,
 			...(args.reasoning ? { reasoning: args.reasoning } : {}),
 			...(args.toolCalls && args.toolCalls.length > 0
