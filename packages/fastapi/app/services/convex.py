@@ -197,6 +197,61 @@ async def patch_message_usage(
         )
 
 
+async def save_compaction(
+    http_client: httpx.AsyncClient,
+    conversation_id: str,
+    summary: str,
+    trigger: str,
+    at_message_count: int | None = None,
+    pre_tokens: int | None = None,
+    post_tokens: int | None = None,
+    model: str | None = None,
+    requester_user_id: str | None = None,
+    requester_token: str | None = None,
+) -> None:
+    """Record a Claude Code context compaction (manual /compact or auto).
+
+    Deploy-key admin auth → the internal `compactions:record` mutation (which
+    derives the owner server-side). Fail-soft: a compaction record is
+    observability metadata, so a save failure must never break the live turn.
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        logger.warning("Convex not configured — skipping compaction save")
+        return
+
+    args: dict = {
+        "conversationId": conversation_id,
+        "summary": summary,
+        "trigger": trigger if trigger in ("manual", "auto") else "manual",
+    }
+    if at_message_count is not None:
+        args["atMessageCount"] = at_message_count
+    if pre_tokens is not None:
+        args["preTokens"] = pre_tokens
+    if post_tokens is not None:
+        args["postTokens"] = post_tokens
+    if model:
+        args["model"] = model
+    if requester_user_id:
+        args["requesterUserId"] = requester_user_id
+    if requester_token:
+        args["requesterToken"] = requester_token
+
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/mutation",
+            headers={"Authorization": f"Convex {settings.convex_deploy_key}"},
+            json={"path": "compactions:record", "args": args, "format": "json"},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        logger.info("Recorded compaction for conversation '%s'", conversation_id)
+    except Exception:
+        logger.exception(
+            "Failed to record compaction for conversation '%s'", conversation_id
+        )
+
+
 async def verify_conversation_access(
     http_client: httpx.AsyncClient,
     conversation_id: str,

@@ -39,6 +39,7 @@ import { MessageAttachments } from "../message-attachments";
 import { PendingResponseIndicator } from "../pending-response-indicator";
 import { RoseCurveSpinner } from "../rose-curve-spinner";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
+import { CompactionPanel, type CompactionRow } from "./compaction-panel";
 import { StreamingUsage, ThinkingBlock, ToolCallBlock } from "./message-blocks";
 
 /** Superset of stream parts and persisted Convex parts. */
@@ -514,6 +515,9 @@ export function ChatMessages({
 	onClearScrollTarget,
 	readOnly = false,
 	shareToken,
+	compactions = [],
+	onStartFromSummary,
+	isStartingClone,
 }: {
 	conversationId: Id<"conversations">;
 	messages: Array<{
@@ -614,6 +618,11 @@ export function ChatMessages({
 	readOnly?: boolean;
 	/** Shared view: resolve attachment URLs through the token-scoped query. */
 	shareToken?: string;
+	/** Context-compaction records for this conversation (observability). */
+	compactions?: CompactionRow[];
+	/** Start a fresh conversation seeded from a compaction summary. */
+	onStartFromSummary?: (compactionId: string) => void;
+	isStartingClone?: boolean;
 }) {
 	const navigate = useNavigate();
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -1206,6 +1215,14 @@ export function ChatMessages({
 						);
 					});
 				})()}
+
+				{!readOnly && (
+					<CompactionPanel
+						compactions={compactions}
+						onStartFromSummary={onStartFromSummary}
+						isStartingClone={isStartingClone}
+					/>
+				)}
 
 				{showStreamingBubble && (
 					<motion.div

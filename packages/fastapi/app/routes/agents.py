@@ -41,6 +41,7 @@ from app.services.agents.session_manager import (
 from app.services.convex import (
     resolve_collab_harness,
     save_assistant_message,
+    save_compaction,
     verify_conversation_access,
 )
 from app.services import stream_bus
@@ -619,6 +620,24 @@ async def prompt(
                                         **refined_args,
                                     }
                                 break
+                elif event["event"] == "compaction":
+                    # Persist immediately (mid-turn): a compaction is a
+                    # standalone fact that must survive an interrupted turn,
+                    # unlike the assistant-message save (skipped on the SSE
+                    # disconnect path in the `finally` below).
+                    cd = event["data"]
+                    await save_compaction(
+                        http_client,
+                        session.conversation_id,
+                        summary=cd.get("summary") or "",
+                        trigger=cd.get("trigger") or "manual",
+                        at_message_count=len(body.history or []),
+                        pre_tokens=cd.get("pre_tokens"),
+                        post_tokens=cd.get("post_tokens"),
+                        model=f"acp:{session.agent_id}",
+                        requester_user_id=requester_sub,
+                        requester_token=requester_token,
+                    )
                 yield {"event": event["event"], "data": json.dumps(event["data"])}
         finally:
             if terminal_event is None:
