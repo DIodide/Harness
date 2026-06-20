@@ -72,6 +72,7 @@ import {
 import { UsageDialog } from "../../components/usage-dialog";
 import { formatResetTime, UsageBadge } from "../../components/usage-display";
 import { env } from "../../env";
+import { useRewind } from "../../hooks/use-rewind";
 import {
 	EMPTY_STREAM_STATE,
 	useChatStreamContext,
@@ -83,7 +84,6 @@ import {
 } from "../../lib/harness-stream";
 import type { McpAuthType } from "../../lib/mcp";
 import { fetchCommandsFromApi, sanitizeServerName } from "../../lib/mcp";
-import { resetAgentSessionForRewind } from "../../lib/rewind";
 import {
 	SandboxPanelProvider,
 	useSandboxPanel,
@@ -847,54 +847,11 @@ function ChatPage() {
 		],
 	);
 
-	const forkConversation = useMutation({
-		mutationFn: useConvexMutation(api.conversations.fork),
-	});
-
-	const handleFork = useCallback(
-		async (messageId: Id<"messages">) => {
-			if (!activeConvoId) return;
-			const newConvoId = await forkConversation.mutateAsync({
-				conversationId: activeConvoId,
-				upToMessageId: messageId,
-			});
-			handleSelectConversation(newConvoId);
-		},
-		[activeConvoId, forkConversation, handleSelectConversation],
-	);
-
-	// removeAfter (exclusive): rewind keeps the target user message and deletes
-	// only what's below it. Distinct from removeFrom (inclusive) used by
-	// regenerate.
-	const truncateAfterMessage = useMutation({
-		mutationFn: useConvexMutation(api.messages.removeAfter),
-	});
-
-	// Normal rewind: truncate the thread to a user message in place, then reset
-	// the live agent session (server-side, keyed by conversation) so its next
-	// turn rebuilds from the truncated history. Does NOT auto-stream — re-sending
-	// is the user's explicit choice. No-op for the stateless OpenRouter loop.
-	const handleRewind = useCallback(
-		async (messageId: Id<"messages">) => {
-			if (!activeConvoId) return;
-			// Same in-flight guard as regenerate.
-			if (
-				chatStream.streamingConvoIds.has(activeConvoId) ||
-				streamStatesRef.current[activeConvoId]?.pendingDoneContent != null
-			) {
-				return;
-			}
-			await truncateAfterMessage.mutateAsync({ id: messageId });
-			const token = await getToken();
-			await resetAgentSessionForRewind(token, activeConvoId);
-		},
-		[
-			activeConvoId,
-			chatStream,
-			truncateAfterMessage,
-			streamStatesRef,
-			getToken,
-		],
+	// Fork-at-message ("Fork" on an assistant message + "Rewind & fork" on a
+	// user message) and in-place rewind, shared with the /workspaces route.
+	const { handleRewind, forkAtMessage } = useRewind(
+		activeConvoId,
+		handleSelectConversation,
 	);
 
 	const editForkAndSend = useMutation({
@@ -1127,9 +1084,9 @@ function ChatPage() {
 								(userSettings?.displayMode as DisplayMode) ?? "standard"
 							}
 							onRegenerate={handleRegenerate}
-							onFork={handleFork}
+							onFork={forkAtMessage}
 							onRewind={handleRewind}
-							onRewindFork={handleFork}
+							onRewindFork={forkAtMessage}
 							onStartEditPrompt={handleStartEditPrompt}
 							onCancelEditPrompt={handleCancelEditPrompt}
 							onSaveEditPrompt={handleSaveEditPrompt}
