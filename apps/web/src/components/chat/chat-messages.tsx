@@ -376,8 +376,22 @@ function AssistantParts({
 	const organized = useMemo(() => organizeParts(parts), [parts]);
 	const seams = useMemo(() => computeSeams(parts as SeamPart[]), [parts]);
 
+	// Block-index state can't outlive the geometry it indexes: when parts change
+	// in place (e.g. a background subagent appends to the last message), reset so
+	// a stale index can't pin a dim or orphan an open confirm. `parts` is an
+	// intentional change-trigger dependency even though the effect body only
+	// clears state.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset on parts-geometry change
+	useEffect(() => {
+		setOpenIdx(null);
+		setHoverIdx(null);
+	}, [parts]);
+
 	const activeIdx = openIdx ?? hoverIdx;
-	const activeKeep = activeIdx != null ? seams.keepCounts[activeIdx] : null;
+	const activeKeep =
+		activeIdx != null && activeIdx < seams.topCount
+			? seams.keepCounts[activeIdx]
+			: null;
 
 	return (
 		<>
@@ -437,8 +451,18 @@ function AssistantParts({
 									originalContent,
 								)}
 								open={openIdx === partIdx}
-								onOpen={() => setOpenIdx(partIdx)}
-								onClose={() => setOpenIdx(null)}
+								// Clear hover on both open and close: clicking unmounts the
+								// seam button while the cursor is still over it, so its
+								// onMouseLeave never fires — without this the dim would stick
+								// after Cancel/Fork/Rewind (activeIdx falls back to hoverIdx).
+								onOpen={() => {
+									setOpenIdx(partIdx);
+									setHoverIdx(null);
+								}}
+								onClose={() => {
+									setOpenIdx(null);
+									setHoverIdx(null);
+								}}
 								onHover={(active) => setHoverIdx(active ? partIdx : null)}
 								onRewind={() => rewind.onRewindToPart(keep)}
 								onFork={() => rewind.onForkToPart(keep)}
