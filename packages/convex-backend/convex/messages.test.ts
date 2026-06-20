@@ -378,6 +378,49 @@ describe("messages.truncatePart (mid-message rewind)", () => {
 	});
 });
 
+describe("messages.saveInterruptedMessage", () => {
+	it("recomputes content from parts, ignoring divergent client-supplied content", async () => {
+		const t = makeT();
+		const { user, conversationId } = await seedConversation(t, "u-a");
+		await user.mutation(api.messages.saveInterruptedMessage, {
+			conversationId,
+			content: "STALE-CLIENT-VALUE",
+			parts: [
+				{ type: "text" as const, content: "A" },
+				{ type: "tool_call" as const, tool: "Read", call_id: "c1" },
+				{ type: "text" as const, content: "B" },
+			],
+		});
+		const msgs = await user.query(api.messages.list, { conversationId });
+		// Persisted content is the faithful join of text parts, not "STALE...".
+		expect(msgs.map((m) => m.content)).toEqual(["AB"]);
+		expect(msgs[0].interrupted).toBe(true);
+	});
+
+	it("falls back to client content when no parts were captured", async () => {
+		const t = makeT();
+		const { user, conversationId } = await seedConversation(t, "u-a");
+		await user.mutation(api.messages.saveInterruptedMessage, {
+			conversationId,
+			content: "partial text",
+		});
+		const msgs = await user.query(api.messages.list, { conversationId });
+		expect(msgs.map((m) => m.content)).toEqual(["partial text"]);
+	});
+
+	it("rejects a caller who doesn't own the conversation", async () => {
+		const t = makeT();
+		const { conversationId } = await seedConversation(t, "u-a");
+		const b = t.asUser("u-b");
+		await expect(
+			b.mutation(api.messages.saveInterruptedMessage, {
+				conversationId,
+				content: "x",
+			}),
+		).rejects.toThrow();
+	});
+});
+
 describe("messages.patchMessageUsage (internal)", () => {
 	it("patches usage on the last assistant message", async () => {
 		const t = makeT();
