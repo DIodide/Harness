@@ -2153,6 +2153,10 @@ class AgentSessionManager:
             # Drain any stale events from a previous turn.
             while not session.event_queue.empty():
                 session.event_queue.get_nowait()
+            # A compaction's boundary→summary pair always lands within a single
+            # turn; clear any stale boundary metadata so it can't be paired with
+            # a later turn's user message that merely echoes the summary preamble.
+            session.pending_compaction = None
 
             outgoing = message
             if session.pending_replay and session.transcript:

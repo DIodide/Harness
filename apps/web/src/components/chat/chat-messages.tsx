@@ -1217,7 +1217,10 @@ export function ChatMessages({
 				})()}
 
 				{!readOnly && (
+					// Keyed by conversation so the panel's local "dismissed" state
+					// resets when switching conversations (ChatMessages isn't remounted).
 					<CompactionPanel
+						key={conversationId}
 						compactions={compactions}
 						onStartFromSummary={onStartFromSummary}
 						isStartingClone={isStartingClone}
