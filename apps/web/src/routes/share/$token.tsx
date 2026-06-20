@@ -34,6 +34,7 @@ import {
 	EMPTY_STREAM_STATE,
 	useChatStreamContext,
 } from "../../lib/chat-stream-context";
+import { openConversation } from "../../lib/navigate-to-conversation";
 import {
 	SandboxPanelProvider,
 	useSandboxPanel,
@@ -122,12 +123,17 @@ function SharedChatPage() {
 		if (userSettings === undefined) return;
 		ownerRedirected.current = true;
 		const convoId = header.conversationId as string;
-		if (userSettings.workspacesMode !== "workspaces") {
-			navigate({ to: "/chat", search: { convoId } });
+		const mode = userSettings.workspacesMode;
+		if (mode !== "workspaces") {
+			openConversation(navigate, { workspacesMode: mode, convoId });
 			return;
 		}
 		const openInWorkspace = (workspaceId: string) =>
-			navigate({ to: "/workspaces", search: { workspaceId, convoId } });
+			openConversation(navigate, {
+				workspacesMode: mode,
+				workspaceId,
+				convoId,
+			});
 		if (header.workspaceId) {
 			openInWorkspace(header.workspaceId);
 		} else {
@@ -349,22 +355,12 @@ function ForkWorkspaceDialog({
 				onSuccess: (newConvoId) => {
 					toast.success("Forked to your workspace");
 					onOpenChange(false);
-					// Mode-aware landing: workspaces users open the fork in its
-					// workspace; basic-mode users open it in /chat (the /workspaces
-					// route would bounce them and drop the convoId).
-					if (userSettings?.workspacesMode !== "workspaces") {
-						navigate({
-							to: "/chat",
-							search: { convoId: newConvoId as string },
-						});
-						return;
-					}
-					navigate({
-						to: "/workspaces",
-						search: {
-							workspaceId: selectedId as string,
-							convoId: newConvoId as string,
-						},
+					// Mode-aware landing (workspaces users open the fork in its
+					// workspace; basic-mode users in /chat) — convoId is always carried.
+					openConversation(navigate, {
+						workspacesMode: userSettings?.workspacesMode,
+						workspaceId: selectedId,
+						convoId: newConvoId as string,
 					});
 				},
 				onError: (e) =>
