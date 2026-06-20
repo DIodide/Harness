@@ -174,4 +174,89 @@ describe("workspaces.remove", () => {
 			/Workspace not found/,
 		);
 	});
+
+	it("refuses to delete the Default workspace", async () => {
+		const { asUser } = makeT();
+		const a = asUser("user-a");
+		const defaultId = await a.mutation(api.workspaces.ensureDefault, {});
+		await expect(
+			a.mutation(api.workspaces.remove, { id: defaultId }),
+		).rejects.toThrow(/Default workspace can't be deleted/);
+	});
+});
+
+describe("workspaces.ensureDefault", () => {
+	it("creates a single flagged Default and is idempotent", async () => {
+		const { asUser } = makeT();
+		const a = asUser("user-a");
+		const first = await a.mutation(api.workspaces.ensureDefault, {});
+		const second = await a.mutation(api.workspaces.ensureDefault, {});
+		expect(second).toBe(first);
+		const rows = await a.query(api.workspaces.list, {});
+		const defaults = rows.filter((w) => w.isDefault);
+		expect(defaults).toHaveLength(1);
+		expect(defaults[0]._id).toBe(first);
+		expect(defaults[0].name).toBe("Default");
+	});
+
+	it("backfills an existing account by adopting its 'Default'-named workspace", async () => {
+		const { asUser } = makeT();
+		const a = asUser("user-a");
+		// Pre-flag account: a "Default" workspace + another, neither flagged.
+		const legacyDefault = await a.mutation(api.workspaces.create, {
+			name: "Default",
+		});
+		await a.mutation(api.workspaces.create, { name: "Side project" });
+		const resolved = await a.mutation(api.workspaces.ensureDefault, {});
+		// Adopts the existing "Default" rather than spawning a duplicate.
+		expect(resolved).toBe(legacyDefault);
+		const rows = await a.query(api.workspaces.list, {});
+		expect(rows.filter((w) => w.isDefault).map((w) => w._id)).toEqual([
+			legacyDefault,
+		]);
+	});
+
+	it("creates a fresh Default without flagging existing custom-named workspaces", async () => {
+		const { asUser } = makeT();
+		const a = asUser("user-a");
+		// An account whose workspaces are all custom-named (no "Default").
+		const prod = await a.mutation(api.workspaces.create, {
+			name: "Production",
+		});
+		const scratch = await a.mutation(api.workspaces.create, {
+			name: "Scratch",
+		});
+		const resolved = await a.mutation(api.workspaces.ensureDefault, {});
+		const rows = await a.query(api.workspaces.list, {});
+		// A brand-new "Default" was created; the custom ones are untouched and
+		// remain deletable (not flagged).
+		const def = rows.find((w) => w._id === resolved);
+		expect(def?.name).toBe("Default");
+		expect(def?.isDefault).toBe(true);
+		expect(rows.find((w) => w._id === prod)?.isDefault).toBeUndefined();
+		expect(rows.find((w) => w._id === scratch)?.isDefault).toBeUndefined();
+		// The custom workspaces stay deletable.
+		await a.mutation(api.workspaces.remove, { id: prod });
+		expect(await a.query(api.workspaces.get, { id: prod })).toBeNull();
+	});
+
+	it("keeps the Default's harness/sandbox editable", async () => {
+		const { asUser, raw } = makeT();
+		const a = asUser("user-a");
+		const defaultId = await a.mutation(api.workspaces.ensureDefault, {});
+		const harnessId = await raw.run((ctx) =>
+			ctx.db.insert("harnesses", {
+				name: "h",
+				model: "m",
+				status: "stopped",
+				mcpServers: [],
+				skills: [],
+				userId: "user-a",
+			}),
+		);
+		await a.mutation(api.workspaces.update, { id: defaultId, harnessId });
+		const ws = await a.query(api.workspaces.get, { id: defaultId });
+		expect(ws?.harnessId).toBe(harnessId);
+		expect(ws?.isDefault).toBe(true);
+	});
 });

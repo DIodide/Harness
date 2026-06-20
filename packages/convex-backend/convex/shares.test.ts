@@ -658,3 +658,80 @@ describe("messages.saveAssistantMessage defense-in-depth", () => {
 		expect(reply?.userId).toBe("u-owner");
 	});
 });
+
+describe("forkSharedConversation workspace placement", () => {
+	it("lands in the forker's Default workspace when none is given", async () => {
+		const { raw, asUser } = makeT();
+		const convoId = await seedConvo(raw, "u-owner");
+		await mintLink(asUser, convoId, "viewer");
+		const newId = await asUser("u-forker").mutation(
+			api.shares.forkSharedConversation,
+			{ token: TOKEN },
+		);
+		const convo = await raw.run((ctx) => ctx.db.get(newId));
+		const ws = await asUser("u-forker").query(api.workspaces.get, {
+			id: convo?.workspaceId as Id<"workspaces">,
+		});
+		expect(ws?.userId).toBe("u-forker");
+		expect(ws?.isDefault).toBe(true);
+	});
+
+	it("honors the forker's chosen workspace", async () => {
+		const { raw, asUser } = makeT();
+		const convoId = await seedConvo(raw, "u-owner");
+		await mintLink(asUser, convoId, "viewer");
+		const wsId = await asUser("u-forker").mutation(api.workspaces.create, {
+			name: "Target",
+		});
+		const newId = await asUser("u-forker").mutation(
+			api.shares.forkSharedConversation,
+			{ token: TOKEN, workspaceId: wsId },
+		);
+		const convo = await raw.run((ctx) => ctx.db.get(newId));
+		expect(convo?.workspaceId).toBe(wsId);
+	});
+
+	it("rejects a workspace the forker does not own", async () => {
+		const { raw, asUser } = makeT();
+		const convoId = await seedConvo(raw, "u-owner");
+		await mintLink(asUser, convoId, "viewer");
+		const othersWs = await asUser("u-stranger").mutation(
+			api.workspaces.create,
+			{ name: "NotYours" },
+		);
+		await expect(
+			asUser("u-forker").mutation(api.shares.forkSharedConversation, {
+				token: TOKEN,
+				workspaceId: othersWs,
+			}),
+		).rejects.toThrow(/Workspace not found/);
+	});
+});
+
+describe("getSharedConversation workspaceId", () => {
+	it("returns the convo's workspace to the OWNER and null to others", async () => {
+		const { raw, asUser } = makeT();
+		const wsId = await asUser("u-owner").mutation(api.workspaces.create, {
+			name: "Home",
+		});
+		const convoId = await raw.run((ctx) =>
+			ctx.db.insert("conversations", {
+				title: "shared",
+				userId: "u-owner",
+				workspaceId: wsId,
+				lastMessageAt: 1,
+			}),
+		);
+		await mintLink(asUser, convoId, "viewer");
+		const asOwner = await asUser("u-owner").query(
+			api.shares.getSharedConversation,
+			{ token: TOKEN },
+		);
+		expect(asOwner?.workspaceId).toBe(wsId);
+		const asOther = await asUser("u-other").query(
+			api.shares.getSharedConversation,
+			{ token: TOKEN },
+		);
+		expect(asOther?.workspaceId).toBeNull();
+	});
+});

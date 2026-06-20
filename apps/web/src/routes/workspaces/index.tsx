@@ -122,9 +122,12 @@ import { getWorkspaceColorHex } from "../../lib/workspace-colors";
 export const Route = createFileRoute("/workspaces/")({
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { harnessId?: string; workspaceId?: string } => ({
+	): { harnessId?: string; workspaceId?: string; convoId?: string } => ({
 		harnessId: (search.harnessId as string) ?? undefined,
 		workspaceId: (search.workspaceId as string) ?? undefined,
+		// Deep-link a specific conversation (e.g. the owner opening their own
+		// share link) — opens it in its workspace.
+		convoId: (search.convoId as string) ?? undefined,
 	}),
 	beforeLoad: async ({ context }) => {
 		if (!context.userId) {
@@ -157,8 +160,11 @@ const LAST_CHAT_RESTORE_WINDOW_MS = 8 * 60 * 60 * 1000;
 function ChatPage() {
 	const navigate = useNavigate();
 	const { getToken } = useAuth();
-	const { harnessId: initialHarnessId, workspaceId: initialWorkspaceId } =
-		Route.useSearch();
+	const {
+		harnessId: initialHarnessId,
+		workspaceId: initialWorkspaceId,
+		convoId: initialConvoId,
+	} = Route.useSearch();
 
 	const { data: harnesses, isLoading: harnessesLoading } = useQuery(
 		convexQuery(api.harnesses.list, {}),
@@ -179,10 +185,13 @@ function ChatPage() {
 		// auth-loading window too, and calling ensureDefault then throws
 		// "Unauthenticated" — which, with the fire-once ref, would wedge the
 		// page forever. Reset the ref on failure so a transient error can retry.
+		// Fire when there's no flagged Default yet — covers brand-new accounts AND
+		// existing accounts predating the isDefault flag (backfill). ensureDefault
+		// is idempotent; once it runs, list refreshes with the flag and this stops.
 		if (
 			convexAuthReady &&
 			workspaces &&
-			workspaces.length === 0 &&
+			!workspaces.some((w) => w.isDefault) &&
 			!ensuredDefaultRef.current
 		) {
 			ensuredDefaultRef.current = true;
@@ -207,8 +216,12 @@ function ChatPage() {
 		useState<Id<"workspaces"> | null>(null);
 	const [activeSandboxSelection, setActiveSandboxSelection] =
 		useState<SandboxSelection>("harness");
+	// Initialize from the URL so a deep-linked conversation opens directly (and
+	// the most-recent-chat restore effect below sees it set and doesn't override).
 	const [activeConvoId, setActiveConvoId] =
-		useState<Id<"conversations"> | null>(null);
+		useState<Id<"conversations"> | null>(
+			(initialConvoId as Id<"conversations">) ?? null,
+		);
 	const { data: conversations } = useQuery(
 		convexQuery(
 			api.conversations.list,
@@ -452,9 +465,14 @@ function ChatPage() {
 	}, [activeWorkspaceId, conversations, activeConvoId]);
 
 	useEffect(() => {
+		// Still loading (undefined) or transiently empty during the auth-validation
+		// window: do NOT touch activeConvoId. It may have been seeded from the URL
+		// (a deep-linked share/fork conversation) whose workspace simply hasn't
+		// loaded yet — nulling it here would lose the deep link before we can open
+		// it. The Default workspace is undeletable, so a genuinely-empty list is
+		// always transient.
 		if (!workspaces || workspaces.length === 0) {
 			setActiveWorkspaceId(null);
-			setActiveConvoId(null);
 			return;
 		}
 
@@ -496,12 +514,24 @@ function ChatPage() {
 			setActiveHarnessId(null);
 		}
 		setActiveSandboxSelection(activeWorkspace.sandboxId ?? "none");
+	}, [activeWorkspace, harnesses, initialHarnessId]);
+
+	// Mirror the active workspace AND conversation into the URL (merging, so other
+	// params like harnessId survive) so a refresh/bookmark reopens exactly what's
+	// on screen — deep links from the share page (workspaceId + convoId) depend on
+	// the convoId staying in the URL.
+	useEffect(() => {
+		if (!activeWorkspaceId) return;
 		navigate({
 			to: "/workspaces",
-			search: { workspaceId: activeWorkspace._id },
+			search: (prev) => ({
+				...prev,
+				workspaceId: activeWorkspaceId,
+				convoId: activeConvoId ?? undefined,
+			}),
 			replace: true,
 		});
-	}, [activeWorkspace, harnesses, initialHarnessId, navigate]);
+	}, [activeWorkspaceId, activeConvoId, navigate]);
 
 	// Reset session model whenever the active harness or conversation changes
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on harness/conversation switch
@@ -1295,6 +1325,7 @@ function WorkspaceSidebar({
 		harnessId?: Id<"harnesses">;
 		sandboxId?: Id<"sandboxes">;
 		color?: string;
+		isDefault?: boolean;
 	}>;
 	harnesses: Array<{
 		_id: Id<"harnesses">;
@@ -1539,6 +1570,12 @@ function WorkspaceSidebar({
 	};
 
 	const activeWorkspace = workspaces.find((w) => w._id === activeWorkspaceId);
+	// The Default workspace is permanent — its harness/sandbox/name stay editable,
+	// but it can't be deleted (the server enforces this too).
+	const renameWorkspaceIsDefault = renameWorkspace
+		? (workspaces.find((w) => w._id === renameWorkspace._id)?.isDefault ??
+			false)
+		: false;
 	useWorkspaceActionCommands({
 		activeWorkspace,
 		canCreateWorkspace: true,
@@ -2152,7 +2189,7 @@ function WorkspaceSidebar({
 								onChange={setRenameWorkspaceColor}
 							/>
 						</div>
-						{confirmDeleteWorkspace ? (
+						{confirmDeleteWorkspace && !renameWorkspaceIsDefault ? (
 							<p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
 								Deleting this workspace will also delete its conversations.
 								Click delete again to confirm.
@@ -2175,22 +2212,31 @@ function WorkspaceSidebar({
 							)}
 							Save Workspace
 						</Button>
-						<Button
-							type="button"
-							variant="destructive"
-							className="w-full"
-							disabled={updateWorkspace.isPending || deleteWorkspace.isPending}
-							onClick={removeWorkspace}
-						>
-							{deleteWorkspace.isPending ? (
-								<RoseCurveSpinner size={14} />
-							) : (
-								<Trash2 size={14} />
-							)}
-							{confirmDeleteWorkspace
-								? "Confirm Delete Workspace"
-								: "Delete Workspace"}
-						</Button>
+						{renameWorkspaceIsDefault ? (
+							<p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+								This is your Default workspace and can't be deleted. Its harness
+								and sandbox are still editable.
+							</p>
+						) : (
+							<Button
+								type="button"
+								variant="destructive"
+								className="w-full"
+								disabled={
+									updateWorkspace.isPending || deleteWorkspace.isPending
+								}
+								onClick={removeWorkspace}
+							>
+								{deleteWorkspace.isPending ? (
+									<RoseCurveSpinner size={14} />
+								) : (
+									<Trash2 size={14} />
+								)}
+								{confirmDeleteWorkspace
+									? "Confirm Delete Workspace"
+									: "Delete Workspace"}
+							</Button>
+						)}
 					</div>
 				</DialogContent>
 			</Dialog>

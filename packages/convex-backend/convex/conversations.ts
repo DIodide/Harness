@@ -1,7 +1,8 @@
-import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel"
-import { mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
+import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
+import { mutation, query } from "./_generated/server";
+import { getOrCreateDefaultWorkspace } from "./workspaces";
 
 export const list = query({
 	args: { workspaceId: v.optional(v.id("workspaces")) },
@@ -27,7 +28,9 @@ export const list = query({
 			.order("desc")
 			.take(100)
 			.then((conversations) =>
-				conversations.filter((conversation) => !conversation.workspaceId).slice(0, 50),
+				conversations
+					.filter((conversation) => !conversation.workspaceId)
+					.slice(0, 50),
 			);
 	},
 });
@@ -40,6 +43,44 @@ export const get = query({
 		const convo = await ctx.db.get(args.id);
 		if (!convo || convo.userId !== identity.subject) return null;
 		return convo;
+	},
+});
+
+/**
+ * Resolve the workspace a conversation lives in, adopting it into the owner's
+ * Default workspace when it has none (legacy /chat conversations). Owner-gated.
+ * Lets the share page open an owned conversation in workspaces mode. Returns the
+ * workspace id.
+ */
+export const ensureInWorkspace = mutation({
+	args: { conversationId: v.id("conversations") },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+		const convo = await ctx.db.get(args.conversationId);
+		if (!convo || convo.userId !== identity.subject) {
+			throw new Error("Not found");
+		}
+		if (convo.workspaceId) return convo.workspaceId;
+		const workspaceId = await getOrCreateDefaultWorkspace(
+			ctx,
+			identity.subject,
+		);
+		await ctx.db.patch(args.conversationId, { workspaceId });
+		// Re-stamp the conversation's messages too — the message search index
+		// filters on each row's own workspaceId, so without this the adopted
+		// conversation's existing messages would be invisible to a
+		// workspace-scoped content search.
+		const messages = await ctx.db
+			.query("messages")
+			.withIndex("by_conversation", (q) =>
+				q.eq("conversationId", args.conversationId),
+			)
+			.collect();
+		await Promise.all(
+			messages.map((m) => ctx.db.patch(m._id, { workspaceId })),
+		);
+		return workspaceId;
 	},
 });
 
@@ -100,7 +141,8 @@ export const fork = mutation({
 		if (!identity) throw new Error("Unauthenticated");
 
 		const convo = await ctx.db.get(args.conversationId);
-		if (!convo || convo.userId !== identity.subject) throw new Error("Not found");
+		if (!convo || convo.userId !== identity.subject)
+			throw new Error("Not found");
 
 		const allMessages = await ctx.db
 			.query("messages")
@@ -109,8 +151,11 @@ export const fork = mutation({
 			)
 			.take(8192);
 
-		const targetIdx = allMessages.findIndex((m) => m._id === args.upToMessageId);
-		if (targetIdx === -1) throw new Error("Message not found in this conversation");
+		const targetIdx = allMessages.findIndex(
+			(m) => m._id === args.upToMessageId,
+		);
+		if (targetIdx === -1)
+			throw new Error("Message not found in this conversation");
 		const messagesToCopy = allMessages.slice(0, targetIdx + 1);
 
 		const newConvoId = await ctx.db.insert("conversations", {
@@ -153,7 +198,8 @@ export const editForkAndSend = mutation({
 		if (!identity) throw new Error("Unauthenticated");
 
 		const convo = await ctx.db.get(args.conversationId);
-		if (!convo || convo.userId !== identity.subject) throw new Error("Not found");
+		if (!convo || convo.userId !== identity.subject)
+			throw new Error("Not found");
 
 		const allMessages = await ctx.db
 			.query("messages")
@@ -162,7 +208,10 @@ export const editForkAndSend = mutation({
 			)
 			.take(8192);
 
-		if (args.upToMessageCount < 0 || args.upToMessageCount > allMessages.length) {
+		if (
+			args.upToMessageCount < 0 ||
+			args.upToMessageCount > allMessages.length
+		) {
 			throw new Error("Invalid message count");
 		}
 
@@ -247,9 +296,7 @@ export const remove = mutation({
 		}
 		const messages = await ctx.db
 			.query("messages")
-			.withIndex("by_conversation", (q) =>
-				q.eq("conversationId", args.id),
-			)
+			.withIndex("by_conversation", (q) => q.eq("conversationId", args.id))
 			.collect();
 		for (const msg of messages) {
 			await ctx.db.delete(msg._id);
@@ -266,15 +313,14 @@ export const searchTitles = query({
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
-		if (!identity)
-			return { page: [], isDone: true, continueCursor: "" };
+		if (!identity) return { page: [], isDone: true, continueCursor: "" };
 		if (args.workspaceId) {
 			const workspace = await ctx.db.get(args.workspaceId);
 			if (!workspace || workspace.userId !== identity.subject) {
 				return { page: [], isDone: true, continueCursor: "" };
 			}
 		}
-		
+
 		return await ctx.db
 			.query("conversations")
 			.withSearchIndex("search_title", (q) =>
@@ -283,7 +329,7 @@ export const searchTitles = query({
 							.search("title", args.query)
 							.eq("userId", identity.subject)
 							.eq("workspaceId", args.workspaceId)
-					: q.search("title", args.query).eq("userId", identity.subject)
+					: q.search("title", args.query).eq("userId", identity.subject),
 			)
 			.paginate(args.paginationOpts);
 	},
@@ -295,10 +341,9 @@ export const searchContent = query({
 		workspaceId: v.optional(v.id("workspaces")),
 		paginationOpts: paginationOptsValidator,
 	},
-	handler: async (ctx, args ) => {
+	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
-		if (!identity)
-			return { page: [], isDone: true, continueCursor: ""};
+		if (!identity) return { page: [], isDone: true, continueCursor: "" };
 		if (args.workspaceId) {
 			const workspace = await ctx.db.get(args.workspaceId);
 			if (!workspace || workspace.userId !== identity.subject) {
@@ -314,15 +359,21 @@ export const searchContent = query({
 							.search("content", args.query)
 							.eq("userId", identity.subject)
 							.eq("workspaceId", args.workspaceId)
-					: q.search("content", args.query).eq("userId", identity.subject)
+					: q.search("content", args.query).eq("userId", identity.subject),
 			)
 			.paginate(args.paginationOpts);
-		
+
 		// Pre-fetch all referenced conversations in parallel to avoid N+1
-		const uniqueConvoIds = [...new Set(result.page.map((m) => m.conversationId))];
-		const convos = await Promise.all(uniqueConvoIds.map((id) => ctx.db.get(id)));
+		const uniqueConvoIds = [
+			...new Set(result.page.map((m) => m.conversationId)),
+		];
+		const convos = await Promise.all(
+			uniqueConvoIds.map((id) => ctx.db.get(id)),
+		);
 		const convoMap = new Map(
-			convos.filter((c): c is NonNullable<typeof c> => c !== null).map((c) => [c._id, c]),
+			convos
+				.filter((c): c is NonNullable<typeof c> => c !== null)
+				.map((c) => [c._id, c]),
 		);
 
 		// Enrich each message with snippet + convo title
@@ -336,7 +387,7 @@ export const searchContent = query({
 		}[] = [];
 		for (const msg of result.page) {
 			const convo = convoMap.get(msg.conversationId);
-			if (!convo || convo.userId !== identity.subject) continue
+			if (!convo || convo.userId !== identity.subject) continue;
 
 			const lowerContent = msg.content.toLowerCase();
 			const lowerQuery = args.query.toLowerCase();
@@ -345,12 +396,17 @@ export const searchContent = query({
 			let snippet: string;
 			if (matchIndex !== -1) {
 				const start = Math.max(0, matchIndex - 40);
-				const end = Math.min(msg.content.length, matchIndex + args.query.length + 40);
-				snippet = (start > 0 ? "..." : "")
-					+ msg.content.slice(start, end)
-					+ (end < msg.content.length ? "..." : "");
+				const end = Math.min(
+					msg.content.length,
+					matchIndex + args.query.length + 40,
+				);
+				snippet =
+					(start > 0 ? "..." : "") +
+					msg.content.slice(start, end) +
+					(end < msg.content.length ? "..." : "");
 			} else {
-				snippet = msg.content.slice(0, 80) + (msg.content.length > 80 ? "..." : "");
+				snippet =
+					msg.content.slice(0, 80) + (msg.content.length > 80 ? "..." : "");
 			}
 
 			enrichedPage.push({
@@ -387,7 +443,7 @@ export const searchTitlesCount = query({
 							.search("title", args.query)
 							.eq("userId", identity.subject)
 							.eq("workspaceId", args.workspaceId)
-					: q.search("title", args.query).eq("userId", identity.subject)
+					: q.search("title", args.query).eq("userId", identity.subject),
 			)
 			.collect();
 		return results.length;
@@ -413,7 +469,7 @@ export const searchContentCount = query({
 							.search("content", args.query)
 							.eq("userId", identity.subject)
 							.eq("workspaceId", args.workspaceId)
-					: q.search("content", args.query).eq("userId", identity.subject)
+					: q.search("content", args.query).eq("userId", identity.subject),
 			)
 			.take(1000);
 

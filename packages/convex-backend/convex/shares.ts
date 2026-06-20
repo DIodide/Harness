@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalQuery, mutation, query } from "./_generated/server";
+import { getOrCreateDefaultWorkspace } from "./workspaces";
 
 /**
  * Conversation sharing.
@@ -484,11 +485,13 @@ export const getSharedConversation = query({
 				sandboxId = harness.daytonaSandboxId;
 			}
 		}
+		const viewerIsOwner =
+			identity != null && convo.userId === identity.subject;
 		return {
 			conversationId: convo._id,
 			title: convo.title,
 			role: grant.role,
-			viewerIsOwner: identity != null && convo.userId === identity.subject,
+			viewerIsOwner,
 			// Author attribution (name + avatar only — never email).
 			ownerName: grant.ownerName ?? null,
 			ownerImageUrl: grant.ownerImageUrl ?? null,
@@ -497,6 +500,10 @@ export const getSharedConversation = query({
 			// Owner's Daytona sandbox id for the read-only file panel (signed-in
 			// editor only; null otherwise).
 			sandboxId,
+			// The conversation's workspace — only for the OWNER (their own convo),
+			// so the share page can route them to it in workspaces mode. null when
+			// the legacy convo has no workspace yet (the page adopts it into Default).
+			workspaceId: viewerIsOwner ? (convo.workspaceId ?? null) : null,
 		};
 	},
 });
@@ -560,6 +567,9 @@ export const forkSharedConversation = mutation({
 		token: v.string(),
 		upToMessageId: v.optional(v.id("messages")),
 		harnessId: v.optional(v.id("harnesses")),
+		// Which of the FORKER's workspaces to fork into (the sharee picks). When
+		// omitted, lands in their Default workspace so the fork always has a home.
+		workspaceId: v.optional(v.id("workspaces")),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -575,6 +585,18 @@ export const forkSharedConversation = mutation({
 			if (!harness || harness.userId !== identity.subject) {
 				throw new Error("Harness not found");
 			}
+		}
+
+		// Resolve the target workspace: the forker's chosen one (must be theirs),
+		// else their Default. The copy always lands in a workspace they own.
+		let workspaceId = args.workspaceId;
+		if (workspaceId) {
+			const workspace = await ctx.db.get(workspaceId);
+			if (!workspace || workspace.userId !== identity.subject) {
+				throw new Error("Workspace not found");
+			}
+		} else {
+			workspaceId = await getOrCreateDefaultWorkspace(ctx, identity.subject);
 		}
 
 		const allMessages = await ctx.db
@@ -595,6 +617,7 @@ export const forkSharedConversation = mutation({
 			title: source.title,
 			lastHarnessId: args.harnessId,
 			userId: identity.subject,
+			workspaceId,
 			lastMessageAt: Date.now(),
 			forkedFromConversationId: grant.conversationId,
 			forkedAtMessageCount: messagesToCopy.length,
@@ -609,19 +632,21 @@ export const forkSharedConversation = mutation({
 
 		for (const msg of messagesToCopy) {
 			// Drop the source owner's per-message token/cost accounting (`usage`)
-			// and workspace placement; re-stamp ownership to the forker so the
-			// copy is consistently theirs (the search index filters on userId).
+			// and workspace placement; re-stamp ownership + workspace to the forker
+			// so the copy is consistently theirs (search index filters on
+			// userId/workspaceId).
 			const {
 				_id,
 				_creationTime,
 				conversationId,
-				workspaceId,
+				workspaceId: _srcWorkspaceId,
 				usage,
 				...rest
 			} = msg;
 			await ctx.db.insert("messages", {
 				...rest,
 				userId: identity.subject,
+				workspaceId,
 				conversationId: newConvoId,
 			});
 		}

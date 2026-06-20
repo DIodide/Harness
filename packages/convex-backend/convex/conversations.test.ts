@@ -9,8 +9,7 @@ function makeT() {
 	const raw = convexTest(schema, modules);
 	return {
 		raw,
-		asUser: (uid: string) =>
-			raw.withIdentity({ subject: uid, issuer: "test" }),
+		asUser: (uid: string) => raw.withIdentity({ subject: uid, issuer: "test" }),
 	};
 }
 
@@ -204,9 +203,7 @@ describe("conversations.fork", () => {
 		await raw.run(async (ctx) => {
 			const copied = await ctx.db
 				.query("messages")
-				.withIndex("by_conversation", (q) =>
-					q.eq("conversationId", newConvId),
-				)
+				.withIndex("by_conversation", (q) => q.eq("conversationId", newConvId))
 				.collect();
 			expect(copied.map((m) => m.content)).toEqual(["one", "two"]);
 		});
@@ -303,5 +300,81 @@ describe("conversations.searchTitlesCount", () => {
 		expect(
 			await raw.query(api.conversations.searchTitlesCount, { query: "x" }),
 		).toBe(0);
+	});
+});
+
+describe("conversations.ensureInWorkspace", () => {
+	it("returns the existing workspace when the convo already has one", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("u-owner");
+		const wsId = await a.mutation(api.workspaces.create, { name: "W" });
+		const convoId = await raw.run((ctx) =>
+			ctx.db.insert("conversations", {
+				title: "t",
+				userId: "u-owner",
+				workspaceId: wsId,
+				lastMessageAt: 1,
+			}),
+		);
+		const out = await a.mutation(api.conversations.ensureInWorkspace, {
+			conversationId: convoId,
+		});
+		expect(out).toBe(wsId);
+	});
+
+	it("adopts a workspace-less (legacy) convo into the owner's Default and re-stamps its messages", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("u-owner");
+		const { convoId, msgIds } = await raw.run(async (ctx) => {
+			const convoId = await ctx.db.insert("conversations", {
+				title: "legacy",
+				userId: "u-owner",
+				lastMessageAt: 1,
+			});
+			const m1 = await ctx.db.insert("messages", {
+				conversationId: convoId,
+				userId: "u-owner",
+				role: "user",
+				content: "hi",
+			});
+			const m2 = await ctx.db.insert("messages", {
+				conversationId: convoId,
+				userId: "u-owner",
+				role: "assistant",
+				content: "hello",
+			});
+			return { convoId, msgIds: [m1, m2] };
+		});
+		const wsId = await a.mutation(api.conversations.ensureInWorkspace, {
+			conversationId: convoId,
+		});
+		const ws = await a.query(api.workspaces.get, { id: wsId });
+		expect(ws?.isDefault).toBe(true);
+		const convo = await raw.run((ctx) => ctx.db.get(convoId));
+		expect(convo?.workspaceId).toBe(wsId);
+		// Every message row is re-stamped so workspace-scoped content search finds
+		// the adopted conversation's history.
+		await raw.run(async (ctx) => {
+			for (const id of msgIds) {
+				const m = await ctx.db.get(id);
+				expect(m?.workspaceId).toBe(wsId);
+			}
+		});
+	});
+
+	it("rejects a non-owner", async () => {
+		const { raw, asUser } = makeT();
+		const convoId = await raw.run((ctx) =>
+			ctx.db.insert("conversations", {
+				title: "t",
+				userId: "u-owner",
+				lastMessageAt: 1,
+			}),
+		);
+		await expect(
+			asUser("u-intruder").mutation(api.conversations.ensureInWorkspace, {
+				conversationId: convoId,
+			}),
+		).rejects.toThrow(/Not found/);
 	});
 });
