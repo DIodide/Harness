@@ -20,11 +20,17 @@ import { forgetAllAgentSessions, resetServerAgentSessions } from "./agent-mode";
  *
  * Rewind-AND-fork needs no reset — a new conversation has no session and seeds
  * from the forked (already-truncated) history by construction.
+ *
+ * Returns whether the server-side reset succeeded (200, including the stateless
+ * OpenRouter no-session case which resets 0 sessions). `false` means a genuine
+ * network/5xx failure left a warm session that still holds the rewound turns —
+ * the caller should warn the user, since the view and the agent now disagree.
  */
 export async function resetAgentSessionForRewind(
 	token: string | null,
 	conversationId: string,
-): Promise<void> {
-	await resetServerAgentSessions(token, conversationId);
+): Promise<boolean> {
+	const ok = await resetServerAgentSessions(token, conversationId);
 	forgetAllAgentSessions(conversationId);
+	return ok;
 }

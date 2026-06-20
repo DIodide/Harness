@@ -59,29 +59,58 @@ export function useRewind(
 		);
 	}, [activeConvoId, chatStream, streamStatesRef]);
 
+	// Toast + bail when a turn is still streaming or finishing — so a destructive
+	// click never silently no-ops. Returns true if blocked.
+	const blockIfBusy = useCallback(
+		(verb: string) => {
+			if (isBusy()) {
+				toast.error(`Can't ${verb} while the turn is finishing.`);
+				return true;
+			}
+			return false;
+		},
+		[isBusy],
+	);
+
+	// If the Convex truncation lands but the agent session couldn't be torn down,
+	// the view and the agent's memory disagree — warn the user (fork is the safe
+	// alternative). No-op resets (OpenRouter) return ok, so this never false-alarms.
+	const warnIfDesynced = useCallback((reset: boolean) => {
+		if (!reset) {
+			toast.error(
+				"Rewound your view, but the agent's memory couldn't be reset — fork instead if it misbehaves.",
+			);
+		}
+	}, []);
+
 	const handleRewind = useCallback(
 		async (messageId: Id<"messages">) => {
-			if (!activeConvoId || isBusy()) return;
-			await truncateAfter.mutateAsync({ id: messageId });
-			const token = await getToken();
-			await resetAgentSessionForRewind(token, activeConvoId);
+			if (!activeConvoId || blockIfBusy("rewind")) return;
+			try {
+				await truncateAfter.mutateAsync({ id: messageId });
+				const token = await getToken();
+				warnIfDesynced(await resetAgentSessionForRewind(token, activeConvoId));
+			} catch (err) {
+				console.error("rewind failed", err);
+				toast.error("Couldn't rewind.");
+			}
 		},
-		[activeConvoId, isBusy, truncateAfter, getToken],
+		[activeConvoId, blockIfBusy, warnIfDesynced, truncateAfter, getToken],
 	);
 
 	const handleRewindToPart = useCallback(
 		async (messageId: Id<"messages">, keepPartCount: number) => {
-			if (!activeConvoId || isBusy()) return;
+			if (!activeConvoId || blockIfBusy("rewind")) return;
 			try {
 				await truncatePart.mutateAsync({ id: messageId, keepPartCount });
 				const token = await getToken();
-				await resetAgentSessionForRewind(token, activeConvoId);
+				warnIfDesynced(await resetAgentSessionForRewind(token, activeConvoId));
 			} catch (err) {
 				console.error("rewind-to-part failed", err);
 				toast.error("Couldn't rewind to that point.");
 			}
 		},
-		[activeConvoId, isBusy, truncatePart, getToken],
+		[activeConvoId, blockIfBusy, warnIfDesynced, truncatePart, getToken],
 	);
 
 	const forkAtMessage = useCallback(
@@ -98,7 +127,10 @@ export function useRewind(
 
 	const forkAtPart = useCallback(
 		async (messageId: Id<"messages">, keepPartCount: number) => {
-			if (!activeConvoId) return;
+			// Guard the post-stream window (pendingDone): the seam targets the last
+			// message, which is still the PRIOR turn until the just-finished one
+			// syncs — forking then would silently omit the latest turn.
+			if (!activeConvoId || blockIfBusy("fork")) return;
 			try {
 				const newConvoId = await fork.mutateAsync({
 					conversationId: activeConvoId,
@@ -111,7 +143,7 @@ export function useRewind(
 				toast.error("Couldn't fork at that point.");
 			}
 		},
-		[activeConvoId, fork, onNavigate],
+		[activeConvoId, blockIfBusy, fork, onNavigate],
 	);
 
 	return { handleRewind, forkAtMessage, handleRewindToPart, forkAtPart };
