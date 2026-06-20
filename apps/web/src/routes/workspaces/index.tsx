@@ -92,7 +92,9 @@ import { UsageDialog } from "../../components/usage-dialog";
 import { formatResetTime, UsageBadge } from "../../components/usage-display";
 import { WorkspaceColorPicker } from "../../components/workspace-color-picker";
 import { env } from "../../env";
+import { useRecentChatRestore } from "../../hooks/use-recent-chat-restore";
 import { useRewind } from "../../hooks/use-rewind";
+import { useWorkspaceSelection } from "../../hooks/use-workspace-selection";
 import {
 	useModifierHeld,
 	useWorkspaceShortcuts,
@@ -155,8 +157,6 @@ const FASTAPI_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
 type SandboxSelection = "harness" | "none" | Id<"sandboxes">;
 const NONE_OPTION = "__none__";
 
-const LAST_CHAT_RESTORE_WINDOW_MS = 8 * 60 * 60 * 1000;
-
 function ChatPage() {
 	const navigate = useNavigate();
 	const { getToken } = useAuth();
@@ -212,25 +212,36 @@ function ChatPage() {
 
 	const [activeHarnessId, setActiveHarnessId] =
 		useState<Id<"harnesses"> | null>(null);
-	const [activeWorkspaceId, setActiveWorkspaceId] =
-		useState<Id<"workspaces"> | null>(null);
 	const [activeSandboxSelection, setActiveSandboxSelection] =
 		useState<SandboxSelection>("harness");
-	// Initialize from the URL so a deep-linked conversation opens directly (and
-	// the most-recent-chat restore effect below sees it set and doesn't override).
-	const [activeConvoId, setActiveConvoId] =
-		useState<Id<"conversations"> | null>(
-			(initialConvoId as Id<"conversations">) ?? null,
-		);
+	// Workspace + conversation selection, with explicit precedence (URL deep-link
+	// > explicit selection > most-recent-chat restore) owned in one place.
+	const {
+		activeWorkspaceId,
+		activeConvoId,
+		activeWorkspace,
+		setActiveConvoId,
+		selectWorkspace,
+	} = useWorkspaceSelection({ workspaces, initialWorkspaceId, initialConvoId });
 	const { data: conversations } = useQuery(
 		convexQuery(
 			api.conversations.list,
 			activeWorkspaceId ? { workspaceId: activeWorkspaceId } : "skip",
 		),
 	);
-
-	const prevWorkspaceIdRef = useRef<Id<"workspaces"> | null>(null);
-	const pendingRestoreWorkspaceIdRef = useRef<Id<"workspaces"> | null>(null);
+	// Re-open the workspace's most-recent chat when nothing is open. cancelRestore
+	// lets an explicit "New chat" stop an armed-but-unapplied restore so a
+	// just-dismissed chat never silently reopens.
+	const { cancelRestore } = useRecentChatRestore({
+		activeWorkspaceId,
+		conversations,
+		activeConvoId,
+		onRestore: setActiveConvoId,
+	});
+	const startNewChat = useCallback(() => {
+		setActiveConvoId(null);
+		cancelRestore();
+	}, [setActiveConvoId, cancelRestore]);
 	// Session-only model override — does not persist to the harness
 	const [sessionModel, setSessionModel] = useState<string | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -434,69 +445,6 @@ function ChatPage() {
 			drainQueueAfterTurn(convoId);
 		},
 	});
-
-	// When the active workspace changes, queue a one-shot attempt to restore the
-	// workspace's most-recent chat (if touched within LAST_CHAT_RESTORE_WINDOW_MS).
-	// Tracked via a ref so nulling activeConvoId on "New chat" doesn't re-trigger.
-	useEffect(() => {
-		if (prevWorkspaceIdRef.current === activeWorkspaceId) return;
-		prevWorkspaceIdRef.current = activeWorkspaceId;
-		pendingRestoreWorkspaceIdRef.current = activeWorkspaceId;
-	}, [activeWorkspaceId]);
-
-	useEffect(() => {
-		const pending = pendingRestoreWorkspaceIdRef.current;
-		if (!pending || pending !== activeWorkspaceId) return;
-		if (!conversations) return;
-		if (activeConvoId) {
-			pendingRestoreWorkspaceIdRef.current = null;
-			return;
-		}
-		pendingRestoreWorkspaceIdRef.current = null;
-		const cutoff = Date.now() - LAST_CHAT_RESTORE_WINDOW_MS;
-		const mostRecent = conversations.find(
-			(c) =>
-				!(c as Record<string, unknown>).editParentConversationId &&
-				c.lastMessageAt >= cutoff,
-		);
-		if (mostRecent) {
-			setActiveConvoId(mostRecent._id);
-		}
-	}, [activeWorkspaceId, conversations, activeConvoId]);
-
-	useEffect(() => {
-		// Still loading (undefined) or transiently empty during the auth-validation
-		// window: do NOT touch activeConvoId. It may have been seeded from the URL
-		// (a deep-linked share/fork conversation) whose workspace simply hasn't
-		// loaded yet — nulling it here would lose the deep link before we can open
-		// it. The Default workspace is undeletable, so a genuinely-empty list is
-		// always transient.
-		if (!workspaces || workspaces.length === 0) {
-			setActiveWorkspaceId(null);
-			return;
-		}
-
-		if (
-			activeWorkspaceId &&
-			workspaces.some((workspace) => workspace._id === activeWorkspaceId)
-		) {
-			return;
-		}
-
-		if (
-			initialWorkspaceId &&
-			workspaces.some((workspace) => workspace._id === initialWorkspaceId)
-		) {
-			setActiveWorkspaceId(initialWorkspaceId as Id<"workspaces">);
-			return;
-		}
-
-		setActiveWorkspaceId(workspaces[0]._id);
-	}, [workspaces, activeWorkspaceId, initialWorkspaceId]);
-
-	const activeWorkspace = workspaces?.find(
-		(workspace) => workspace._id === activeWorkspaceId,
-	);
 
 	useEffect(() => {
 		if (!activeWorkspace) {
@@ -839,14 +787,14 @@ function ChatPage() {
 
 	const handleSelectConversation = useCallback(
 		(convoId: Id<"conversations"> | null) => {
+			// "New chat" (null) cancels any armed restore so it stays empty.
+			if (!convoId) {
+				startNewChat();
+				return;
+			}
 			setActiveConvoId(convoId);
 
-			if (
-				convoId &&
-				userSettings?.autoSwitchHarness &&
-				conversations &&
-				harnesses
-			) {
+			if (userSettings?.autoSwitchHarness && conversations && harnesses) {
 				const convo = conversations.find((c) => c._id === convoId);
 				if (
 					convo?.lastHarnessId &&
@@ -856,7 +804,7 @@ function ChatPage() {
 				}
 			}
 		},
-		[userSettings, conversations, harnesses],
+		[userSettings, conversations, harnesses, startNewChat, setActiveConvoId],
 	);
 
 	// State handlers for searching
@@ -995,7 +943,7 @@ function ChatPage() {
 			: false,
 		canStartNewConversation: Boolean(activeWorkspace),
 		sidebarOpen,
-		onNewConversation: () => setActiveConvoId(null),
+		onNewConversation: startNewChat,
 		onCancelStream: () => {
 			if (activeConvoId) handleInterrupt(activeConvoId);
 		},
@@ -1053,10 +1001,7 @@ function ChatPage() {
 								harnesses={harnesses ?? []}
 								sandboxes={sandboxes ?? []}
 								activeWorkspaceId={activeWorkspaceId}
-								onSelectWorkspace={(workspaceId) => {
-									setActiveWorkspaceId(workspaceId);
-									setActiveConvoId(null);
-								}}
+								onSelectWorkspace={selectWorkspace}
 								conversations={(conversations ?? []).filter(
 									(c) =>
 										!(c as Record<string, unknown>).editParentConversationId,
