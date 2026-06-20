@@ -72,6 +72,9 @@ import {
 import { UsageDialog } from "../../components/usage-dialog";
 import { formatResetTime, UsageBadge } from "../../components/usage-display";
 import { env } from "../../env";
+import { useMcpHealthCheck } from "../../hooks/use-mcp-health-check";
+import { useMessageQueue } from "../../hooks/use-message-queue";
+import { usePersistInterruptedTurn } from "../../hooks/use-persist-interrupted-turn";
 import { useRewind } from "../../hooks/use-rewind";
 import {
 	EMPTY_STREAM_STATE,
@@ -90,7 +93,6 @@ import {
 } from "../../lib/sandbox-panel-context";
 import type { SkillEntry } from "../../lib/skills";
 import type { BudgetExceededInfo } from "../../lib/use-chat-stream";
-import { toPersistableParts } from "../../lib/use-chat-stream";
 import { useFollowStream } from "../../lib/use-follow-stream";
 import { cn } from "../../lib/utils";
 
@@ -164,8 +166,7 @@ function ChatPage() {
 	// Streaming state lives in the global provider so an in-flight stream
 	// survives navigation away from /chat (e.g. to /harnesses) and back.
 	const chatStream = useChatStreamContext();
-	const { streamStates, streamStatesRef, clearStreamState, setStreamState } =
-		chatStream;
+	const { streamStates, streamStatesRef, clearStreamState } = chatStream;
 
 	// MCP server failures reported during stream start
 	type McpFailure = {
@@ -176,11 +177,6 @@ function ChatPage() {
 	};
 	const [mcpFailures, setMcpFailures] = useState<McpFailure[]>([]);
 	const mcpFailureIdRef = useRef(0);
-
-	// MCP server health check statuses (keyed by server URL)
-	const [mcpHealthStatuses, setMcpHealthStatuses] = useState<
-		Record<string, HealthStatus>
-	>({});
 
 	// Bump to force a slash-command refetch (after OAuth, harness edit, etc.)
 	const [commandRefreshKey, setCommandRefreshKey] = useState(0);
@@ -213,44 +209,10 @@ function ChatPage() {
 		activeMessagesRef.current = activeMessages;
 	}, [activeMessages]);
 
-	// Message queue state
-	type QueueItem = { id: number; content: string };
-	const [messageQueue, setMessageQueue] = useState<QueueItem[]>([]);
-	const messageQueueRef = useRef<QueueItem[]>([]);
-	const queueIdCounter = useRef(0);
-	const pendingQueueSendRef = useRef<{
-		convoId: string;
-		content: string;
-	} | null>(null);
-
-	const enqueueMessage = useCallback((content: string) => {
-		const item: QueueItem = { id: ++queueIdCounter.current, content };
-		messageQueueRef.current = [...messageQueueRef.current, item];
-		setMessageQueue([...messageQueueRef.current]);
-	}, []);
-
-	const dequeueMessage = useCallback((id: number) => {
-		// Key by stable id, not array index: the queue can auto-shift between
-		// render and click, which would otherwise remove the wrong item.
-		messageQueueRef.current = messageQueueRef.current.filter(
-			(it) => it.id !== id,
-		);
-		setMessageQueue([...messageQueueRef.current]);
-	}, []);
-
-	const shiftQueue = useCallback(() => {
-		const [next, ...rest] = messageQueueRef.current;
-		messageQueueRef.current = rest;
-		setMessageQueue(rest);
-		return next?.content;
-	}, []);
-
-	// Clear queue and MCP failures on conversation switch
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally resets queue when active conversation changes
+	// Clear MCP failure banners on conversation switch (the message queue clears
+	// its own state — see useMessageQueue).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally resets on active conversation change
 	useEffect(() => {
-		messageQueueRef.current = [];
-		setMessageQueue([]);
-		pendingQueueSendRef.current = null;
 		setMcpFailures([]);
 	}, [activeConvoId]);
 
@@ -261,84 +223,17 @@ function ChatPage() {
 		mutationFn: useConvexMutation(api.commands.upsert),
 	});
 
-	// Save interrupted assistant message from frontend
-	const saveInterruptedMsg = useMutation({
-		mutationFn: useConvexMutation(api.messages.saveInterruptedMessage),
-	});
-
 	// Save user message (used for queue processing)
 	const sendMessageFromQueue = useMutation({
 		mutationFn: useConvexMutation(api.messages.send),
 	});
 
-	// Persist a turn that ended without a clean "done" — a user Stop (onAbort)
-	// OR an agent connection drop that surfaces as onError — so the
-	// streamed-so-far content isn't lost. No-op if onDone already saved it.
-	const persistInterruptedTurn = (convoId: string) => {
-		const state = streamStatesRef.current[convoId];
-		if (state?.pendingDoneContent != null) return; // onDone already saved
-		if (
-			!state ||
-			(!state.content && !state.reasoning && state.toolCalls.length === 0)
-		) {
-			clearStreamState(convoId);
-			return;
-		}
-		// Keep only completed tool calls (those with a result).
-		const completedToolCalls = state.toolCalls.filter(
-			(tc) => tc.result,
-		) as Array<{
-			tool: string;
-			arguments: Record<string, unknown>;
-			call_id: string;
-			result: string;
-		}>;
-		const cleanedParts = state.parts.filter(
-			(p) => p.type !== "tool_call" || p.result,
-		);
-		const partialContent = state.content ?? "";
-		// model only arrives in "done"; fall back to session then harness model.
-		const model = state.model ?? sessionModel ?? activeHarness?.model ?? null;
-		saveInterruptedMsg.mutate(
-			{
-				conversationId: convoId as Id<"conversations">,
-				content: partialContent,
-				...(state.reasoning ? { reasoning: state.reasoning } : {}),
-				...(completedToolCalls.length > 0
-					? { toolCalls: completedToolCalls }
-					: {}),
-				...(cleanedParts.length > 0
-					? { parts: toPersistableParts(cleanedParts) }
-					: {}),
-				...(state.usage ? { usage: state.usage } : {}),
-				...(model ? { model } : {}),
-			},
-			{
-				// If the write fails, clear the bubble so it doesn't wedge (it
-				// otherwise only clears on a matching persisted row).
-				onError: () => {
-					clearStreamState(convoId);
-					toast.error("Couldn't save the interrupted response.");
-				},
-			},
-		);
-		// Keep the bubble until Convex syncs the interrupted message (set
-		// pendingDoneContent so convexHasMessage can match).
-		setStreamState(convoId, () => ({
-			...state,
-			toolCalls: completedToolCalls,
-			parts: cleanedParts,
-			pendingDoneContent: partialContent,
-			model,
-		}));
-	};
-
-	const drainQueueAfterTurn = (convoId: string) => {
-		if (!pendingQueueSendRef.current && messageQueueRef.current.length > 0) {
-			const next = shiftQueue();
-			if (next) pendingQueueSendRef.current = { convoId, content: next };
-		}
-	};
+	// Persist a turn that ended without a clean "done" (Stop / connection drop)
+	// so the streamed-so-far content isn't lost. The model only arrives in
+	// "done", so supply the fallback (session → harness) the hook should use.
+	const { persistInterruptedTurn } = usePersistInterruptedTurn(
+		() => sessionModel ?? activeHarness?.model ?? null,
+	);
 
 	useChatStreamSideEffects({
 		onMcpError: (_convoId, event) => {
@@ -439,21 +334,6 @@ function ChatPage() {
 		prevStreamingRef.current = new Set(curr);
 	}, [chatStream.streamingConvoIds]);
 
-	const handleStreamSynced = useCallback(
-		(convoId: string) => {
-			clearStreamState(convoId);
-
-			// Process next queued message now that Convex has synced
-			if (messageQueueRef.current.length > 0) {
-				const next = shiftQueue();
-				if (next) {
-					pendingQueueSendRef.current = { convoId, content: next };
-				}
-			}
-		},
-		[clearStreamState, shiftQueue],
-	);
-
 	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
 	const selectedSandbox =
 		activeSandboxSelection !== "harness" && activeSandboxSelection !== "none"
@@ -519,109 +399,7 @@ function ChatPage() {
 		),
 	);
 
-	// Health-check MCP servers when harness changes, or on-demand via refreshHealth.
-	const healthCheckRunRef = useRef<{ cancel: () => void } | null>(null);
-	const runHealthCheck = useCallback(
-		(
-			servers: Array<{
-				name: string;
-				url: string;
-				authType: McpAuthType;
-				authToken?: string;
-			}>,
-		) => {
-			healthCheckRunRef.current?.cancel();
-
-			if (servers.length === 0) {
-				setMcpHealthStatuses({});
-				return;
-			}
-
-			// Mark unknown URLs as checking; preserve already-known statuses so
-			// previously-healthy servers don't flash to "Checking…" during a
-			// refresh triggered by adding/removing a server.
-			setMcpHealthStatuses((prev) => {
-				const next: Record<string, HealthStatus> = {};
-				for (const s of servers) {
-					next[s.url] = prev[s.url] ?? "checking";
-				}
-				return next;
-			});
-
-			let cancelled = false;
-			const run = async () => {
-				try {
-					const token = await getToken();
-					const res = await fetch(`${FASTAPI_URL}/api/mcp/health/check`, {
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							...(token ? { Authorization: `Bearer ${token}` } : {}),
-						},
-						body: JSON.stringify({
-							mcp_servers: servers.map((s) => ({
-								name: s.name,
-								url: s.url,
-								auth_type: s.authType,
-								...(s.authToken ? { auth_token: s.authToken } : {}),
-							})),
-							force: true,
-						}),
-					});
-					if (cancelled) return;
-					if (!res.ok) {
-						const fallback: Record<string, HealthStatus> = {};
-						for (const s of servers) fallback[s.url] = "unreachable";
-						setMcpHealthStatuses(fallback);
-						return;
-					}
-					const data = await res.json();
-					if (cancelled) return;
-					const statuses: Record<string, HealthStatus> = {};
-					for (const server of data.servers) {
-						if (server.status === "ok") statuses[server.url] = "reachable";
-						else if (server.status === "auth_required")
-							statuses[server.url] = "auth_required";
-						else statuses[server.url] = "unreachable";
-					}
-					setMcpHealthStatuses(statuses);
-				} catch {
-					if (cancelled) return;
-					const fallback: Record<string, HealthStatus> = {};
-					for (const s of servers) fallback[s.url] = "unreachable";
-					setMcpHealthStatuses(fallback);
-				}
-			};
-
-			run();
-			healthCheckRunRef.current = {
-				cancel: () => {
-					cancelled = true;
-				},
-			};
-		},
-		[getToken],
-	);
-
-	const refreshHealth = useCallback(() => {
-		if (activeHarness) runHealthCheck(activeHarness.mcpServers);
-	}, [activeHarness, runHealthCheck]);
-
-	// Re-run when the harness or its set of MCP server URLs changes. The URL
-	// key catches inline adds/removes from the header tooltip without making
-	// every harness-doc edit (name, model, etc.) trigger a health re-check.
-	const mcpUrlKey = activeHarness?.mcpServers.map((s) => s.url).join("|") ?? "";
-	// biome-ignore lint/correctness/useExhaustiveDependencies: deps are id + url-set; runHealthCheck is stable
-	useEffect(() => {
-		if (!activeHarness) {
-			setMcpHealthStatuses({});
-			return;
-		}
-		runHealthCheck(activeHarness.mcpServers);
-		return () => {
-			healthCheckRunRef.current?.cancel();
-		};
-	}, [activeHarness?._id, mcpUrlKey]);
+	const { mcpHealthStatuses, refreshHealth } = useMcpHealthCheck(activeHarness);
 
 	// Sync slash commands: fetch from MCP servers, upsert into commands table,
 	// and store the resulting IDs on the harness's mcpServers.
@@ -724,44 +502,22 @@ function ChatPage() {
 		[activeHarness, chatStream, sendMessageFromQueue, buildHarnessConfig],
 	);
 
-	const handleSendNow = useCallback(
-		(id: number) => {
-			if (!activeConvoId) return;
-			// Key by stable id, not array index (the queue can auto-shift).
-			const item = messageQueueRef.current.find((it) => it.id === id);
-			if (!item) return;
-			messageQueueRef.current = messageQueueRef.current.filter(
-				(it) => it.id !== id,
-			);
-			setMessageQueue([...messageQueueRef.current]);
-			// If a turn is in flight, interrupt and let the effect flush after it
-			// ends; otherwise there's no controller to cancel (no-op) so send the
-			// message directly rather than dropping it.
-			if (chatStream.streamingConvoIds.has(activeConvoId)) {
-				pendingQueueSendRef.current = {
-					convoId: activeConvoId,
-					content: item.content,
-				};
-				chatStream.cancel(activeConvoId);
-			} else {
-				void sendQueuedMessage(activeConvoId, item.content);
-			}
+	const {
+		messageQueue,
+		enqueueMessage,
+		dequeueMessage,
+		handleSendNow,
+		drainQueueAfterTurn,
+		processQueuedAfterSync,
+	} = useMessageQueue({ activeConvoId, activeHarness, sendQueuedMessage });
+
+	const handleStreamSynced = useCallback(
+		(convoId: string) => {
+			clearStreamState(convoId);
+			processQueuedAfterSync(convoId);
 		},
-		[activeConvoId, chatStream, sendQueuedMessage],
+		[clearStreamState, processQueuedAfterSync],
 	);
-
-	// Process pending queued messages after stream ends
-	useEffect(() => {
-		const pending = pendingQueueSendRef.current;
-		if (!pending || !activeHarness) return;
-
-		const convoId = pending.convoId;
-		// Wait until the conversation is no longer streaming
-		if (chatStream.streamingConvoIds.has(convoId)) return;
-
-		pendingQueueSendRef.current = null;
-		void sendQueuedMessage(convoId, pending.content);
-	}, [chatStream.streamingConvoIds, activeHarness, sendQueuedMessage]);
 
 	const handleSelectConversation = useCallback(
 		(convoId: Id<"conversations"> | null) => {
