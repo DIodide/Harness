@@ -23,6 +23,12 @@ interface AccountUsage {
 	weekSonnet?: number; // 7-day Sonnet-only window %
 }
 
+/** Clamp a best-effort percentage to [0, 100] so a surprising upstream value
+ *  can't render an absurd label (e.g. "1700000000%"). */
+function clampPct(p: number): number {
+	return Math.max(0, Math.min(100, p));
+}
+
 function bucketPct(bucket: unknown): number | undefined {
 	if (!bucket || typeof bucket !== "object") return undefined;
 	const b = bucket as Record<string, unknown>;
@@ -34,13 +40,14 @@ function bucketPct(bucket: unknown): number | undefined {
 		b.usedPct ??
 		b.percent ??
 		b.pct;
-	if (typeof u === "number") return u <= 1 ? u * 100 : u; // accept 0–1 or 0–100
+	// Accept 0–1 (fraction) or 0–100 (already a percent); clamp either way.
+	if (typeof u === "number") return clampPct(u <= 1 ? u * 100 : u);
 	if (
 		typeof b.used === "number" &&
 		typeof b.limit === "number" &&
 		b.limit > 0
 	) {
-		return (b.used / b.limit) * 100;
+		return clampPct((b.used / b.limit) * 100);
 	}
 	return undefined;
 }
@@ -65,9 +72,17 @@ function accountUsageFromRateLimit(rateLimit: unknown): AccountUsage {
 	};
 }
 
-/** The freshest non-empty account utilization across the user's agent rows. */
+/**
+ * The most-recent non-empty account utilization across the user's agent rows.
+ * getMyAgentUsage returns one row per credential (cost-sorted, not by recency),
+ * so we scan in lastTurnAt order to surface the credential whose turn is
+ * globally freshest rather than the highest-spend one.
+ */
 function latestAccountUsage(rows: AgentUsageRow[] | undefined): AccountUsage {
-	for (const r of rows ?? []) {
+	const byRecency = [...(rows ?? [])].sort(
+		(a, b) => (b.lastTurnAt ?? 0) - (a.lastTurnAt ?? 0),
+	);
+	for (const r of byRecency) {
 		const a = accountUsageFromRateLimit(r.rateLimit);
 		if (
 			a.session !== undefined ||
@@ -236,6 +251,7 @@ interface AgentUsageRow {
 	turns: number;
 	todayCostUsd: number;
 	weekCostUsd: number;
+	lastTurnAt?: number;
 	lastModel: string | null;
 	rateLimit?: unknown;
 }

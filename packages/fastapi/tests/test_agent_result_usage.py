@@ -89,21 +89,21 @@ class TestPrimaryModel:
 
 
 def _session(**over):
-    """Minimal AgentSession-like stub for the static delta computation."""
+    """Minimal AgentSession-like stub for the static payload computation."""
     base = dict(
         config_options=[{"id": "model", "currentValue": "opus"}],
         acp_session_id="acp1",
         turn_index=1,
-        last_result_cost=0.0,
-        last_result_tokens={},
         last_rate_limit=None,
     )
     base.update(over)
     return SimpleNamespace(**base)
 
 
-class TestResultUsageDeltas:
-    def test_first_turn_cumulative_equals_delta(self):
+class TestResultUsagePayload:
+    def test_records_per_turn_totals_directly(self):
+        # The result message fires once per turn with THAT turn's totals — no
+        # cross-turn delta.
         s = _session()
         msg = {
             "type": "result",
@@ -115,10 +115,10 @@ class TestResultUsageDeltas:
                 "cache_creation_input_tokens": 5,
             },
         }
-        out = AgentSessionManager._result_usage_deltas(s, msg)
+        out = AgentSessionManager._result_usage_payload(s, msg)
         assert out is not None
         assert out["cost"] == 10.0
-        assert out["deltas"] == {
+        assert out["tokens"] == {
             "input": 100,
             "output": 50,
             "cache_read": 1000,
@@ -126,49 +126,53 @@ class TestResultUsageDeltas:
         }
         assert out["turn_key"] == "acp1:1"
         assert out["model"] == "opus"
-        # trackers advanced to the cumulative values
-        assert s.last_result_cost == 10.0
-        assert s.last_result_tokens["cache_read"] == 1000
 
-    def test_second_turn_subtracts_running_baseline(self):
-        # Cumulative within the ACP session: turn 2 reports turn1+turn2 totals.
-        s = _session(
-            last_result_cost=10.0,
-            last_result_tokens={
-                "input": 100,
-                "output": 50,
-                "cache_read": 1000,
-                "cache_creation": 5,
-            },
-            turn_index=2,
-        )
+    def test_each_turn_is_independent_no_baseline(self):
+        # A later, SMALLER turn must record its own full values (the old delta
+        # code would have clamped this to 0).
+        s = _session(turn_index=2)
         msg = {
             "type": "result",
-            "total_cost_usd": 25.0,
+            "total_cost_usd": 3.0,
             "usage": {
-                "input_tokens": 300,
-                "output_tokens": 120,
-                "cache_read_input_tokens": 4000,
-                "cache_creation_input_tokens": 20,
+                "input_tokens": 20,
+                "output_tokens": 8,
+                "cache_read_input_tokens": 500,
+                "cache_creation_input_tokens": 2,
             },
         }
-        out = AgentSessionManager._result_usage_deltas(s, msg)
-        assert out["cost"] == 15.0  # 25 - 10
-        assert out["deltas"] == {
-            "input": 200,
-            "output": 70,
-            "cache_read": 3000,
-            "cache_creation": 15,
-        }
+        out = AgentSessionManager._result_usage_payload(s, msg)
+        assert out["cost"] == 3.0
+        assert out["tokens"]["cache_read"] == 500
         assert out["turn_key"] == "acp1:2"
+
+    def test_subscription_zero_cost_but_real_tokens_records(self):
+        # Subscription accounts may report cost 0 with real token usage — still
+        # record (tokens are the signal).
+        s = _session()
+        out = AgentSessionManager._result_usage_payload(
+            s,
+            {"type": "result", "total_cost_usd": 0.0, "usage": {"input_tokens": 42}},
+        )
+        assert out is not None
+        assert out["cost"] == 0.0
+        assert out["tokens"]["input"] == 42
 
     def test_carries_latest_rate_limit(self):
         s = _session(last_rate_limit={"buckets": {"five_hour": {"utilization": 0.66}}})
-        out = AgentSessionManager._result_usage_deltas(
+        out = AgentSessionManager._result_usage_payload(
             s, {"type": "result", "total_cost_usd": 1.0, "usage": {"input_tokens": 1}}
         )
         assert out["rate_limit"] == {"buckets": {"five_hour": {"utilization": 0.66}}}
 
-    def test_returns_none_when_no_usable_usage(self):
+    def test_hollow_result_returns_none_so_it_cannot_clobber_thin_row(self):
         s = _session()
-        assert AgentSessionManager._result_usage_deltas(s, {"type": "result"}) is None
+        # No cost, no usage (error/aborted turn) → skip entirely.
+        assert AgentSessionManager._result_usage_payload(s, {"type": "result"}) is None
+        # Cost present but 0 and zero tokens → still skip.
+        assert (
+            AgentSessionManager._result_usage_payload(
+                s, {"type": "result", "total_cost_usd": 0.0}
+            )
+            is None
+        )

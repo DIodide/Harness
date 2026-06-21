@@ -226,11 +226,6 @@ class AgentSession:
     # we persist per-turn DELTAs. Tracks the last cumulative cost seen; reset to
     # 0 whenever a fresh ACP session opens (the SDK cost restarts there).
     last_cost_usd: float = 0.0
-    # Authoritative usage from the SDK result message is ALSO cumulative within
-    # the ACP session; we persist per-turn deltas of cost + each token category.
-    # Reset alongside last_cost_usd on a fresh ACP session.
-    last_result_cost: float = 0.0
-    last_result_tokens: dict[str, int] = field(default_factory=dict)
     # Latest Anthropic per-account rate-limit snapshot seen on a usage_update
     # (_meta._claude/rateLimit); carried onto the authoritative result row.
     last_rate_limit: object | None = None
@@ -1677,11 +1672,10 @@ class AgentSessionManager:
             meta=session_meta,
         )
         session.acp_session_id = result["sessionId"]
-        # Fresh ACP session → the SDK's cumulative cost + token usage restart at
-        # ~0, so reset every running baseline.
+        # Fresh ACP session → the thin usage_update's cumulative cost restarts at
+        # ~0, so reset its running baseline. (Result-message usage is per-turn,
+        # so it keeps no cross-turn baseline.)
         session.last_cost_usd = 0.0
-        session.last_result_cost = 0.0
-        session.last_result_tokens = {}
         session.config_options = result.get("configOptions") or []
         # Replay notifications that raced the session/new response: Claude
         # Code sends available_commands_update on a setTimeout(0) right after
@@ -1976,39 +1970,30 @@ class AgentSessionManager:
         )
 
     @staticmethod
-    def _result_usage_deltas(
+    def _result_usage_payload(
         session: AgentSession, message: dict
     ) -> dict | None:
-        """Compute this turn's authoritative usage deltas from an SDK `result`
-        message and advance the session trackers. SYNCHRONOUS so the sequential
-        notification loop fully computes (and advances trackers) before the next
-        result — the fire-and-forget recorder then can't race. Returns the record
-        payload, or None when the message carries no usable cost/usage.
+        """Extract THIS turn's authoritative usage from an SDK `result` message.
 
-        `total_cost_usd` and the token usage are CUMULATIVE within the ACP
-        session (they restart on a fresh session, where the trackers are reset),
-        so per-turn deltas are the cumulative minus the running baseline.
+        The result message fires once per ACP prompt turn — each turn is its own
+        SDK `query()` call — so its `total_cost_usd` and token usage are PER-TURN
+        totals (cumulative across the steps WITHIN the turn, not across turns).
+        We therefore record them directly; no cross-turn deltas. Returns None
+        when the message carries no real signal (cost ~0 AND zero tokens, e.g. an
+        error/aborted turn), so a hollow result can't clobber the thin
+        usage_update row already written for this turnKey.
         """
-        cost_cumulative = message.get("total_cost_usd")
         usage = message.get("usage")
         model_usage = message.get("modelUsage")
-        if cost_cumulative is None and not usage and not model_usage:
+        tokens = _result_token_categories(usage, model_usage)
+        raw_cost = message.get("total_cost_usd")
+        cost = max(0.0, float(raw_cost)) if isinstance(raw_cost, (int, float)) else 0.0
+        if cost <= 0.0 and sum(tokens.values()) == 0:
             return None
-
-        cats = _result_token_categories(usage, model_usage)
-        cost_cumulative = float(cost_cumulative or session.last_result_cost)
-        cost_delta = max(0.0, cost_cumulative - session.last_result_cost)
-        session.last_result_cost = cost_cumulative
-        prev = session.last_result_tokens
-        deltas = {
-            k: max(0, cats[k] - int(prev.get(k, 0)))
-            for k in ("input", "output", "cache_read", "cache_creation")
-        }
-        session.last_result_tokens = dict(cats)
         return {
             "model": _result_primary_model(model_usage) or _session_model(session),
-            "cost": cost_delta,
-            "deltas": deltas,
+            "cost": cost,
+            "tokens": tokens,
             "rate_limit": session.last_rate_limit,
             "turn_key": f"{session.acp_session_id}:{session.turn_index}",
         }
@@ -2024,7 +2009,7 @@ class AgentSessionManager:
         cred_id = session.harness.agent_credential_id
         if not cred_id:
             return
-        deltas = payload["deltas"]
+        tokens = payload["tokens"]
         from app.services.usage import record_agent_usage
 
         await record_agent_usage(
@@ -2035,16 +2020,16 @@ class AgentSessionManager:
             conversation_id=session.conversation_id,
             acp_session_id=session.acp_session_id,
             model=payload["model"],
-            used_tokens=sum(deltas.values()),
+            used_tokens=sum(tokens.values()),
             context_size=None,
             cost=payload["cost"],
             currency="USD",
             turn_key=payload["turn_key"],
             rate_limit=payload["rate_limit"],
-            input_tokens=deltas["input"],
-            output_tokens=deltas["output"],
-            cache_read_tokens=deltas["cache_read"],
-            cache_creation_tokens=deltas["cache_creation"],
+            input_tokens=tokens["input"],
+            output_tokens=tokens["output"],
+            cache_read_tokens=tokens["cache_read"],
+            cache_creation_tokens=tokens["cache_creation"],
             authoritative=True,
         )
 
@@ -2152,13 +2137,11 @@ class AgentSessionManager:
                     # Authoritative usage (real cost + cache tokens) rides the
                     # result message; record it (fail-soft) when a credential is
                     # linked. Upgrades the thin usage_update row for this turn.
-                    # Deltas are computed HERE (sequential per session) so the
-                    # fire-and-forget recorder can't race on the trackers.
                     if (
                         _is_sdk_result_message(raw)
                         and session.harness.agent_credential_id
                     ):
-                        payload = self._result_usage_deltas(session, raw)
+                        payload = self._result_usage_payload(session, raw)
                         if payload is not None:
                             task = asyncio.create_task(
                                 self._record_result_usage(session, payload)

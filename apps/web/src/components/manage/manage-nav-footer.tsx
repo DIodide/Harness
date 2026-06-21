@@ -54,9 +54,9 @@ export function ManageNavFooter({
 				);
 			})}
 
-			{/* Usage section: its leading divider + badge mount/unmount as one
-			    unit (renders nothing until usage data loads), so the rail never
-			    shows a dangling divider. */}
+			{/* Usage section: a leading divider + the gauge icon, which always
+			    renders (a neutral state when there's no data), so the divider is
+			    never left dangling. */}
 			<UsageRailSection onOpenUsage={onOpenUsage} />
 
 			{/* Match the variant-prefixed base class so tailwind-merge dedupes it
