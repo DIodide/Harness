@@ -386,6 +386,166 @@ async function fetchSkillMd(
 	return null;
 }
 
+/** Extract the `description:` frontmatter from a SKILL.md, or "". */
+function parseSkillDescription(detail: string): string {
+	const fm = detail.match(/^---\s*\n([\s\S]*?)\n---/);
+	if (!fm) return "";
+	const desc = fm[1].match(/description:\s*(.+)/);
+	return desc ? desc[1].trim().replace(/^["']|["']$/g, "") : "";
+}
+
+/** Fetch a top-level repo file (e.g. AGENTS.md) from main/master, or null. */
+async function fetchRepoFile(
+	source: string,
+	file: string,
+): Promise<string | null> {
+	const rawHeaders = ghRawHeaders();
+	for (const branch of ["main", "master"]) {
+		try {
+			const resp = await fetch(
+				`https://raw.githubusercontent.com/${source}/${branch}/${file}`,
+				rawHeaders ? { headers: rawHeaders } : undefined,
+			);
+			if (resp.ok) return await resp.text();
+		} catch {
+			// try next branch
+		}
+	}
+	return null;
+}
+
+/**
+ * List the skill directory names in a repo via the git/trees API: any
+ * `<base>/<skillId>/SKILL.md` where base is a known skills dir. One API call
+ * per branch — handles repos like greensock/gsap-skills (skills/<id>/SKILL.md).
+ */
+async function listRepoSkillIds(source: string): Promise<string[]> {
+	const bases = new Set(["skills", ".agents/skills", ".claude/skills"]);
+	for (const branch of ["main", "master"]) {
+		try {
+			const resp = await fetch(
+				`https://api.github.com/repos/${source}/git/trees/${branch}?recursive=1`,
+				{ headers: ghApiHeaders() },
+			);
+			if (!resp.ok) continue;
+			const data = (await resp.json()) as {
+				tree?: Array<{ path: string; type: string }>;
+			};
+			const ids = new Set<string>();
+			for (const e of data.tree ?? []) {
+				if (e.type !== "blob" || !e.path.endsWith("/SKILL.md")) continue;
+				const parts = e.path.split("/");
+				const id = parts[parts.length - 2];
+				const base = parts.slice(0, parts.length - 2).join("/");
+				if (id && bases.has(base)) ids.add(id);
+			}
+			if (ids.size > 0) return [...ids];
+		} catch {
+			// try next branch
+		}
+	}
+	return [];
+}
+
+const MAX_REPO_IMPORT_SKILLS = 60;
+
+/**
+ * Import every skill in a GitHub repo (e.g. "greensock/gsap-skills") in one
+ * shot: discover the skill dirs, fetch + cache each SKILL.md, index them, and
+ * return them (plus the repo's top-level AGENTS.md / CLAUDE.md) so the caller
+ * can drop them into a skill pack. Reuses the same GitHub resolution as
+ * ensureSkillDetails (honors GITHUB_TOKEN for rate limits).
+ */
+export const importSkillRepo = action({
+	args: { source: v.string() },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+
+		// Accept a bare owner/repo or a github.com URL; normalize to owner/repo.
+		const source = args.source
+			.trim()
+			.replace(/^https?:\/\/github\.com\//i, "")
+			.replace(/\.git$/i, "")
+			.replace(/\/+$/, "");
+		const segments = source.split("/");
+		if (
+			!/^[\w.-]+\/[\w.-]+$/.test(source) ||
+			segments.some((s) => s === "." || s === "..")
+		) {
+			throw new Error(
+				"Enter a GitHub repo as owner/repo (e.g. greensock/gsap-skills).",
+			);
+		}
+
+		const skillIds = await listRepoSkillIds(source);
+		if (skillIds.length === 0) {
+			throw new Error(
+				`No skills found in ${source}. Expected SKILL.md files under skills/.`,
+			);
+		}
+		const limited = skillIds.slice(0, MAX_REPO_IMPORT_SKILLS);
+
+		const [agentsMd, claudeMd] = await Promise.all([
+			fetchRepoFile(source, "AGENTS.md"),
+			fetchRepoFile(source, "CLAUDE.md"),
+		]);
+
+		const skills: Array<{ name: string; description: string }> = [];
+		const indexEntries: Array<{
+			skillId: string;
+			fullId: string;
+			source: string;
+			description: string;
+			installs: number;
+		}> = [];
+
+		const CONCURRENCY = 4;
+		async function processSkill(skillId: string) {
+			const name = `${source}/${skillId}`;
+			const detail = await fetchSkillMd(source, skillId);
+			if (!detail) return;
+			const description = parseSkillDescription(detail);
+			await ctx.runMutation(internal.skills.upsertSkillDetail, {
+				name,
+				skillName: skillId,
+				description,
+				detail,
+				code: `npx skills add https://github.com/${source} --skill ${skillId}`,
+			});
+			skills.push({ name, description });
+			indexEntries.push({
+				skillId,
+				fullId: name,
+				source,
+				description,
+				installs: 0,
+			});
+		}
+		for (let i = 0; i < limited.length; i += CONCURRENCY) {
+			await Promise.all(limited.slice(i, i + CONCURRENCY).map(processSkill));
+		}
+
+		// Index the discovered skills so they're searchable in the catalog too.
+		if (indexEntries.length > 0) {
+			await ctx.runMutation(internal.skills.upsertSkillsIndexBatch, {
+				skills: indexEntries,
+			});
+		}
+
+		// Stable order (the repo tree order isn't meaningful).
+		skills.sort((a, b) => a.name.localeCompare(b.name));
+		return {
+			source,
+			skills,
+			agentsMd: agentsMd ?? "",
+			claudeMd: claudeMd ?? "",
+			discovered: skillIds.length,
+			imported: skills.length,
+		};
+	},
+});
+
 /**
  * Background action called after saving a harness.
  * Fetches SKILL.md content from GitHub and caches in skillDetails.

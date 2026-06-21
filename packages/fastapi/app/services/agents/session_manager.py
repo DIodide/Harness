@@ -1135,16 +1135,73 @@ class AgentSessionManager:
                 f"{marker}\n{body}\n"
             )
         if is_claude:
-            for skill in ctx.get("skills") or []:
-                detail = (skill.get("detail") or "").strip()
+            skills = ctx.get("skills") or []
+            # Fetch SKILL.md for skills whose detail isn't cached yet, so a
+            # freshly-added skill still materializes (mirrors the default loop's
+            # GitHub fallback) instead of being silently skipped on a race with
+            # the frontend's ensureSkillDetails.
+            uncached = [
+                s.get("name")
+                for s in skills
+                if s.get("name") and not (s.get("detail") or "").strip()
+            ]
+            fetched = await self._fetch_uncached_skill_md(uncached)
+            used_slugs: dict[str, str] = {}
+            for skill in skills:
+                name = skill.get("name") or ""
+                detail = (skill.get("detail") or "").strip() or fetched.get(name, "")
                 if not detail:
-                    continue  # SKILL.md not cached yet — materialize next time
-                slug = _skill_dir_slug(skill.get("skillName") or skill.get("name"))
+                    continue  # SKILL.md couldn't be resolved anywhere — skip
+                slug = _skill_dir_slug(skill.get("skillName") or name)
                 if not slug:
                     continue
+                # Two skills sharing a trailing id from different repos would
+                # collide on the same dir (and silently overwrite). Disambiguate
+                # the loser with the full-id slug.
+                if used_slugs.get(slug, name) != name:
+                    slug = _skill_dir_slug(name) or slug
+                used_slugs[slug] = name
                 dir_path = f"{SANDBOX_HOME}/.claude/skills/{slug}"
                 creds.context_files[f"{dir_path}/SKILL.md"] = detail + "\n"
                 creds.context_files[f"{dir_path}/{HARNESS_MANAGED_SKILL_FILE}"] = ""
+
+    async def _fetch_uncached_skill_md(
+        self, names: list[str],
+    ) -> dict[str, str]:
+        """Best-effort GitHub fetch of SKILL.md for skills missing a cached
+        detail. Bounded by an overall time budget AND a count cap so a cold
+        session (or a slow/unreachable GitHub) can NEVER stall provisioning —
+        whatever isn't fetched in time self-heals once the frontend's
+        ensureSkillDetails caches it. Returns {full_id: markdown}."""
+        if not names:
+            return {}
+        from app.services.skill_content import fetch_skill_md
+
+        capped = names[:20]
+        out: dict[str, str] = {}
+        sem = asyncio.Semaphore(4)
+
+        async def one(name: str) -> None:
+            async with sem:
+                try:
+                    md = await fetch_skill_md(self._http_client(), name)
+                except Exception:
+                    md = None
+            if md and md.strip():
+                out[name] = md.strip()
+
+        try:
+            # gather mutates `out` as each completes; a timeout cancels the rest
+            # but keeps whatever already landed.
+            await asyncio.wait_for(
+                asyncio.gather(*(one(n) for n in capped)), timeout=8.0,
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning(
+                "Skill SKILL.md back-fill timed out (%d/%d fetched)",
+                len(out), len(capped),
+            )
+        return out
 
     def get(self, session_id: str, user_id: str) -> AgentSession:
         session = self._sessions.get(session_id)
