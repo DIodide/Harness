@@ -1,5 +1,11 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { ArrowLeft, Box, KeyRound, SlidersHorizontal } from "lucide-react";
+import {
+	ArrowLeft,
+	Box,
+	KeyRound,
+	Share2,
+	SlidersHorizontal,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -16,6 +22,7 @@ export const MANAGE_TABS = [
 	{ to: "/sandboxes", label: "Sandboxes", icon: Box },
 	{ to: "/harnesses", label: "Harnesses", icon: SlidersHorizontal },
 	{ to: "/credentials", label: "Credentials", icon: KeyRound },
+	{ to: "/manage-sharing", label: "Sharing", icon: Share2 },
 ] as const;
 
 /** True when `pathname` is `to` or any nested child of it (e.g. /sandboxes/$id). */
