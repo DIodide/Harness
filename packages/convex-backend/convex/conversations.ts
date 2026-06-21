@@ -72,6 +72,23 @@ function mergeConversationList(
 	return sortPinnedFirst(out);
 }
 
+/**
+ * Run a query against a NEW index that may be mid-backfill in the minutes after
+ * a deploy (querying a backfilling index THROWS). Swallow that so callers
+ * degrade gracefully instead of taking the whole request down. by_user_pinned /
+ * by_workspace_pinned / by_user_title were all added in one PR; before this
+ * guard a deploy could blank the entire sidebar and break forking.
+ */
+async function tolerateBackfill<T>(run: () => Promise<T[]>): Promise<T[]> {
+	try {
+		return await run();
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		if (msg.includes("backfilling")) return [];
+		throw e;
+	}
+}
+
 export const list = query({
 	args: { workspaceId: v.optional(v.id("workspaces")) },
 	handler: async (ctx, args) => {
@@ -91,13 +108,15 @@ export const list = query({
 				// would otherwise crowd the window).
 				.filter((q) => q.eq(q.field("editParentConversationId"), undefined))
 				.take(LIST_CAP);
-			const pinned = await ctx.db
-				.query("conversations")
-				.withIndex("by_workspace_pinned", (q) =>
-					q.eq("workspaceId", args.workspaceId).gt("pinnedAt", 0),
-				)
-				.order("desc")
-				.take(LIST_CAP);
+			const pinned = await tolerateBackfill(() =>
+				ctx.db
+					.query("conversations")
+					.withIndex("by_workspace_pinned", (q) =>
+						q.eq("workspaceId", args.workspaceId).gt("pinnedAt", 0),
+					)
+					.order("desc")
+					.take(LIST_CAP),
+			);
 			return mergeConversationList(pinned, recent);
 		}
 		// /chat lists ALL the user's recent conversations regardless of workspace
@@ -114,13 +133,15 @@ export const list = query({
 			// otherwise crowd the window).
 			.filter((q) => q.eq(q.field("editParentConversationId"), undefined))
 			.take(LIST_CAP);
-		const pinned = await ctx.db
-			.query("conversations")
-			.withIndex("by_user_pinned", (q) =>
-				q.eq("userId", identity.subject).gt("pinnedAt", 0),
-			)
-			.order("desc")
-			.take(LIST_CAP);
+		const pinned = await tolerateBackfill(() =>
+			ctx.db
+				.query("conversations")
+				.withIndex("by_user_pinned", (q) =>
+					q.eq("userId", identity.subject).gt("pinnedAt", 0),
+				)
+				.order("desc")
+				.take(LIST_CAP),
+		);
 		return mergeConversationList(pinned, recent);
 	},
 });
@@ -324,15 +345,28 @@ export const fork = mutation({
 		// the by_user_title index) so naming is correct even on large accounts —
 		// an unordered global cap could miss recent forks.
 		const base = forkBaseTitle(convo.title);
-		const siblings = await ctx.db
-			.query("conversations")
-			.withIndex("by_user_title", (q) =>
-				q
-					.eq("userId", identity.subject)
-					.gte("title", base)
-					.lt("title", `${base}${PREFIX_END}`),
-			)
-			.take(2000);
+		// by_user_title is a NEW index that can be mid-backfill right after a
+		// deploy — querying it would throw and break forking. On that (and only
+		// that) error, fall back to a bounded by_user scan; nextForkTitle
+		// regex-filters internally, so the wider result set is harmless.
+		let siblings: Array<Doc<"conversations">>;
+		try {
+			siblings = await ctx.db
+				.query("conversations")
+				.withIndex("by_user_title", (q) =>
+					q
+						.eq("userId", identity.subject)
+						.gte("title", base)
+						.lt("title", `${base}${PREFIX_END}`),
+				)
+				.take(2000);
+		} catch (e) {
+			if (!(e instanceof Error) || !e.message.includes("backfilling")) throw e;
+			siblings = await ctx.db
+				.query("conversations")
+				.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+				.take(2000);
+		}
 		const title = nextForkTitle(
 			convo.title,
 			siblings.map((s) => s.title),
