@@ -1,6 +1,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.*s");
@@ -56,7 +57,7 @@ describe("conversations.list", () => {
 		).toEqual([]);
 	});
 
-	it("filters out conversations attached to ANY workspace when listing globally", async () => {
+	it("includes workspace-assigned conversations when listing globally (tinted client-side)", async () => {
 		const a = makeT().asUser("u-a");
 		const h = await a.mutation(api.harnesses.create, baseHarness());
 		const wsId = await a.mutation(api.workspaces.create, { name: "w" });
@@ -70,7 +71,80 @@ describe("conversations.list", () => {
 			harnessId: h,
 		});
 		const rows = await a.query(api.conversations.list, {});
-		expect(rows.map((c) => c.title)).toEqual(["no-ws-conv"]);
+		expect(rows.map((c) => c.title).sort()).toEqual(["no-ws-conv", "ws-conv"]);
+	});
+
+	it("sorts pinned conversations to the top, newest-pin first", async () => {
+		const a = makeT().asUser("u-a");
+		const h = await a.mutation(api.harnesses.create, baseHarness());
+		const c1 = await a.mutation(api.conversations.create, {
+			title: "c1",
+			harnessId: h,
+		});
+		await a.mutation(api.conversations.create, {
+			title: "c2",
+			harnessId: h,
+		});
+		const c3 = await a.mutation(api.conversations.create, {
+			title: "c3",
+			harnessId: h,
+		});
+		// Pin c1 then c3 — both should sort above the unpinned c2, c3 first
+		// (most-recently-pinned on top).
+		await a.mutation(api.conversations.setPinned, { id: c1, pinned: true });
+		await a.mutation(api.conversations.setPinned, { id: c3, pinned: true });
+		const rows = await a.query(api.conversations.list, {});
+		expect(rows.map((c) => c.title)).toEqual(["c3", "c1", "c2"]);
+		// Unpin c3 — it drops back into recency order.
+		await a.mutation(api.conversations.setPinned, { id: c3, pinned: false });
+		const rows2 = await a.query(api.conversations.list, {});
+		expect(rows2[0].title).toBe("c1");
+	});
+
+	it("keeps a pinned chat visible even when it's far outside the recency window", async () => {
+		const a = makeT().asUser("u-a");
+		const h = await a.mutation(api.harnesses.create, baseHarness());
+		// Oldest conversation — pin it, then bury it under 110 newer ones (past
+		// the 100-row recency cap). The separate pinned fetch must still surface it.
+		const old = await a.mutation(api.conversations.create, {
+			title: "old-pinned",
+			harnessId: h,
+		});
+		await a.mutation(api.conversations.setPinned, { id: old, pinned: true });
+		for (let i = 0; i < 110; i++) {
+			await a.mutation(api.conversations.create, {
+				title: `filler-${i}`,
+				harnessId: h,
+			});
+		}
+		const rows = await a.query(api.conversations.list, {});
+		expect(rows[0].title).toBe("old-pinned");
+		expect(rows.some((c) => c.title === "old-pinned")).toBe(true);
+	});
+
+	it("doesn't let edit-fork siblings crowd visible chats out of the window", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("u-a");
+		const h = await a.mutation(api.harnesses.create, baseHarness());
+		const real = await a.mutation(api.conversations.create, {
+			title: "real-chat",
+			harnessId: h,
+		});
+		// Bury it under 120 edit-fork siblings (fresh lastMessageAt, NOT
+		// user-visible). They must be filtered during the scan, not after take().
+		await raw.run(async (ctx) => {
+			for (let i = 0; i < 120; i++) {
+				await ctx.db.insert("conversations", {
+					title: `edit-${i}`,
+					userId: "u-a",
+					lastMessageAt: Date.now() + 1000 + i,
+					editParentConversationId: real,
+				});
+			}
+		});
+		const rows = await a.query(api.conversations.list, {});
+		expect(rows.some((c) => c.title === "real-chat")).toBe(true);
+		expect(rows.some((c) => c.title.startsWith("edit-"))).toBe(false);
 	});
 });
 
@@ -207,6 +281,85 @@ describe("conversations.fork", () => {
 				.collect();
 			expect(copied.map((m) => m.content)).toEqual(["one", "two"]);
 		});
+	});
+
+	it("names forks 'X (fork)' then 'X (fork 2)', stripping an existing suffix from the base", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("u-a");
+		const h = await a.mutation(api.harnesses.create, baseHarness());
+		const id = await a.mutation(api.conversations.create, {
+			title: "Recipes",
+			harnessId: h,
+		});
+		const msg = await raw.run(async (ctx) =>
+			ctx.db.insert("messages", {
+				conversationId: id,
+				role: "user",
+				content: "x",
+				userId: "u-a",
+			}),
+		);
+		const f1 = await a.mutation(api.conversations.fork, {
+			conversationId: id,
+			upToMessageId: msg,
+		});
+		expect((await a.query(api.conversations.get, { id: f1 }))?.title).toBe(
+			"Recipes (fork)",
+		);
+		const f2 = await a.mutation(api.conversations.fork, {
+			conversationId: id,
+			upToMessageId: msg,
+		});
+		expect((await a.query(api.conversations.get, { id: f2 }))?.title).toBe(
+			"Recipes (fork 2)",
+		);
+		// Forking the fork (titled "Recipes (fork)") strips the suffix and
+		// continues the sequence instead of nesting "(fork) (fork)".
+		const f1msg = await raw.run(async (ctx) => {
+			const m = await ctx.db
+				.query("messages")
+				.withIndex("by_conversation", (q) => q.eq("conversationId", f1))
+				.first();
+			return m?._id as Id<"messages">;
+		});
+		const f3 = await a.mutation(api.conversations.fork, {
+			conversationId: f1,
+			upToMessageId: f1msg,
+		});
+		expect((await a.query(api.conversations.get, { id: f3 }))?.title).toBe(
+			"Recipes (fork 3)",
+		);
+	});
+
+	it("fork-naming prefix scan doesn't false-match a different, longer title", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("u-a");
+		const h = await a.mutation(api.harnesses.create, baseHarness());
+		// "Doc" and "Document" share a prefix; a fork of "Doc" must not treat
+		// "Document" as a sibling (nextForkTitle requires an exact base match).
+		const doc = await a.mutation(api.conversations.create, {
+			title: "Doc",
+			harnessId: h,
+		});
+		await a.mutation(api.conversations.create, {
+			title: "Document",
+			harnessId: h,
+		});
+		const msg = await raw.run(async (ctx) =>
+			ctx.db.insert("messages", {
+				conversationId: doc,
+				role: "user",
+				content: "x",
+				userId: "u-a",
+			}),
+		);
+		const f = await a.mutation(api.conversations.fork, {
+			conversationId: doc,
+			upToMessageId: msg,
+		});
+		expect((await a.query(api.conversations.get, { id: f }))?.title).toBe(
+			"Doc (fork)",
+		);
 	});
 
 	it("truncates the boundary assistant message when truncateLastPartCount is set, leaving the original intact", async () => {
@@ -463,5 +616,58 @@ describe("conversations.ensureInWorkspace", () => {
 				conversationId: convoId,
 			}),
 		).rejects.toThrow(/Not found/);
+	});
+});
+
+describe("conversations.moveToWorkspace", () => {
+	it("moves a conversation and re-stamps its messages' workspaceId", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("u-a");
+		const h = await a.mutation(api.harnesses.create, baseHarness());
+		const id = await a.mutation(api.conversations.create, {
+			title: "c",
+			harnessId: h,
+		});
+		await raw.run(async (ctx) => {
+			await ctx.db.insert("messages", {
+				conversationId: id,
+				role: "user",
+				content: "m",
+				userId: "u-a",
+			});
+		});
+		const wsId = await a.mutation(api.workspaces.create, { name: "W" });
+		await a.mutation(api.conversations.moveToWorkspace, {
+			id,
+			workspaceId: wsId,
+		});
+		expect((await a.query(api.conversations.get, { id }))?.workspaceId).toBe(
+			wsId,
+		);
+		await raw.run(async (ctx) => {
+			const msgs = await ctx.db
+				.query("messages")
+				.withIndex("by_conversation", (q) => q.eq("conversationId", id))
+				.collect();
+			expect(msgs.every((m) => m.workspaceId === wsId)).toBe(true);
+		});
+	});
+
+	it("rejects moving to a workspace the caller doesn't own", async () => {
+		const { asUser } = makeT();
+		const a = asUser("u-a");
+		const b = asUser("u-b");
+		const h = await a.mutation(api.harnesses.create, baseHarness());
+		const id = await a.mutation(api.conversations.create, {
+			title: "c",
+			harnessId: h,
+		});
+		const bws = await b.mutation(api.workspaces.create, { name: "bw" });
+		await expect(
+			a.mutation(api.conversations.moveToWorkspace, {
+				id,
+				workspaceId: bws,
+			}),
+		).rejects.toThrow();
 	});
 });

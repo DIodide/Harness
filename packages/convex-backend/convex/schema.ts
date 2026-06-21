@@ -139,10 +139,21 @@ export default defineSchema({
 		// from summary") — provenance + lets the agent route seed its context
 		// from the summary instead of the full transcript.
 		seededFromCompactionId: v.optional(v.id("compactions")),
+		// Timestamp the conversation was pinned (Date.now()); undefined = not
+		// pinned. A number (not a bool) so pinned chats sort by most-recently
+		// pinned. Pinned chats render in a dedicated "Pinned" sidebar section.
+		pinnedAt: v.optional(v.number()),
 	})
 		.index("by_user", ["userId"])
 		.index("by_user_last_message", ["userId", "lastMessageAt"])
 		.index("by_workspace_last_message", ["workspaceId", "lastMessageAt"])
+		// Pinned chats are fetched independently of the recency window so they
+		// never fall out of the sidebar once a user has 50+ newer chats.
+		.index("by_user_pinned", ["userId", "pinnedAt"])
+		.index("by_workspace_pinned", ["workspaceId", "pinnedAt"])
+		// Exact title-prefix scan for fork-sibling naming (avoids an unordered
+		// global cap that could miss recent forks on large accounts).
+		.index("by_user_title", ["userId", "title"])
 		.searchIndex("search_title", {
 			searchField: "title",
 			filterFields: ["userId", "workspaceId"],
