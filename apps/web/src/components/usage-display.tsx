@@ -1,8 +1,84 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useQuery } from "@tanstack/react-query";
+import { Gauge } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+
+/**
+ * Best-effort extraction of the user's Claude-account quota utilization from the
+ * opaque upstream `_meta._claude/rateLimit` snapshot. The shape is upstream-
+ * defined (claude-agent-acp) and may change, so this scans the most likely field
+ * names and degrades to {} on no match — the UI then simply omits the section.
+ */
+interface AccountUsage {
+	session?: number; // 5-hour window %
+	week?: number; // 7-day window %
+	weekSonnet?: number; // 7-day Sonnet-only window %
+}
+
+function bucketPct(bucket: unknown): number | undefined {
+	if (!bucket || typeof bucket !== "object") return undefined;
+	const b = bucket as Record<string, unknown>;
+	const u =
+		b.utilization_pct ??
+		b.utilizationPct ??
+		b.utilization ??
+		b.used_pct ??
+		b.usedPct ??
+		b.percent ??
+		b.pct;
+	if (typeof u === "number") return u <= 1 ? u * 100 : u; // accept 0–1 or 0–100
+	if (
+		typeof b.used === "number" &&
+		typeof b.limit === "number" &&
+		b.limit > 0
+	) {
+		return (b.used / b.limit) * 100;
+	}
+	return undefined;
+}
+
+function accountUsageFromRateLimit(rateLimit: unknown): AccountUsage {
+	if (!rateLimit || typeof rateLimit !== "object") return {};
+	const rl = rateLimit as Record<string, unknown>;
+	const src = (
+		rl.buckets && typeof rl.buckets === "object" ? rl.buckets : rl
+	) as Record<string, unknown>;
+	const pick = (...keys: string[]) => {
+		for (const k of keys) {
+			const p = bucketPct(src[k]);
+			if (p !== undefined) return p;
+		}
+		return undefined;
+	};
+	return {
+		session: pick("five_hour", "fiveHour", "session", "5h", "primary"),
+		week: pick("seven_day", "sevenDay", "week", "7d"),
+		weekSonnet: pick("seven_day_sonnet", "sevenDaySonnet"),
+	};
+}
+
+/** The freshest non-empty account utilization across the user's agent rows. */
+function latestAccountUsage(rows: AgentUsageRow[] | undefined): AccountUsage {
+	for (const r of rows ?? []) {
+		const a = accountUsageFromRateLimit(r.rateLimit);
+		if (
+			a.session !== undefined ||
+			a.week !== undefined ||
+			a.weekSonnet !== undefined
+		) {
+			return a;
+		}
+	}
+	return {};
+}
 
 function ProgressBar({
 	pct,
@@ -153,13 +229,23 @@ interface AgentUsageRow {
 	label: string | null;
 	totalCostUsd: number;
 	totalTokens: number;
+	inputTokens?: number;
+	outputTokens?: number;
+	cacheReadTokens?: number;
+	cacheCreationTokens?: number;
 	turns: number;
 	todayCostUsd: number;
 	weekCostUsd: number;
 	lastModel: string | null;
+	rateLimit?: unknown;
 }
 
 function AgentCredentialRow({ r }: { r: AgentUsageRow }) {
+	// "Work" tokens = input+output (what the user recognizes); cache read/write
+	// is shown separately because it dominates raw counts but is cheap. Falls
+	// back to the legacy total when the per-category fields are absent.
+	const work = (r.inputTokens ?? 0) + (r.outputTokens ?? 0) || r.totalTokens;
+	const cache = (r.cacheReadTokens ?? 0) + (r.cacheCreationTokens ?? 0);
 	return (
 		<div className="flex items-center gap-2 rounded-md bg-white/[0.03] px-2.5 py-2">
 			<div className="min-w-0 flex-1">
@@ -169,9 +255,11 @@ function AgentCredentialRow({ r }: { r: AgentUsageRow }) {
 				<div className="mt-0.5 text-[10px] text-foreground/40">
 					{r.turns === 0
 						? "No usage yet"
-						: `${formatTokens(r.totalTokens)} tokens · ${r.turns} turn${
-								r.turns === 1 ? "" : "s"
-							}${r.lastModel ? ` · ${r.lastModel}` : ""}`}
+						: `${formatTokens(work)} tokens${
+								cache > 0 ? ` · ${formatTokens(cache)} cached` : ""
+							} · ${r.turns} turn${r.turns === 1 ? "" : "s"}${
+								r.lastModel ? ` · ${r.lastModel}` : ""
+							}`}
 				</div>
 			</div>
 			<div className="shrink-0 text-right">
@@ -295,27 +383,41 @@ export function UsageDisplay() {
 
 	return (
 		<div className="space-y-5">
-			<ProgressBar
-				pct={usage.dailyPctUsed}
-				label="Daily usage"
-				sublabel={`Resets in ${formatResetTime(usage.dailyResetAt)}`}
-			/>
-
-			<ProgressBar
-				pct={usage.weeklyPctUsed}
-				label="Weekly usage"
-				sublabel={`Resets in ${formatResetTime(usage.weeklyResetAt)}`}
-			/>
+			<div className="space-y-3">
+				<div className="flex items-baseline justify-between">
+					<h4 className="text-xs font-medium uppercase tracking-wider text-foreground/60">
+						Harness budget
+					</h4>
+					<span className="text-[10px] text-foreground/40">
+						default loop · billed to Harness
+					</span>
+				</div>
+				<ProgressBar
+					pct={usage.dailyPctUsed}
+					label="Today"
+					sublabel={`Resets in ${formatResetTime(usage.dailyResetAt)}`}
+				/>
+				<ProgressBar
+					pct={usage.weeklyPctUsed}
+					label="This week"
+					sublabel={`Resets in ${formatResetTime(usage.weeklyResetAt)}`}
+				/>
+				<p className="text-[10px] text-foreground/35">
+					Harness's spend cap for the built-in model loop. Agents you run on
+					your own account (below) don't count toward this.
+				</p>
+			</div>
 
 			{(usage.dailyLimitReached || usage.weeklyLimitReached) && (
 				<div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
 					{usage.dailyLimitReached
-						? "Daily usage limit reached."
-						: "Weekly usage limit reached."}{" "}
-					Your limit will reset soon.
+						? "Daily budget reached."
+						: "Weekly budget reached."}{" "}
+					Your Harness budget will reset soon.
 				</div>
 			)}
 
+			<AccountLimitsSection />
 			<ModelBreakdown items={usage.perModelPct} />
 			<HarnessBreakdown items={usage.perHarnessPct} />
 			<AgentUsageSection />
@@ -324,51 +426,95 @@ export function UsageDisplay() {
 }
 
 /**
- * Compact usage badge for the sidebar/header.
- * Shows the higher of daily/weekly percentage with a color indicator.
+ * The user's Claude-account rate-limit utilization (the "Current session / week"
+ * percentages they also see in Claude Code), surfaced from the captured
+ * `_meta._claude/rateLimit` snapshot. Best-effort: renders nothing when the
+ * upstream shape can't be parsed. This is the quota that actually applies to an
+ * agent turn — distinct from the Harness budget above.
  */
-export function UsageBadge({ onClick }: { onClick?: () => void }) {
-	const { data: usage } = useQuery(convexQuery(api.usage.getUserUsage, {}));
-
-	if (!usage) return null;
-
-	const pct = Math.max(usage.dailyPctUsed, usage.weeklyPctUsed);
-	const color =
-		pct >= 90
-			? "text-red-400"
-			: pct >= 70
-				? "text-yellow-400"
-				: "text-foreground/50";
-	const dotColor =
-		pct >= 90 ? "bg-red-400" : pct >= 70 ? "bg-yellow-400" : "bg-emerald-400";
+function AccountLimitsSection() {
+	const { data } = useQuery(convexQuery(api.agentUsage.getMyAgentUsage, {}));
+	const acct = latestAccountUsage(data as AgentUsageRow[] | undefined);
+	const bars: Array<{ label: string; pct: number }> = [];
+	if (acct.session !== undefined) {
+		bars.push({ label: "Current session (5h)", pct: acct.session });
+	}
+	if (acct.week !== undefined) {
+		bars.push({ label: "Current week", pct: acct.week });
+	}
+	if (acct.weekSonnet !== undefined) {
+		bars.push({ label: "Current week (Sonnet)", pct: acct.weekSonnet });
+	}
+	if (bars.length === 0) return null;
 
 	return (
-		<button
-			type="button"
-			onClick={onClick}
-			aria-haspopup="dialog"
-			aria-label={`Usage: ${Math.round(pct)}% used — open usage details`}
-			className={cn(
-				"flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors hover:bg-white/5",
-				color,
-			)}
-		>
-			<span className={cn("h-1.5 w-1.5 rounded-full", dotColor)} />
-			<span>{Math.round(pct)}% used</span>
-		</button>
+		<div className="space-y-3 border-t border-white/10 pt-4">
+			<div className="flex items-baseline justify-between">
+				<h4 className="text-xs font-medium uppercase tracking-wider text-foreground/60">
+					Claude account limits
+				</h4>
+				<span className="text-[10px] text-foreground/40">
+					your subscription
+				</span>
+			</div>
+			{bars.map((b) => (
+				<ProgressBar key={b.label} pct={b.pct} label={b.label} />
+			))}
+		</div>
+	);
+}
+
+/**
+ * Compact usage indicator for the sidebar rail: a gauge icon whose color
+ * reflects the most relevant signal — the user's Claude account quota % when
+ * known, else the Harness budget %. Opens the full usage dialog on click; the
+ * exact numbers live there. Renders as an icon to match the rail's other items.
+ */
+export function UsageBadge({ onClick }: { onClick?: () => void }) {
+	const { data: budget } = useQuery(convexQuery(api.usage.getUserUsage, {}));
+	const { data: agentRows } = useQuery(
+		convexQuery(api.agentUsage.getMyAgentUsage, {}),
+	);
+	const acct = latestAccountUsage(agentRows as AgentUsageRow[] | undefined);
+	const budgetPct = budget
+		? Math.max(budget.dailyPctUsed, budget.weeklyPctUsed)
+		: 0;
+	// Prefer the real account quota (what actually limits an agent turn); fall
+	// back to the Harness budget.
+	const level = acct.session ?? acct.week ?? budgetPct;
+	const color =
+		level >= 90
+			? "text-red-400"
+			: level >= 70
+				? "text-yellow-400"
+				: "text-muted-foreground";
+	const tip = level > 0 ? `Usage — ${Math.round(level)}% used` : "Usage";
+
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					onClick={onClick}
+					aria-haspopup="dialog"
+					aria-label={tip}
+					className={cn("hover:text-foreground", color)}
+				>
+					<Gauge size={14} />
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="top">{tip}</TooltipContent>
+		</Tooltip>
 	);
 }
 
 /**
  * Usage section for the compact sidebar footer rail: a leading vertical divider
- * plus the UsageBadge, mounted/unmounted as a single unit. Owns the usage query
- * only as a render gate, so a null badge can never leave a dangling divider.
- * UsageBadge is reused unchanged; React Query dedupes the shared query key so
- * the two subscriptions resolve to one request.
+ * plus the UsageBadge gauge icon. The icon always renders (neutral when there's
+ * no data), so the divider is never left dangling.
  */
 export function UsageRailSection({ onOpenUsage }: { onOpenUsage: () => void }) {
-	const { data: usage } = useQuery(convexQuery(api.usage.getUserUsage, {}));
-	if (!usage) return null;
 	return (
 		<>
 			<Separator

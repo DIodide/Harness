@@ -199,13 +199,19 @@ async def record_agent_usage(
     currency: str,
     turn_key: str,
     rate_limit: object | None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cache_read_tokens: int | None = None,
+    cache_creation_tokens: int | None = None,
+    authoritative: bool = False,
 ) -> None:
     """Record one ACP agent turn's usage, per credential.
 
     Unlike `record_usage` (OpenRouter spend Harness pays for + caps), agent
     cost bills to the user's OWN agent account — this is informational only and
-    never gates a turn. Idempotent on `turn_key` server-side. Fire-and-forget:
-    logs errors, never raises.
+    never gates a turn. Idempotent on `turn_key` server-side, except an
+    `authoritative` row (SDK result message: real total_cost_usd + cache tokens)
+    upgrades an earlier thin one. Fire-and-forget: logs errors, never raises.
     """
     if not settings.convex_url or not settings.convex_deploy_key:
         return
@@ -229,6 +235,16 @@ async def record_agent_usage(
         args["contextSize"] = context_size
     if rate_limit is not None:
         args["rateLimit"] = rate_limit
+    if input_tokens is not None:
+        args["inputTokens"] = input_tokens
+    if output_tokens is not None:
+        args["outputTokens"] = output_tokens
+    if cache_read_tokens is not None:
+        args["cacheReadTokens"] = cache_read_tokens
+    if cache_creation_tokens is not None:
+        args["cacheCreationTokens"] = cache_creation_tokens
+    if authoritative:
+        args["authoritative"] = True
 
     # Imported here to avoid a module-load cycle (convex imports settings too).
     from app.services.convex import run_convex_mutation

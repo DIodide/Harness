@@ -31,8 +31,13 @@ function weekKey(): string {
 
 /**
  * Record one ACP agent turn's usage (FastAPI gateway via deploy key).
- * Idempotent on `turnKey` — a usage_update can fire more than once per turn
- * or on reconnect, and we must not double-count.
+ *
+ * Idempotent on `turnKey` — a usage_update can fire more than once per turn or
+ * on reconnect, and we must not double-count. EXCEPTION: an `authoritative` row
+ * (sourced from the SDK result message: real total_cost_usd + cache tokens) may
+ * REPLACE an earlier non-authoritative row for the same turnKey. The thin ACP
+ * `usage_update` writes the non-authoritative row first (a fail-safe if the
+ * result message never arrives); the result message patches it in place.
  */
 export const record = internalMutation({
 	args: {
@@ -44,21 +49,40 @@ export const record = internalMutation({
 		model: v.optional(v.string()),
 		usedTokens: v.number(),
 		contextSize: v.optional(v.number()),
+		inputTokens: v.optional(v.number()),
+		outputTokens: v.optional(v.number()),
+		cacheReadTokens: v.optional(v.number()),
+		cacheCreationTokens: v.optional(v.number()),
 		costUsd: v.number(),
 		currency: v.string(),
+		authoritative: v.optional(v.boolean()),
 		rateLimit: v.optional(v.any()),
 		turnKey: v.string(),
 		day: v.string(),
 		week: v.string(),
 	},
 	handler: async (ctx, args) => {
+		const { authoritative, ...rest } = args;
 		const dupe = await ctx.db
 			.query("agentUsageLedger")
 			.withIndex("by_turnKey", (q) => q.eq("turnKey", args.turnKey))
 			.first();
-		if (dupe) return dupe._id;
+		if (dupe) {
+			// Upgrade a thin row to the authoritative numbers; otherwise keep the
+			// first write (true idempotency for re-fired non-authoritative updates).
+			if (authoritative && !dupe.authoritative) {
+				await ctx.db.patch(dupe._id, {
+					...rest,
+					authoritative: true,
+					isEstimate: true,
+					recordedAt: Date.now(),
+				});
+			}
+			return dupe._id;
+		}
 		return await ctx.db.insert("agentUsageLedger", {
-			...args,
+			...rest,
+			authoritative: authoritative ?? false,
 			isEstimate: true,
 			recordedAt: Date.now(),
 		});
@@ -68,6 +92,10 @@ export const record = internalMutation({
 interface CredAcc {
 	totalCostUsd: number;
 	totalTokens: number;
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheCreationTokens: number;
 	turns: number;
 	todayCostUsd: number;
 	todayTokens: number;
@@ -83,6 +111,10 @@ function emptyAcc(): CredAcc {
 	return {
 		totalCostUsd: 0,
 		totalTokens: 0,
+		inputTokens: 0,
+		outputTokens: 0,
+		cacheReadTokens: 0,
+		cacheCreationTokens: 0,
 		turns: 0,
 		todayCostUsd: 0,
 		todayTokens: 0,
@@ -137,6 +169,10 @@ export const getMyAgentUsage = query({
 			}
 			acc.totalCostUsd += r.costUsd;
 			acc.totalTokens += r.usedTokens;
+			acc.inputTokens += r.inputTokens ?? 0;
+			acc.outputTokens += r.outputTokens ?? 0;
+			acc.cacheReadTokens += r.cacheReadTokens ?? 0;
+			acc.cacheCreationTokens += r.cacheCreationTokens ?? 0;
 			acc.turns += 1;
 			if (r.day === today) {
 				acc.todayCostUsd += r.costUsd;
@@ -169,6 +205,10 @@ export const getMyAgentUsage = query({
 				label: cred.label ?? null,
 				totalCostUsd: acc.totalCostUsd,
 				totalTokens: acc.totalTokens,
+				inputTokens: acc.inputTokens,
+				outputTokens: acc.outputTokens,
+				cacheReadTokens: acc.cacheReadTokens,
+				cacheCreationTokens: acc.cacheCreationTokens,
 				turns: acc.turns,
 				todayCostUsd: acc.todayCostUsd,
 				todayTokens: acc.todayTokens,
