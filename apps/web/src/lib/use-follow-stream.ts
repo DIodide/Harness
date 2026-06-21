@@ -135,6 +135,18 @@ export function reduceFollow(
 			const overwrite =
 				!append &&
 				(Boolean(result) || status === "completed" || status === "failed");
+			// Late-arriving full tool input (e.g. a terminal command, a read
+			// file's path, the Workflow script) merges onto the args the initial
+			// streaming tool_call didn't have yet. Mirrors the initiator's reducer
+			// (chat-stream-context); without it a passive viewer is stuck showing
+			// the empty/generic input until the message persists.
+			const mergedArgs =
+				data.arguments && Object.keys(data.arguments as object).length > 0
+					? (p: StreamPart) => ({
+							...((p.arguments ?? {}) as Record<string, unknown>),
+							...(data.arguments as Record<string, unknown>),
+						})
+					: null;
 			const cap = (s: string) =>
 				s.length > MAX_TOOL_RESULT_CHARS
 					? `…[earlier output truncated]\n${s.slice(-MAX_TOOL_RESULT_CHARS)}`
@@ -149,6 +161,7 @@ export function reduceFollow(
 							? { exitCode: data.exit_code as number }
 							: {}),
 						...(status ? { status } : {}),
+						...(mergedArgs ? { arguments: mergedArgs(p) } : {}),
 					};
 				}
 				return {
@@ -156,20 +169,40 @@ export function reduceFollow(
 					...(overwrite ? { result } : {}),
 					diff: (data.diff ?? p.diff) as StreamPart["diff"],
 					...(status ? { status } : {}),
+					...(mergedArgs ? { arguments: mergedArgs(p) } : {}),
 				};
 			};
 			return {
 				...state,
+				// Mirror the result onto the legacy toolCalls array too (the owner
+				// reducer does), so any consumer reading toolCalls (not parts) matches.
+				toolCalls: state.toolCalls.map((tc) =>
+					tc.call_id === call_id && overwrite ? { ...tc, result } : tc,
+				),
 				parts: state.parts.map((p) =>
 					p.type === "tool_call" && p.call_id === call_id ? patch(p) : p,
 				),
 			};
 		}
-		case "plan":
-			return {
-				...state,
-				plan: (data.entries ?? []) as ConvoStreamState["plan"],
-			};
+		case "plan": {
+			// Claude (TodoWrite) / Codex re-emit the full plan repeatedly, often
+			// unchanged — skip the update when identical to avoid redundant
+			// re-renders of the plan card (matches the initiator reducer).
+			const entries = (data.entries ?? []) as ConvoStreamState["plan"];
+			const current = state.plan;
+			if (
+				current &&
+				entries &&
+				current.length === entries.length &&
+				current.every(
+					(e, i) =>
+						e.content === entries[i].content && e.status === entries[i].status,
+				)
+			) {
+				return state;
+			}
+			return { ...state, plan: entries };
+		}
 		case "agent_usage":
 			return {
 				...state,
@@ -194,6 +227,10 @@ export function reduceFollow(
 				pendingDoneContent: (data.content as string) ?? state.content ?? "",
 				model: (data.model as string) ?? state.model,
 				agentStatus: null,
+				// Drop the plan/todo card when the turn ends (the owner does too) —
+				// otherwise a finished follower keeps showing the last plan until the
+				// persisted message takes over.
+				plan: null,
 			};
 		case "error":
 			// The initiator persists the interrupted partial; clear ours and let
