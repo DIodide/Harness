@@ -62,35 +62,27 @@ Collaborative agent sessions, without ever handing over the keys.
 
 ## Features
 
-**Every coding agent, one chat.** Drive Claude Code, Codex CLI, or Cursor — each spawned in its own isolated Daytona sandbox — or use the built-in OpenRouter chat across 10 models from OpenAI, Anthropic, and Google. No CLI install required to start.
+**Every coding agent, one chat.** Claude Code, Codex CLI, or Cursor — each in its own cloud sandbox — plus a built-in 10-model chat.
 
-**Harnesses: swap your whole toolset mid-chat.** A *harness* is a reusable profile of model + MCP servers + skills + system prompt + agent. Switch from a research stack to a GitHub-ops stack in one click while the conversation keeps going.
+**Harnesses.** Swap your whole toolset — model, MCP servers, skills, prompt, agent — mid-conversation.
 
-**One-click MCP with hands-off OAuth.** Connect GitHub, Notion, and Linear over OAuth 2.1 (PKCE, discovery, dynamic client registration, auto-refresh), plus AWS Knowledge, Exa, Context7, and Princeton TigerApps.
+**One-click MCP.** GitHub, Notion, and Linear over OAuth, plus Exa, Context7, AWS, and Princeton TigerApps.
 
-**Secrets never enter the sandbox.** Sandbox egress is locked down; an in-box shim relays every MCP call back to the backend, which answers it server-side with your tokens. Your auth never touches the agent's box.
+**Secrets stay server-side.** Your tokens never enter the agent's sandbox.
 
-**Real Linux boxes.** Live xterm terminal, file explorer, and a git panel (status/commit/diff/log/branches) on right-sized tiers — basic 1cpu/1GB, standard 2cpu/4GB, performance 4cpu/8GB — persistent or ephemeral.
+**Real Linux boxes.** Live terminal, file explorer, and a git panel per session.
 
-**Approvals-first control.** Permission requests, plans, and questions render as inline cards. Nothing sensitive runs unseen.
+**Approvals-first.** Permissions, plans, and questions render as inline cards.
 
-**Live collaboration & sharing.** Share read-only or invite editors. Viewers follow the agent token-by-token over Redis; editor turns always run on the **owner's** harness, credentials, and billing.
+**Live sharing & collaboration.** Viewers follow token-by-token; editors drive on the owner's harness and keys.
 
-**Rewind, fork, and rewind-and-fork.** Branch any conversation, roll back to any message, or both. Your history is a tree, not a dead end. Anyone can fork a shared chat into their own account.
+**Rewind & fork.** Branch or roll back any conversation; fork any shared chat into your own account.
 
-**Skills from skills.sh.** Bundle battle-tested playbooks — code review, debugging, web search — onto a harness; your agent imports them on connect.
+**Background-agent observability.** Subagents, workflows, and long-running commands as live task cards.
 
-**Workspaces.** Organize chats into color-tinted workspaces, each with its own harness, sandbox, and scoped secrets.
+**Workspaces, skills & a command palette.** Color-tinted workspaces, importable playbooks, and `Cmd/Ctrl-K` for everything.
 
-**Context-compaction observability.** Claude Code `/compact` events are captured and persisted with pre/post token counts — then clone a fresh session seeded from the summary.
-
-**Background agents & subagent observability.** Subagents, workflows, and long-running commands group into live, collapsible task cards with running/failed/done state.
-
-**Bring-your-own credentials, encrypted.** Agent and per-workspace secrets are stored as AES-256-GCM ciphertext — Convex and the browser never see plaintext. Write-only, never echoed. Your usage bills to your own account.
-
-**Two-layer usage limits.** An Arcjet token bucket handles per-minute rate limiting; Convex budgets gate runs on daily *and* weekly cost ceilings.
-
-**Command palette, slash commands & an AI harness builder.** Drive everything from `Cmd/Ctrl-K`, fire MCP tools or agent built-ins (`/compact`, `/review`) with `/`, and let a streaming assistant recommend a model + MCPs + skills and emit a ready-to-save harness config.
+**Encrypted, bring-your-own credentials.** Write-only secrets; usage bills to your own account.
 
 ---
 
