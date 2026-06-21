@@ -429,6 +429,42 @@ async def count_user_sandboxes(
         return None
 
 
+async def resolve_skill_pack_context(
+    http_client: httpx.AsyncClient,
+    user_id: str,
+    skill_pack_ids: list[str],
+) -> dict | None:
+    """Resolve a harness's skill packs into agent context (deploy-key query).
+
+    Returns {agentsMd, claudeMd, claudeImportsAgents, skills:[{name, detail,
+    skillName}]} — concatenated AGENTS.md/CLAUDE.md and the union of pack
+    skills joined to their cached SKILL.md. None when Convex is unconfigured/
+    unreachable or there are no packs (the gateway then writes no context).
+    """
+    if not skill_pack_ids or not settings.convex_url or not settings.convex_deploy_key:
+        return None
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/query",
+            headers={"Authorization": f"Convex {settings.convex_deploy_key}"},
+            json={
+                "path": "skillPacks:resolveForGateway",
+                "args": {"userId": user_id, "skillPackIds": skill_pack_ids},
+                "format": "json",
+            },
+            timeout=8.0,
+        )
+        resp.raise_for_status()
+        value = resp.json().get("value")
+        return value if isinstance(value, dict) else None
+    except Exception:
+        logger.exception(
+            "Failed to resolve skill packs %s for user '%s'",
+            skill_pack_ids, user_id,
+        )
+        return None
+
+
 class SandboxRecordError(Exception):
     """Raised when Convex rejects a sandbox record creation.
 

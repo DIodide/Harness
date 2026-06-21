@@ -28,6 +28,8 @@ from daytona_sdk import (
 
 from app.config import settings
 from app.services.agents.registry import (
+    HARNESS_MANAGED_MARKER,
+    HARNESS_MANAGED_SKILL_FILE,
     SANDBOX_HOME,
     SANDBOX_WORKSPACE,
     AgentCredentials,
@@ -190,6 +192,24 @@ def _kill_shim_command(agent: AgentDefinition) -> str:
         f'grep -q {shlex.quote(shim_name)} "$d/cmdline" 2>/dev/null '
         '&& kill "${d#/proc/}" 2>/dev/null || true; '
         "done"
+    )
+
+
+def _prune_managed_context_command() -> str:
+    """Shell: remove ONLY Harness-managed skill-pack context, so removed skills
+    or a detached pack clear from a reused sandbox. Deletes each
+    ~/.claude/skills/<slug> dir carrying the managed marker file, and
+    AGENTS.md/CLAUDE.md whose first line is the managed sentinel — leaving any
+    user-authored files untouched. The current set is written right after."""
+    skills = f"{SANDBOX_HOME}/.claude/skills"
+    return (
+        f'for d in "{skills}"/*/; do '
+        f'[ -f "$d/{HARNESS_MANAGED_SKILL_FILE}" ] && rm -rf "$d"; '
+        "done 2>/dev/null; "
+        f'for f in "{SANDBOX_HOME}/AGENTS.md" "{SANDBOX_HOME}/CLAUDE.md"; do '
+        f'[ -f "$f" ] && head -1 "$f" 2>/dev/null | '
+        f"grep -qF {shlex.quote(HARNESS_MANAGED_MARKER)} && rm -f \"$f\"; "
+        "done 2>/dev/null; true"
     )
 
 
@@ -379,6 +399,39 @@ def provision_agent_sandbox(
                     json.dumps(merged, indent=2).encode("utf-8"), remote_path,
                 ),
                 "upload merged config",
+            )
+
+        # On a REUSED sandbox (attach / revive), prune previously Harness-managed
+        # skill-pack context BEFORE writing the current set, so removed skills or
+        # a detached pack actually disappear instead of lingering. Sentinel-
+        # guarded — only touches files Harness wrote, never user-authored ones. A
+        # freshly-created box has nothing to prune.
+        if reuse is not None or attach_sandbox_id:
+            with contextlib.suppress(Exception):
+                _with_retries(
+                    lambda: sandbox.process.exec(
+                        f"bash -c {shlex.quote(_prune_managed_context_command())}",
+                        timeout=15,
+                    ),
+                    "prune managed context",
+                )
+
+        # Non-secret context files (skill-pack AGENTS.md / CLAUDE.md and
+        # materialized SKILL.md). World-readable (no chmod 600) — they're
+        # context the agent loads, not credentials. Replaced each provision so
+        # edits to a pack take effect on the next session.
+        for remote_path, content in creds.context_files.items():
+            parent = remote_path.rsplit("/", 1)[0]
+            if parent and parent != SANDBOX_HOME:
+                _with_retries(
+                    lambda parent=parent: sandbox.fs.create_folder(parent, "0755"),
+                    "create context dir",
+                )
+            _with_retries(
+                lambda remote_path=remote_path, content=content: sandbox.fs.upload_file(
+                    content.encode("utf-8"), remote_path,
+                ),
+                "upload context file",
             )
 
         # Shim + launcher.

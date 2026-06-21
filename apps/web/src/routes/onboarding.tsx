@@ -42,6 +42,7 @@ import { PrincetonConnectRow } from "../components/princeton-connect-row";
 import { RecommendedSkillsGrid } from "../components/recommended-skills-grid";
 import { RoseCurveSpinner } from "../components/rose-curve-spinner";
 import { SandboxConfigForm } from "../components/sandbox/sandbox-config-form";
+import { SkillPackPicker } from "../components/skill-pack-picker";
 import { SkillsBrowser } from "../components/skills-browser";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -164,6 +165,9 @@ function OnboardingPage() {
 	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>(
 		_prefill?.skills ?? [],
 	);
+	const [selectedSkillPackIds, setSelectedSkillPackIds] = useState<
+		Id<"skillPacks">[]
+	>([]);
 
 	const [stepIndex, setStepIndex] = useState(0);
 	const [aiAssistantOpen, setAiAssistantOpen] = useState(false);
@@ -255,6 +259,7 @@ function OnboardingPage() {
 			status: "started" | "stopped" | "draft";
 			mcpServers: HarnessMcpServerInput[];
 			skills: SkillEntry[];
+			skillPackIds?: Id<"skillPacks">[];
 			systemPrompt?: string;
 			agent?: string;
 			agentCredentialId?: Id<"agentCredentials">;
@@ -515,6 +520,8 @@ function OnboardingPage() {
 				status,
 				mcpServers: mcpServersForMutation,
 				skills: selectedSkills,
+				skillPackIds:
+					selectedSkillPackIds.length > 0 ? selectedSkillPackIds : undefined,
 				systemPrompt: systemPrompt.trim() || undefined,
 				agent: agent !== "default" ? agent : undefined,
 				agentCredentialId:
@@ -792,6 +799,8 @@ function OnboardingPage() {
 												: [...prev, skill],
 										)
 									}
+									selectedSkillPackIds={selectedSkillPackIds}
+									onSkillPackIdsChange={setSelectedSkillPackIds}
 								/>
 							)}
 						</motion.div>
@@ -1568,9 +1577,13 @@ function StepSandbox({
 function StepSkills({
 	selected,
 	onToggle,
+	selectedSkillPackIds,
+	onSkillPackIdsChange,
 }: {
 	selected: SkillEntry[];
 	onToggle: (skill: SkillEntry) => void;
+	selectedSkillPackIds: Id<"skillPacks">[];
+	onSkillPackIdsChange: (ids: Id<"skillPacks">[]) => void;
 }) {
 	return (
 		<div className="space-y-4">
@@ -1588,6 +1601,18 @@ function StepSkills({
 					Browse All Skills
 				</h3>
 				<SkillsBrowser currentSkills={selected} onToggle={onToggle} />
+			</div>
+			<div className="border-t border-border pt-4">
+				<h3 className="mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+					Skill Packs
+				</h3>
+				<p className="mb-2 text-xs text-muted-foreground">
+					Attach reusable bundles of skills and context to this harness.
+				</p>
+				<SkillPackPicker
+					selectedIds={selectedSkillPackIds}
+					onChange={onSkillPackIdsChange}
+				/>
 			</div>
 		</div>
 	);
