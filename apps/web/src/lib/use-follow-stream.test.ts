@@ -36,15 +36,89 @@ describe("reduceFollow", () => {
 			status: "completed",
 		});
 		const part = s?.parts.find((p) => p.type === "tool_call");
-		expect(part).toMatchObject({ call_id: "c1", result: "file.txt", status: "completed" });
+		expect(part).toMatchObject({
+			call_id: "c1",
+			result: "file.txt",
+			status: "completed",
+		});
+	});
+
+	it("tool_result merges late-arriving arguments onto the tool_call", () => {
+		// ACP ships the initial tool_call with empty/partial input; the complete
+		// input (terminal command, read-file path, Workflow script) arrives on the
+		// refining tool_result. A viewer must show it, not the generic placeholder.
+		let s = reduceFollow(null, "tool_call", {
+			tool: "Read",
+			call_id: "c1",
+			arguments: {},
+		});
+		s = reduceFollow(s, "tool_result", {
+			call_id: "c1",
+			arguments: { path: "/etc/hosts" },
+			result: "127.0.0.1 localhost",
+			status: "completed",
+		});
+		const part = s?.parts.find((p) => p.type === "tool_call");
+		expect(part).toMatchObject({
+			call_id: "c1",
+			arguments: { path: "/etc/hosts" },
+			result: "127.0.0.1 localhost",
+		});
+	});
+
+	it("append tool_result merges late arguments without clobbering streamed output", () => {
+		let s = reduceFollow(null, "tool_call", {
+			tool: "bash",
+			call_id: "c1",
+			arguments: {},
+		});
+		s = reduceFollow(s, "tool_result", {
+			call_id: "c1",
+			append: true,
+			output_delta: "out\n",
+		});
+		s = reduceFollow(s, "tool_result", {
+			call_id: "c1",
+			append: true,
+			arguments: { cmd: "echo hi" },
+		});
+		const part = s?.parts.find((p) => p.type === "tool_call");
+		expect(part?.arguments).toMatchObject({ cmd: "echo hi" });
+		expect(part?.result).toBe("out\n");
 	});
 
 	it("append tool_result concatenates output deltas", () => {
 		let s = reduceFollow(null, "tool_call", { tool: "bash", call_id: "c1" });
-		s = reduceFollow(s, "tool_result", { call_id: "c1", append: true, output_delta: "line1\n" });
-		s = reduceFollow(s, "tool_result", { call_id: "c1", append: true, output_delta: "line2\n" });
+		s = reduceFollow(s, "tool_result", {
+			call_id: "c1",
+			append: true,
+			output_delta: "line1\n",
+		});
+		s = reduceFollow(s, "tool_result", {
+			call_id: "c1",
+			append: true,
+			output_delta: "line2\n",
+		});
 		const part = s?.parts.find((p) => p.type === "tool_call");
 		expect(part?.result).toBe("line1\nline2\n");
+	});
+
+	it("done clears the plan card (so a finished follower doesn't show a stale plan)", () => {
+		let s = reduceFollow(null, "plan", {
+			entries: [{ content: "step 1", status: "in_progress" }],
+		});
+		expect(s?.plan).toHaveLength(1);
+		s = reduceFollow(s, "done", { content: "answer" });
+		expect(s?.plan).toBeNull();
+	});
+
+	it("plan skips the update (same reference) when entries are unchanged", () => {
+		const entries = [{ content: "a", status: "pending" }];
+		const s1 = reduceFollow(null, "plan", { entries });
+		const s2 = reduceFollow(s1, "plan", {
+			entries: [{ content: "a", status: "pending" }],
+		});
+		expect(s2).toBe(s1);
 	});
 
 	it("done sets pendingDoneContent so the bubble hands off to the persisted row", () => {
