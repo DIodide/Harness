@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import {
 	action,
 	internalMutation,
@@ -419,14 +419,35 @@ async function fetchRepoFile(
  * `<base>/<skillId>/SKILL.md` where base is a known skills dir. One API call
  * per branch — handles repos like greensock/gsap-skills (skills/<id>/SKILL.md).
  */
-async function listRepoSkillIds(source: string): Promise<string[]> {
+async function listRepoSkillIds(
+	source: string,
+): Promise<{ ids: string[]; rateLimited: boolean; notFound: boolean }> {
 	const bases = new Set(["skills", ".agents/skills", ".claude/skills"]);
+	let rateLimited = false;
+	let notFound = false;
 	for (const branch of ["main", "master"]) {
 		try {
 			const resp = await fetch(
 				`https://api.github.com/repos/${source}/git/trees/${branch}?recursive=1`,
 				{ headers: ghApiHeaders() },
 			);
+			if (resp.status === 429 || resp.status === 403) {
+				// 403/429 with exhausted quota = rate limited (the common case when
+				// no GITHUB_TOKEN is set); a plain 403 means private/forbidden.
+				if (
+					resp.status === 429 ||
+					resp.headers.get("x-ratelimit-remaining") === "0"
+				) {
+					rateLimited = true;
+				} else {
+					notFound = true;
+				}
+				continue;
+			}
+			if (resp.status === 404) {
+				notFound = true;
+				continue;
+			}
 			if (!resp.ok) continue;
 			const data = (await resp.json()) as {
 				tree?: Array<{ path: string; type: string }>;
@@ -439,12 +460,14 @@ async function listRepoSkillIds(source: string): Promise<string[]> {
 				const base = parts.slice(0, parts.length - 2).join("/");
 				if (id && bases.has(base)) ids.add(id);
 			}
-			if (ids.size > 0) return [...ids];
+			if (ids.size > 0) {
+				return { ids: [...ids], rateLimited: false, notFound: false };
+			}
 		} catch {
 			// try next branch
 		}
 	}
-	return [];
+	return { ids: [], rateLimited, notFound };
 }
 
 const MAX_REPO_IMPORT_SKILLS = 60;
@@ -473,15 +496,27 @@ export const importSkillRepo = action({
 			!/^[\w.-]+\/[\w.-]+$/.test(source) ||
 			segments.some((s) => s === "." || s === "..")
 		) {
-			throw new Error(
+			// ConvexError (not Error): the deployment masks plain Errors as a
+			// generic "Server Error", so user-facing reasons must use ConvexError.
+			throw new ConvexError(
 				"Enter a GitHub repo as owner/repo (e.g. greensock/gsap-skills).",
 			);
 		}
 
-		const skillIds = await listRepoSkillIds(source);
+		const { ids: skillIds, rateLimited, notFound } =
+			await listRepoSkillIds(source);
+		if (rateLimited) {
+			throw new ConvexError(
+				"GitHub's API rate limit was hit while reading the repo. Set a " +
+					"GITHUB_TOKEN environment variable on the Convex deployment to " +
+					"raise it (5000/hr), then try again.",
+			);
+		}
 		if (skillIds.length === 0) {
-			throw new Error(
-				`No skills found in ${source}. Expected SKILL.md files under skills/.`,
+			throw new ConvexError(
+				notFound
+					? `Couldn't find a public GitHub repo "${source}" with a skills/ folder.`
+					: `No skills found in ${source}. Expected SKILL.md files at skills/<name>/SKILL.md.`,
 			);
 		}
 		const limited = skillIds.slice(0, MAX_REPO_IMPORT_SKILLS);
