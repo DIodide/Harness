@@ -41,7 +41,13 @@ from app.services.agents.daytona_runtime import (
 )
 
 from app.services.agents.credentials import resolve_agent_credentials
-from app.services.agents.registry import SANDBOX_WORKSPACE, get_agent
+from app.services.agents.registry import (
+    HARNESS_MANAGED_MARKER,
+    HARNESS_MANAGED_SKILL_FILE,
+    SANDBOX_HOME,
+    SANDBOX_WORKSPACE,
+    get_agent,
+)
 from app.services.mcp_client import UserContext
 from app.services.workspace_credentials import resolve_workspace_env
 
@@ -71,6 +77,18 @@ def _workspace_env_fingerprint(env: dict[str, str]) -> str:
         h.update(env[name].encode("utf-8"))
         h.update(b"\x00")
     return h.hexdigest()
+
+
+def _skill_dir_slug(name: str | None) -> str:
+    """A filesystem-safe directory name for a skill (used under
+    ~/.claude/skills/<slug>/SKILL.md). Lowercase; keep [a-z0-9._-]; collapse
+    everything else to a single dash; strip leading/trailing dashes. Returns ""
+    for an unusable name so the caller can skip it."""
+    if not name:
+        return ""
+    slug = re.sub(r"[^a-z0-9._-]+", "-", name.strip().lower()).strip("-")
+    # Never let a slug escape the skills dir or collide with dotfiles.
+    return "" if slug in ("", ".", "..") else slug[:80]
 
 
 class SandboxAccessError(Exception):
@@ -1059,6 +1077,75 @@ class AgentSessionManager:
         creds.env = {**ws_env, **creds.env}
         return _workspace_env_fingerprint(ws_env)
 
+    async def _attach_skill_pack_context(
+        self, creds, harness: HarnessConfig, agent_id: str, user_id: str,
+    ) -> None:
+        """Resolve the harness's skill packs and stage their context files on
+        `creds` so provisioning writes them to the sandbox:
+
+          - AGENTS.md (all agentic harnesses);
+          - CLAUDE.md (claude-code only), optionally @-importing AGENTS.md;
+          - ~/.claude/skills/<name>/SKILL.md for each pack skill with cached
+            content (claude-code only) so the agent can load them.
+
+        Best-effort: skill packs are supplementary context — a Convex hiccup
+        must never block a session. `user_id` is the harness OWNER (the session
+        is created under the owner even for a collaborator's turn), so the
+        owner's packs resolve regardless of who triggered the run.
+        """
+        skill_pack_ids = getattr(harness, "skill_pack_ids", None)
+        if not skill_pack_ids:
+            return
+        from app.services.convex import resolve_skill_pack_context
+
+        try:
+            ctx = await resolve_skill_pack_context(
+                self._http_client(), user_id, skill_pack_ids,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to resolve skill packs for harness '%s'",
+                harness.harness_id,
+            )
+            return
+        if not ctx:
+            return
+
+        # Every Harness-written file is marked so a re-provision can prune ONLY
+        # our files (removed skills / detached packs actually clear) without
+        # touching anything the user authored. See provision_agent_sandbox.
+        marker = HARNESS_MANAGED_MARKER
+        is_claude = agent_id == "claude-code"
+        agents_md = (ctx.get("agentsMd") or "").strip()
+        claude_md = (ctx.get("claudeMd") or "").strip()
+        if agents_md:
+            creds.context_files[f"{SANDBOX_HOME}/AGENTS.md"] = (
+                f"{marker}\n{agents_md}\n"
+            )
+        if is_claude and (claude_md or (agents_md and ctx.get("claudeImportsAgents"))):
+            # @AGENTS.md pulls AGENTS.md into Claude Code's context via its
+            # @-import; only emit it when AGENTS.md actually exists.
+            prefix = (
+                "@AGENTS.md\n\n"
+                if agents_md and ctx.get("claudeImportsAgents")
+                else ""
+            )
+            body = f"{prefix}{claude_md}".strip()
+            creds.context_files[f"{SANDBOX_HOME}/CLAUDE.md"] = (
+                f"{marker}\n{body}\n"
+            )
+        if is_claude:
+            for skill in ctx.get("skills") or []:
+                detail = (skill.get("detail") or "").strip()
+                if not detail:
+                    continue  # SKILL.md not cached yet — materialize next time
+                slug = _skill_dir_slug(skill.get("skillName") or skill.get("name"))
+                if not slug:
+                    continue
+                dir_path = f"{SANDBOX_HOME}/.claude/skills/{slug}"
+                creds.context_files[f"{dir_path}/SKILL.md"] = detail + "\n"
+                creds.context_files[f"{dir_path}/{HARNESS_MANAGED_SKILL_FILE}"] = ""
+
     def get(self, session_id: str, user_id: str) -> AgentSession:
         session = self._sessions.get(session_id)
         if session is None or session.user_id != user_id:
@@ -1136,6 +1223,9 @@ class AgentSessionManager:
         session.workspace_env_version = await self._inject_workspace_env(
             creds, harness, user_id,
         )
+        # Materialize the harness's skill-pack context (AGENTS.md / CLAUDE.md /
+        # ~/.claude/skills) into the creds so provisioning writes it.
+        await self._attach_skill_pack_context(creds, harness, agent_id, user_id)
         self._sessions[session.id] = session
         self._ensure_reaper()
         asyncio.create_task(self._provision(session, creds, user_ctx))
@@ -1608,6 +1698,10 @@ class AgentSessionManager:
         # or rotation takes effect for a previously-live session).
         session.workspace_env_version = await self._inject_workspace_env(
             creds, session.harness, session.user_id,
+        )
+        # Re-materialize skill-pack context so pack edits land on revive too.
+        await self._attach_skill_pack_context(
+            creds, session.harness, session.agent_id, session.user_id,
         )
         owns = session.runtime.owns_sandbox
         old_sandbox_id = session.runtime.sandbox_id

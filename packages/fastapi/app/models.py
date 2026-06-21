@@ -29,6 +29,10 @@ class HarnessConfig(BaseModel):
     model: str
     mcp_servers: list[McpServer] = []
     skills: list[SkillRef] = []
+    # Skill packs attached to this harness. For agentic harnesses the gateway
+    # resolves these (via Convex) into AGENTS.md / CLAUDE.md context files and
+    # materialized ~/.claude/skills/<name>/SKILL.md written to the sandbox.
+    skill_pack_ids: list[str] = []
     name: str
     harness_id: str | None = None
     system_prompt: str | None = Field(default=None, max_length=4000)
@@ -95,6 +99,7 @@ def harness_config_from_resolved(resolved: dict) -> "HarnessConfig":
             SkillRef(name=s["name"], description=s.get("description", ""))
             for s in resolved.get("skills", [])
         ],
+        skill_pack_ids=resolved.get("skillPackIds", []),
         mcp_servers=[
             McpServer(
                 name=s["name"],

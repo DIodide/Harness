@@ -25,6 +25,12 @@ export default defineSchema({
 			}),
 		),
 		skills: v.array(v.object({ name: v.string(), description: v.string() })),
+		// Skill packs attached to this harness. A pack bundles a set of skills
+		// plus optional AGENTS.md / CLAUDE.md context written to the sandbox
+		// root. The harness's own `skills` above stay for backward-compat; the
+		// effective skill set is the union of both. Order is preserved (the
+		// packs' AGENTS.md/CLAUDE.md are concatenated in this order).
+		skillPackIds: v.optional(v.array(v.id("skillPacks"))),
 		systemPrompt: v.optional(v.string()),
 		suggestedPrompts: v.optional(v.array(v.string())),
 		userId: v.string(),
@@ -377,6 +383,27 @@ export default defineSchema({
 		detail: v.string(),
 		code: v.string(),
 	}).index("by_name", ["name"]),
+
+	// A reusable bundle of skills + optional context files (AGENTS.md /
+	// CLAUDE.md) that a user attaches to harnesses instead of picking loose
+	// skills. For agentic (ACP) harnesses the context files are written to the
+	// sandbox root and each skill's SKILL.md is materialized under
+	// ~/.claude/skills so the agent can actually load them.
+	skillPacks: defineTable({
+		userId: v.string(),
+		name: v.string(),
+		description: v.optional(v.string()),
+		skills: v.array(v.object({ name: v.string(), description: v.string() })),
+		// Markdown written to <sandbox>/AGENTS.md (all agentic harnesses).
+		agentsMd: v.optional(v.string()),
+		// Markdown written to <sandbox>/CLAUDE.md (claude-code harnesses only).
+		claudeMd: v.optional(v.string()),
+		// Prepend an `@AGENTS.md` import line to CLAUDE.md so Claude Code pulls
+		// AGENTS.md into context via its @-import mechanism.
+		claudeImportsAgents: v.optional(v.boolean()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	}).index("by_user", ["userId"]),
 
 	skillsIndex: defineTable({
 		skillId: v.string(),

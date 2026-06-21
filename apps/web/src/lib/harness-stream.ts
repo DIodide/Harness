@@ -22,6 +22,7 @@ export interface HarnessDocLike {
 		authToken?: string;
 	}>;
 	skills?: Array<{ name: string; description: string }>;
+	skillPackIds?: string[];
 	systemPrompt?: string;
 	agent?: string;
 	agentCredentialId?: string;
@@ -64,6 +65,9 @@ export function buildHarnessStreamConfig(
 			auth_token: s.authToken,
 		})),
 		skills: harness.skills ?? [],
+		// Skill packs the backend resolves into the skill manifest (default loop)
+		// and into AGENTS.md / CLAUDE.md / ~/.claude/skills (agentic harnesses).
+		skill_pack_ids: harness.skillPackIds ?? [],
 		name: harness.name,
 		harness_id: harness._id,
 		system_prompt: harness.systemPrompt ?? undefined,

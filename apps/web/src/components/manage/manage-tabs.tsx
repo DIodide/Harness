@@ -1,12 +1,18 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { ArrowLeft, Box, KeyRound, SlidersHorizontal } from "lucide-react";
+import {
+	ArrowLeft,
+	Box,
+	KeyRound,
+	Package,
+	SlidersHorizontal,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 
 /**
  * The "manage" destinations, shared by the tabbed header and the sidebar
- * footer rail so they can never drift. Adding a fourth manage screen is a
+ * footer rail so they can never drift. Adding a manage screen is a
  * one-line edit here.
  *
  * `as const` is load-bearing: the typed route tree makes <Link to> strict, so
@@ -15,6 +21,7 @@ import { Button } from "../ui/button";
 export const MANAGE_TABS = [
 	{ to: "/sandboxes", label: "Sandboxes", icon: Box },
 	{ to: "/harnesses", label: "Harnesses", icon: SlidersHorizontal },
+	{ to: "/skill-packs", label: "Skill Packs", icon: Package },
 	{ to: "/credentials", label: "Credentials", icon: KeyRound },
 ] as const;
 
@@ -24,7 +31,7 @@ function matches(pathname: string, to: string): boolean {
 }
 
 /**
- * Segmented tab control switching between the three manage screens. These are
+ * Segmented tab control switching between the manage screens. These are
  * real navigating links, so we use nav semantics + aria-current="page" rather
  * than role="tablist" (no roving-tabindex contract to honor).
  */
@@ -67,9 +74,9 @@ export function ManageTabs() {
 }
 
 /**
- * The full header band shared by all three manage routes (and their loading
+ * The full header band shared by all manage routes (and their loading
  * skeletons). Owns the back arrow, the tab control, the count, and a slot for
- * each page's own action buttons — so the three screens can never drift.
+ * each page's own action buttons — so the screens can never drift.
  */
 export function ManageHeader({
 	count,
