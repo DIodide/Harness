@@ -12,87 +12,104 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * Best-effort extraction of the user's Claude-account quota utilization from the
- * opaque upstream `_meta._claude/rateLimit` snapshot. The shape is upstream-
- * defined (claude-agent-acp) and may change, so this scans the most likely field
- * names and degrades to {} on no match — the UI then simply omits the section.
+ * The user's Claude-account rate-limit snapshot, parsed from the upstream
+ * `_meta._claude/rateLimit` — which is the SDK's `rate_limit_info`:
+ *   { rateLimitType, status, resetsAt, utilization?, isUsingOverage, … }
+ * It describes the single most-restrictive window. `utilization` is omitted in
+ * the normal "allowed" low-usage state, so we may have only a status + reset.
+ * Defensive: returns null when the shape is unrecognizable.
  */
 interface AccountUsage {
-	session?: number; // 5-hour window %
-	week?: number; // 7-day window %
-	weekSonnet?: number; // 7-day Sonnet-only window %
+	label: string; // human window name (e.g. "Current session")
+	status: "allowed" | "warning" | "rejected";
+	utilization?: number; // 0–100, when the snapshot includes it
+	resetsAtMs?: number; // window reset, normalized to ms
 }
 
-/** Clamp a best-effort percentage to [0, 100] so a surprising upstream value
- *  can't render an absurd label (e.g. "1700000000%"). */
-function clampPct(p: number): number {
-	return Math.max(0, Math.min(100, p));
-}
+const RATE_LIMIT_LABELS: Record<string, string> = {
+	five_hour: "Current session",
+	seven_day: "Current week",
+	seven_day_opus: "Current week (Opus)",
+	seven_day_sonnet: "Current week (Sonnet)",
+	overage: "Overage",
+};
 
-function bucketPct(bucket: unknown): number | undefined {
-	if (!bucket || typeof bucket !== "object") return undefined;
-	const b = bucket as Record<string, unknown>;
-	const u =
-		b.utilization_pct ??
-		b.utilizationPct ??
-		b.utilization ??
-		b.used_pct ??
-		b.usedPct ??
-		b.percent ??
-		b.pct;
-	// Accept 0–1 (fraction) or 0–100 (already a percent); clamp either way.
-	if (typeof u === "number") return clampPct(u <= 1 ? u * 100 : u);
-	if (
-		typeof b.used === "number" &&
-		typeof b.limit === "number" &&
-		b.limit > 0
-	) {
-		return clampPct((b.used / b.limit) * 100);
-	}
-	return undefined;
-}
-
-function accountUsageFromRateLimit(rateLimit: unknown): AccountUsage {
-	if (!rateLimit || typeof rateLimit !== "object") return {};
-	const rl = rateLimit as Record<string, unknown>;
-	const src = (
-		rl.buckets && typeof rl.buckets === "object" ? rl.buckets : rl
-	) as Record<string, unknown>;
-	const pick = (...keys: string[]) => {
-		for (const k of keys) {
-			const p = bucketPct(src[k]);
-			if (p !== undefined) return p;
-		}
+/** Normalize a possibly-seconds or possibly-ms reset timestamp to ms. */
+function toResetMs(raw: unknown): number | undefined {
+	if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
 		return undefined;
-	};
+	}
+	// < ~year 2286 in seconds ⇒ treat as seconds; otherwise already ms.
+	return raw < 1e12 ? raw * 1000 : raw;
+}
+
+export function accountUsageFromRateLimit(
+	rateLimit: unknown,
+): AccountUsage | null {
+	if (!rateLimit || typeof rateLimit !== "object") return null;
+	const rl = rateLimit as Record<string, unknown>;
+	const rawStatus = typeof rl.status === "string" ? rl.status : "allowed";
+	const status: AccountUsage["status"] =
+		rawStatus === "rejected"
+			? "rejected"
+			: rawStatus.includes("warning")
+				? "warning"
+				: "allowed";
+	const type = typeof rl.rateLimitType === "string" ? rl.rateLimitType : "";
+	const u = rl.utilization;
+	const utilization =
+		typeof u === "number" && Number.isFinite(u)
+			? Math.max(0, Math.min(100, u))
+			: undefined;
+	const resetsAtMs = toResetMs(rl.resetsAt);
+	// The snapshot only updates on a status change, and a window that elapses
+	// passively emits no new event — so once its reset time is in the past the
+	// stored value is stale. Drop it (self-heal) rather than keep showing a
+	// "limit reached" banner for a window that already reset.
+	if (resetsAtMs !== undefined && resetsAtMs <= Date.now()) {
+		return null;
+	}
+	// Nothing actionable to show: normal, no number, no reset.
+	if (
+		status === "allowed" &&
+		utilization === undefined &&
+		resetsAtMs === undefined
+	) {
+		return null;
+	}
 	return {
-		session: pick("five_hour", "fiveHour", "session", "5h", "primary"),
-		week: pick("seven_day", "sevenDay", "week", "7d"),
-		weekSonnet: pick("seven_day_sonnet", "sevenDaySonnet"),
+		label: RATE_LIMIT_LABELS[type] ?? "Claude account",
+		status,
+		utilization,
+		resetsAtMs,
 	};
 }
 
-/**
- * The most-recent non-empty account utilization across the user's agent rows.
- * getMyAgentUsage returns one row per credential (cost-sorted, not by recency),
- * so we scan in lastTurnAt order to surface the credential whose turn is
- * globally freshest rather than the highest-spend one.
- */
-function latestAccountUsage(rows: AgentUsageRow[] | undefined): AccountUsage {
+/** The freshest credential's account-limit snapshot (rows already carry the
+ *  account-level rateLimit; pick the most recently active credential). */
+function latestAccountUsage(
+	rows: AgentUsageRow[] | undefined,
+): AccountUsage | null {
 	const byRecency = [...(rows ?? [])].sort(
 		(a, b) => (b.lastTurnAt ?? 0) - (a.lastTurnAt ?? 0),
 	);
 	for (const r of byRecency) {
 		const a = accountUsageFromRateLimit(r.rateLimit);
-		if (
-			a.session !== undefined ||
-			a.week !== undefined ||
-			a.weekSonnet !== undefined
-		) {
-			return a;
-		}
+		if (a) return a;
 	}
-	return {};
+	return null;
+}
+
+/** "in 5h 12m" until a reset timestamp (ms), or undefined when past/absent. */
+function resetsInLabel(resetsAtMs: number | undefined): string | undefined {
+	if (resetsAtMs === undefined) return undefined;
+	const diffMs = resetsAtMs - Date.now();
+	if (diffMs <= 0) return undefined;
+	const hours = Math.floor(diffMs / 3_600_000);
+	const minutes = Math.floor((diffMs % 3_600_000) / 60_000);
+	if (hours >= 24) return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+	if (hours > 0) return `${hours}h ${minutes}m`;
+	return `${minutes}m`;
 }
 
 function ProgressBar({
@@ -451,17 +468,10 @@ export function UsageDisplay() {
 function AccountLimitsSection() {
 	const { data } = useQuery(convexQuery(api.agentUsage.getMyAgentUsage, {}));
 	const acct = latestAccountUsage(data as AgentUsageRow[] | undefined);
-	const bars: Array<{ label: string; pct: number }> = [];
-	if (acct.session !== undefined) {
-		bars.push({ label: "Current session (5h)", pct: acct.session });
-	}
-	if (acct.week !== undefined) {
-		bars.push({ label: "Current week", pct: acct.week });
-	}
-	if (acct.weekSonnet !== undefined) {
-		bars.push({ label: "Current week (Sonnet)", pct: acct.weekSonnet });
-	}
-	if (bars.length === 0) return null;
+	if (!acct) return null;
+
+	const resetsIn = resetsInLabel(acct.resetsAtMs);
+	const resetSub = resetsIn ? `Resets in ${resetsIn}` : undefined;
 
 	return (
 		<div className="space-y-3 border-t border-white/10 pt-4">
@@ -473,9 +483,25 @@ function AccountLimitsSection() {
 					your subscription
 				</span>
 			</div>
-			{bars.map((b) => (
-				<ProgressBar key={b.label} pct={b.pct} label={b.label} />
-			))}
+			{acct.status === "rejected" ? (
+				<div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+					{acct.label} limit reached
+					{resetsIn ? ` · resets in ${resetsIn}` : ""}. Agent turns are paused
+					until it resets.
+				</div>
+			) : acct.utilization !== undefined ? (
+				<ProgressBar
+					pct={acct.utilization}
+					label={acct.label}
+					sublabel={resetSub}
+				/>
+			) : (
+				<p className="text-[11px] text-foreground/50">
+					{acct.label}
+					{acct.status === "warning" ? " · approaching limit" : ""}
+					{resetsIn ? ` · resets in ${resetsIn}` : ""}
+				</p>
+			)}
 		</div>
 	);
 }
@@ -495,16 +521,26 @@ export function UsageBadge({ onClick }: { onClick?: () => void }) {
 	const budgetPct = budget
 		? Math.max(budget.dailyPctUsed, budget.weeklyPctUsed)
 		: 0;
-	// Prefer the real account quota (what actually limits an agent turn); fall
-	// back to the Harness budget.
-	const level = acct.session ?? acct.week ?? budgetPct;
-	const color =
-		level >= 90
+	// A hit account limit is the loudest signal; otherwise prefer the real
+	// account quota % (what actually limits an agent turn), else the Harness
+	// budget.
+	const limited = acct?.status === "rejected";
+	// `||` not `??`: a 0% account utilization shouldn't hide a real budget %.
+	const level = acct?.utilization || budgetPct;
+	const color = limited
+		? "text-red-400"
+		: level >= 90
 			? "text-red-400"
 			: level >= 70
 				? "text-yellow-400"
 				: "text-muted-foreground";
-	const tip = level > 0 ? `Usage — ${Math.round(level)}% used` : "Usage";
+	const tip = limited
+		? `${acct?.label ?? "Account"} limit reached`
+		: acct?.utilization !== undefined
+			? `${acct.label} — ${Math.round(acct.utilization)}% used`
+			: level > 0
+				? `Usage — ${Math.round(level)}% used`
+				: "Usage";
 
 	return (
 		<Tooltip>

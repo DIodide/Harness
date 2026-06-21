@@ -321,6 +321,40 @@ describe("agentUsage.getMyAgentUsage", () => {
 		expect(rows[0].rateLimit).toBeNull();
 	});
 
+	it("surfaces the credential's recordRateLimit snapshot even with no usage rows", async () => {
+		const { raw, asUser } = makeT();
+		const credId = await seedCredential(raw, "u-a", "work");
+		// A hard-limit turn records no usage at all — only the rate-limit snapshot.
+		await raw.mutation(internal.agentCredentials.recordRateLimit, {
+			credentialId: credId,
+			userId: "u-a",
+			rateLimit: {
+				rateLimitType: "five_hour",
+				status: "rejected",
+				resetsAt: 1771606800,
+			},
+		});
+		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
+		expect(rows[0].turns).toBe(0); // no usage rows
+		expect(rows[0].rateLimit).toMatchObject({
+			rateLimitType: "five_hour",
+			status: "rejected",
+		});
+		expect(rows[0].lastTurnAt).toBeGreaterThan(0); // reflects the snapshot time
+	});
+
+	it("recordRateLimit only patches the owner's credential", async () => {
+		const { raw } = makeT();
+		const credId = await seedCredential(raw, "u-a", "work");
+		await raw.mutation(internal.agentCredentials.recordRateLimit, {
+			credentialId: credId,
+			userId: "intruder",
+			rateLimit: { status: "rejected" },
+		});
+		const row = await raw.run(async (ctx) => ctx.db.get(credId));
+		expect(row?.lastRateLimit).toBeUndefined();
+	});
+
 	it("cascade-deletes usage when the owning credential is removed", async () => {
 		const { raw, asUser } = makeT();
 		const credId = await seedCredential(raw, "u-a", "work");

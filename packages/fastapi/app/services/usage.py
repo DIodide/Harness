@@ -255,3 +255,36 @@ async def record_agent_usage(
         logger.exception(
             "Failed to record agent usage for credential '%s'", agent_credential_id
         )
+
+
+async def record_agent_rate_limit(
+    http_client: httpx.AsyncClient,
+    *,
+    user_id: str,
+    agent_credential_id: str,
+    rate_limit: object,
+) -> None:
+    """Persist the latest Anthropic rate-limit snapshot onto the credential.
+
+    Decoupled from `record_agent_usage` so it lands even when the rate_limit
+    event carries no cost/tokens — including a silent hard-limit turn, which is
+    exactly when the user needs to see the reset time. Fire-and-forget.
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        return
+    from app.services.convex import run_convex_mutation
+
+    try:
+        await run_convex_mutation(
+            http_client,
+            "agentCredentials:recordRateLimit",
+            {
+                "credentialId": agent_credential_id,
+                "userId": user_id,
+                "rateLimit": rate_limit,
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Failed to record rate limit for credential '%s'", agent_credential_id
+        )
