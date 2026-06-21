@@ -4,19 +4,24 @@ import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Separator } from "../ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { UsageRailSection } from "../usage-display";
 import { MANAGE_TABS } from "./manage-tabs";
 
 /**
- * Compact sidebar footer rail: the three "manage" destinations as icon buttons
- * (name revealed on hover/focus via tooltip), plus Settings. Replaces the old
- * stack of four full-width text buttons in both the chat and workspaces
- * sidebars. The active route's icon uses the same `bg-muted text-foreground`
- * idiom as a selected chat row, so it reads as "you are here".
+ * Compact sidebar footer rail, in three divider-separated sections: the three
+ * "manage" destinations as icon buttons (name revealed on hover/focus via
+ * tooltip), the usage indicator, and Settings. Replaces the old stack of four
+ * full-width text buttons plus a standalone usage badge in both the chat and
+ * workspaces sidebars. The active route's icon uses the same
+ * `bg-muted text-foreground` idiom as a selected chat row, so it reads as
+ * "you are here".
  */
 export function ManageNavFooter({
 	onOpenSettings,
+	onOpenUsage,
 }: {
 	onOpenSettings: () => void;
+	onOpenUsage: () => void;
 }) {
 	const pathname = useRouterState({
 		select: (s) => s.location.pathname,
@@ -48,6 +53,11 @@ export function ManageNavFooter({
 					</Tooltip>
 				);
 			})}
+
+			{/* Usage section: its leading divider + badge mount/unmount as one
+			    unit (renders nothing until usage data loads), so the rail never
+			    shows a dangling divider. */}
+			<UsageRailSection onOpenUsage={onOpenUsage} />
 
 			{/* Match the variant-prefixed base class so tailwind-merge dedupes it
 			    and the divider actually insets to 16px (a plain h-4 loses to the

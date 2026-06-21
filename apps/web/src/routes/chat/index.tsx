@@ -68,7 +68,7 @@ import {
 	TooltipTrigger,
 } from "../../components/ui/tooltip";
 import { UsageDialog } from "../../components/usage-dialog";
-import { formatResetTime, UsageBadge } from "../../components/usage-display";
+import { formatResetTime } from "../../components/usage-display";
 import { env } from "../../env";
 import { useMcpHealthCheck } from "../../hooks/use-mcp-health-check";
 import { useMessageQueue } from "../../hooks/use-message-queue";
@@ -1311,11 +1311,10 @@ function ChatSidebar({
 			</ScrollArea>
 
 			<Separator />
-			<div className="px-2 py-1">
-				<UsageBadge onClick={() => setUsageOpen(true)} />
-			</div>
-			<Separator />
-			<ManageNavFooter onOpenSettings={() => setSettingsOpen(true)} />
+			<ManageNavFooter
+				onOpenSettings={() => setSettingsOpen(true)}
+				onOpenUsage={() => setUsageOpen(true)}
+			/>
 
 			<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 			<UsageDialog open={usageOpen} onOpenChange={setUsageOpen} />
