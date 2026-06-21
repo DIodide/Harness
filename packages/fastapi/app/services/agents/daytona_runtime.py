@@ -239,6 +239,7 @@ def provision_agent_sandbox(
     creds: AgentCredentials,
     attach_sandbox_id: str | None = None,
     reuse: ProvisionedRuntime | None = None,
+    persist: bool = False,
 ) -> ProvisionedRuntime:
     """Start the agent shim in a sandbox and wait until it is healthy.
 
@@ -246,6 +247,11 @@ def provision_agent_sandbox(
     persistent sandbox (bootstrapping node + adapters on first use) so it
     works on the user's real files; otherwise a fresh session-owned sandbox
     is created from the ACP snapshot.
+
+    With `persist` (and no attach_sandbox_id), the freshly-created sandbox is
+    the workspace's UNIFIED sandbox: returned with owns_sandbox=False so it
+    survives teardown, rooted at the persistent home, and labelled for reuse.
+    The caller links it back to the workspace/harness in Convex.
 
     With `reuse`, the shim is relaunched into the session's EXISTING sandbox
     (auto-started if stopped) with a fresh shim token and preview link —
@@ -278,23 +284,37 @@ def provision_agent_sandbox(
         _ensure_agent_runtime(sandbox)
         cwd = SANDBOX_HOME
     else:
+        # A freshly-created box is OWNED at first (owns_sandbox=True) regardless
+        # of persist: it's reclaimable on teardown until the caller confirms it
+        # was linked back to a workspace, at which point it flips to persistent.
+        # This fail-safe means any failure between create and link (conn error,
+        # provision timeout, lost race) reclaims the box instead of orphaning it.
+        # persist=True only changes the SHAPE of the box: rooted at the
+        # user-visible home (files survive once it becomes the unified box) and
+        # labelled for reuse — and, via owns_sandbox, it gets the gai.conf write.
         owns_sandbox = True
         params = CreateSandboxFromSnapshotParams(
             snapshot=settings.acp_snapshot_name,
             labels={
                 "harness_user_id": user_id,
                 "harness_acp_agent": agent.id,
+                **({"harness_persistent": "1"} if persist else {}),
             },
             auto_stop_interval=30,
             ephemeral=False,
         )
         logger.info(
-            "Provisioning ACP sandbox (agent=%s, snapshot=%s) for user '%s'",
-            agent.id, settings.acp_snapshot_name, user_id,
+            "Provisioning ACP sandbox (agent=%s, snapshot=%s, persist=%s) "
+            "for user '%s'",
+            agent.id, settings.acp_snapshot_name, persist, user_id,
         )
         sandbox = client.create(params)
         sandbox_id = sandbox.id
-        cwd = SANDBOX_WORKSPACE
+        # The unified box roots the agent at the user-visible home so its files
+        # survive across sessions, like an attached one. The ACP snapshot ships
+        # node + adapters, so no runtime bootstrap; gai.conf is still written
+        # below (owns_sandbox is True for this freshly-created box).
+        cwd = SANDBOX_HOME if persist else SANDBOX_WORKSPACE
 
     try:
         # Daytona sandboxes blackhole outbound IPv6 (TCP connects, TLS gets

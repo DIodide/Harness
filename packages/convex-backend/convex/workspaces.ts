@@ -1,7 +1,7 @@
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
-import { mutation, query } from "./_generated/server";
+import { internalQuery, mutation, query } from "./_generated/server";
 
 async function assertOwnedWorkspace(
 	ctx: MutationCtx,
@@ -13,6 +13,22 @@ async function assertOwnedWorkspace(
 		throw new Error("Workspace not found");
 	}
 	return workspace;
+}
+
+/**
+ * The sandbox a workspace should adopt when an ACP / sandbox harness is
+ * assigned to it: the harness's OWN sandbox. Returns undefined unless the
+ * harness runs an ACP agent (or has sandbox enabled) and already has a
+ * sandbox linked — a harness with no sandbox yet gets one lazily, created and
+ * linked by the gateway on its first session. Used so a workspace's sandbox
+ * unifies with the agent's instead of the agent spinning a separate one.
+ */
+function harnessSandboxToAdopt(
+	harness: Doc<"harnesses"> | null,
+): Id<"sandboxes"> | undefined {
+	if (!harness) return undefined;
+	const isAgentSandbox = Boolean(harness.agent) || harness.sandboxEnabled;
+	return isAgentSandbox && harness.sandboxId ? harness.sandboxId : undefined;
 }
 
 export const list = query({
@@ -197,12 +213,16 @@ export const create = mutation({
 		);
 		const order = Number.isFinite(minOrder) ? minOrder - 1 : undefined;
 
+		// Respect an explicit sandbox; otherwise an ACP/sandbox harness auto-adopts
+		// its own sandbox so the workspace and agent share one box.
+		const effectiveSandboxId = args.sandboxId ?? harnessSandboxToAdopt(harness);
+
 		const now = Date.now();
 		return await ctx.db.insert("workspaces", {
 			userId: identity.subject,
 			name: args.name?.trim() || harness?.name || "New workspace",
 			...(args.harnessId ? { harnessId: args.harnessId } : {}),
-			...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
+			...(effectiveSandboxId ? { sandboxId: effectiveSandboxId } : {}),
 			...(args.color ? { color: args.color } : {}),
 			...(order !== undefined ? { order } : {}),
 			createdAt: now,
@@ -238,6 +258,7 @@ export const update = mutation({
 			if (!name) throw new Error("Workspace name is required");
 			updates.name = name;
 		}
+		let assignedHarness: Doc<"harnesses"> | null = null;
 		if (args.harnessId !== undefined) {
 			if (args.harnessId === null) {
 				updates.harnessId = undefined;
@@ -247,6 +268,7 @@ export const update = mutation({
 					throw new Error("Harness not found");
 				}
 				updates.harnessId = args.harnessId;
+				assignedHarness = harness;
 			}
 		}
 		if (args.sandboxId !== undefined) {
@@ -259,6 +281,13 @@ export const update = mutation({
 				}
 				updates.sandboxId = args.sandboxId;
 			}
+		} else if (assignedHarness) {
+			// Assigning an ACP/sandbox harness (without an explicit sandbox) makes
+			// the workspace adopt that harness's sandbox, so the agent runs in the
+			// workspace's box rather than a separate one. A harness with no sandbox
+			// yet is linked lazily by the gateway on its first session.
+			const adopt = harnessSandboxToAdopt(assignedHarness);
+			if (adopt) updates.sandboxId = adopt;
 		}
 		if (args.color !== undefined) {
 			// Empty string clears the color field (patch with undefined deletes it).
@@ -276,6 +305,26 @@ export const touch = mutation({
 
 		await assertOwnedWorkspace(ctx, args.id, identity.subject);
 		await ctx.db.patch(args.id, { lastUsedAt: Date.now() });
+	},
+});
+
+/**
+ * Internal (deploy-key) query used by the ACP gateway to resolve a workspace's
+ * unified sandbox. Returns the linked sandbox's Daytona id + status, or null
+ * when the workspace has none — the gateway then creates and links one. The
+ * caller still re-checks ownership via getOwnerByDaytonaId before attaching.
+ */
+export const resolveSandboxInternal = internalQuery({
+	args: { workspaceId: v.id("workspaces") },
+	handler: async (ctx, args) => {
+		const workspace = await ctx.db.get(args.workspaceId);
+		if (!workspace?.sandboxId) return null;
+		const sandbox = await ctx.db.get(workspace.sandboxId);
+		if (!sandbox || sandbox.userId !== workspace.userId) return null;
+		return {
+			daytonaSandboxId: sandbox.daytonaSandboxId,
+			status: sandbox.status,
+		};
 	},
 });
 

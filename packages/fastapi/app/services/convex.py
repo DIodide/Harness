@@ -441,6 +441,40 @@ class SandboxRecordError(Exception):
         self.code = code
 
 
+async def resolve_workspace_sandbox(
+    http_client: httpx.AsyncClient,
+    workspace_id: str,
+) -> dict | None:
+    """The workspace's linked sandbox, as {daytonaSandboxId, status}, or None.
+
+    Lets the ACP gateway reuse a workspace's existing sandbox (attach the
+    agent to it) instead of spinning a separate one. None means "no sandbox
+    linked yet" — the gateway then creates one and links it back. Returns None
+    too when Convex is unconfigured/unreachable (degrade to a session sandbox).
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        return None
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/query",
+            headers={"Authorization": f"Convex {settings.convex_deploy_key}"},
+            json={
+                "path": "workspaces:resolveSandboxInternal",
+                "args": {"workspaceId": workspace_id},
+                "format": "json",
+            },
+            timeout=5.0,
+        )
+        resp.raise_for_status()
+        value = resp.json().get("value")
+        return value if isinstance(value, dict) else None
+    except Exception:
+        logger.exception(
+            "Failed to resolve workspace sandbox for '%s'", workspace_id
+        )
+        return None
+
+
 async def create_sandbox_record(
     http_client: httpx.AsyncClient,
     user_id: str,
@@ -450,8 +484,13 @@ async def create_sandbox_record(
     language: str,
     ephemeral: bool,
     resources: dict,
+    workspace_id: str | None = None,
 ) -> str | None:
     """Create a sandbox record in Convex and link it to the harness.
+
+    When `workspace_id` is given, the new sandbox is also linked as that
+    workspace's sandbox (unless one is already set) so the workspace and agent
+    share one box.
 
     Returns the Convex sandbox document ID. Returns None when Convex is not
     configured. Raises SandboxRecordError if the mutation fails (HTTP error)
@@ -473,6 +512,8 @@ async def create_sandbox_record(
     }
     if harness_id:
         args["harnessId"] = harness_id
+    if workspace_id:
+        args["workspaceId"] = workspace_id
 
     try:
         resp = await http_client.post(
@@ -513,6 +554,14 @@ async def create_sandbox_record(
         raise SandboxRecordError(message, code=code)
 
     sandbox_doc_id = result.get("value")
+    if sandbox_doc_id is None:
+        # createInternal returns null when it declined to create — the workspace
+        # already links a box (a lost create race). The caller reclaims its box.
+        logger.info(
+            "Convex skipped sandbox record for daytona_id '%s' (workspace "
+            "already links a sandbox)", daytona_sandbox_id,
+        )
+        return None
     logger.info(
         "Created sandbox record '%s' (daytona_id=%s) for harness '%s'",
         sandbox_doc_id, daytona_sandbox_id, harness_id,

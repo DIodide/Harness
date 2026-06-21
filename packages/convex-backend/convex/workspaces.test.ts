@@ -1,6 +1,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.*s");
@@ -11,6 +12,42 @@ function makeT() {
 	const asUser = (userId: string) =>
 		raw.withIdentity({ subject: userId, issuer: "test" });
 	return { raw, asUser };
+}
+
+type UserClient = ReturnType<ReturnType<typeof makeT>["asUser"]>;
+
+async function createHarness(
+	u: UserClient,
+	opts: { agent?: string; sandboxEnabled?: boolean } = {},
+): Promise<Id<"harnesses">> {
+	return await u.mutation(api.harnesses.create, {
+		name: "H",
+		model: "gpt-5.5",
+		status: "started",
+		mcpServers: [],
+		skills: [],
+		...(opts.agent ? { agent: opts.agent } : {}),
+		...(opts.sandboxEnabled !== undefined
+			? { sandboxEnabled: opts.sandboxEnabled }
+			: {}),
+	});
+}
+
+// Create a sandbox and link it to the harness (mirrors the real linking path,
+// which sets harness.sandboxId + daytonaSandboxId).
+async function createSandboxFor(
+	u: UserClient,
+	harnessId: Id<"harnesses">,
+	daytonaSandboxId = "dt-1",
+): Promise<Id<"sandboxes">> {
+	return await u.mutation(api.sandboxes.create, {
+		harnessId,
+		daytonaSandboxId,
+		name: "box",
+		status: "running",
+		ephemeral: false,
+		resources: { cpu: 2, memoryGB: 4, diskGB: 10 },
+	});
 }
 
 describe("workspaces.list", () => {
@@ -332,5 +369,116 @@ describe("workspaces.reorder", () => {
 		expect(
 			(await b.query(api.workspaces.get, { id: theirs }))?.order,
 		).toBeUndefined();
+	});
+});
+
+describe("workspace ⇄ agent sandbox unification", () => {
+	it("create auto-adopts an ACP harness's sandbox", async () => {
+		const a = makeT().asUser("user-a");
+		const harnessId = await createHarness(a, { agent: "claude-code" });
+		const sandboxId = await createSandboxFor(a, harnessId);
+		const workspaceId = await a.mutation(api.workspaces.create, {
+			name: "w",
+			harnessId,
+		});
+		const ws = await a.query(api.workspaces.get, { id: workspaceId });
+		expect(ws?.sandboxId).toBe(sandboxId);
+	});
+
+	it("create respects an explicit sandbox over the harness's", async () => {
+		const a = makeT().asUser("user-a");
+		const harnessId = await createHarness(a, { agent: "claude-code" });
+		await createSandboxFor(a, harnessId, "dt-harness");
+		// A second, standalone sandbox the user explicitly picks.
+		const explicit = await a.mutation(api.sandboxes.create, {
+			daytonaSandboxId: "dt-explicit",
+			name: "explicit",
+			status: "running",
+			ephemeral: false,
+			resources: { cpu: 2, memoryGB: 4, diskGB: 10 },
+		});
+		const workspaceId = await a.mutation(api.workspaces.create, {
+			name: "w",
+			harnessId,
+			sandboxId: explicit,
+		});
+		const ws = await a.query(api.workspaces.get, { id: workspaceId });
+		expect(ws?.sandboxId).toBe(explicit);
+	});
+
+	it("create leaves sandbox empty for an ACP harness with none yet", async () => {
+		const a = makeT().asUser("user-a");
+		const harnessId = await createHarness(a, { agent: "claude-code" });
+		const workspaceId = await a.mutation(api.workspaces.create, {
+			name: "w",
+			harnessId,
+		});
+		const ws = await a.query(api.workspaces.get, { id: workspaceId });
+		expect(ws?.sandboxId).toBeUndefined();
+	});
+
+	it("create does NOT auto-adopt for a non-agent harness", async () => {
+		const a = makeT().asUser("user-a");
+		const harnessId = await createHarness(a); // no agent, no sandboxEnabled
+		await createSandboxFor(a, harnessId);
+		const workspaceId = await a.mutation(api.workspaces.create, {
+			name: "w",
+			harnessId,
+		});
+		const ws = await a.query(api.workspaces.get, { id: workspaceId });
+		expect(ws?.sandboxId).toBeUndefined();
+	});
+
+	it("update auto-links the harness's sandbox when assigning it", async () => {
+		const a = makeT().asUser("user-a");
+		const harnessId = await createHarness(a, { agent: "codex" });
+		const sandboxId = await createSandboxFor(a, harnessId);
+		const workspaceId = await a.mutation(api.workspaces.create, { name: "w" });
+		await a.mutation(api.workspaces.update, { id: workspaceId, harnessId });
+		const ws = await a.query(api.workspaces.get, { id: workspaceId });
+		expect(ws?.sandboxId).toBe(sandboxId);
+	});
+
+	it("update with an explicit sandbox wins over auto-link", async () => {
+		const a = makeT().asUser("user-a");
+		const harnessId = await createHarness(a, { agent: "codex" });
+		await createSandboxFor(a, harnessId, "dt-harness");
+		const explicit = await a.mutation(api.sandboxes.create, {
+			daytonaSandboxId: "dt-explicit",
+			name: "explicit",
+			status: "running",
+			ephemeral: false,
+			resources: { cpu: 2, memoryGB: 4, diskGB: 10 },
+		});
+		const workspaceId = await a.mutation(api.workspaces.create, { name: "w" });
+		await a.mutation(api.workspaces.update, {
+			id: workspaceId,
+			harnessId,
+			sandboxId: explicit,
+		});
+		const ws = await a.query(api.workspaces.get, { id: workspaceId });
+		expect(ws?.sandboxId).toBe(explicit);
+	});
+
+	it("resolveSandboxInternal returns the linked sandbox or null", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("user-a");
+		const harnessId = await createHarness(a, { agent: "claude-code" });
+		await createSandboxFor(a, harnessId, "dt-xyz");
+		const linked = await a.mutation(api.workspaces.create, {
+			name: "w",
+			harnessId,
+		});
+		const empty = await a.mutation(api.workspaces.create, { name: "empty" });
+
+		const r = await raw.query(internal.workspaces.resolveSandboxInternal, {
+			workspaceId: linked,
+		});
+		expect(r).toMatchObject({ daytonaSandboxId: "dt-xyz", status: "running" });
+		expect(
+			await raw.query(internal.workspaces.resolveSandboxInternal, {
+				workspaceId: empty,
+			}),
+		).toBeNull();
 	});
 });
