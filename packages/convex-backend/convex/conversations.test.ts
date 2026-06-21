@@ -121,6 +121,31 @@ describe("conversations.list", () => {
 		expect(rows[0].title).toBe("old-pinned");
 		expect(rows.some((c) => c.title === "old-pinned")).toBe(true);
 	});
+
+	it("doesn't let edit-fork siblings crowd visible chats out of the window", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("u-a");
+		const h = await a.mutation(api.harnesses.create, baseHarness());
+		const real = await a.mutation(api.conversations.create, {
+			title: "real-chat",
+			harnessId: h,
+		});
+		// Bury it under 120 edit-fork siblings (fresh lastMessageAt, NOT
+		// user-visible). They must be filtered during the scan, not after take().
+		await raw.run(async (ctx) => {
+			for (let i = 0; i < 120; i++) {
+				await ctx.db.insert("conversations", {
+					title: `edit-${i}`,
+					userId: "u-a",
+					lastMessageAt: Date.now() + 1000 + i,
+					editParentConversationId: real,
+				});
+			}
+		});
+		const rows = await a.query(api.conversations.list, {});
+		expect(rows.some((c) => c.title === "real-chat")).toBe(true);
+		expect(rows.some((c) => c.title.startsWith("edit-"))).toBe(false);
+	});
 });
 
 describe("conversations.create", () => {

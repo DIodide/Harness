@@ -86,6 +86,10 @@ export const list = query({
 					q.eq("workspaceId", args.workspaceId),
 				)
 				.order("desc")
+				// Exclude edit-fork siblings DURING the scan so the cap is spent on
+				// user-visible chats (edit-forks carry a fresh lastMessageAt and
+				// would otherwise crowd the window).
+				.filter((q) => q.eq(q.field("editParentConversationId"), undefined))
 				.take(LIST_CAP);
 			const pinned = await ctx.db
 				.query("conversations")
@@ -105,6 +109,10 @@ export const list = query({
 				q.eq("userId", identity.subject),
 			)
 			.order("desc")
+			// Exclude edit-fork siblings DURING the scan so the cap is spent on
+			// user-visible chats (edit-forks carry a fresh lastMessageAt and would
+			// otherwise crowd the window).
+			.filter((q) => q.eq(q.field("editParentConversationId"), undefined))
 			.take(LIST_CAP);
 		const pinned = await ctx.db
 			.query("conversations")
