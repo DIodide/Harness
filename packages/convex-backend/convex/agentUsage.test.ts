@@ -115,6 +115,78 @@ describe("agentUsage.getMyAgentUsage", () => {
 		expect(rows[0].totalCostUsd).toBeCloseTo(0.01);
 	});
 
+	it("an authoritative row upgrades a thin one for the same turnKey (no double-count)", async () => {
+		const { raw, asUser } = makeT();
+		const credId = await seedCredential(raw, "u-a", "work");
+		const convoId = await seedConversation(raw, "u-a");
+		// Thin usage_update row lands first (cache-excluded, low cost).
+		await raw.mutation(
+			internal.agentUsage.record,
+			turn({
+				agentCredentialId: credId,
+				conversationId: convoId,
+				turnKey: "s1:1",
+				usedTokens: 458,
+				costUsd: 0.01,
+			}),
+		);
+		// The authoritative result message upgrades it in place.
+		await raw.mutation(
+			internal.agentUsage.record,
+			turn({
+				agentCredentialId: credId,
+				conversationId: convoId,
+				turnKey: "s1:1",
+				usedTokens: 69000,
+				costUsd: 61.03,
+				inputTokens: 180,
+				outputTokens: 278,
+				cacheReadTokens: 66600,
+				cacheCreationTokens: 2300,
+				authoritative: true,
+			}),
+		);
+		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
+		expect(rows[0].turns).toBe(1); // still one turn — patched, not appended
+		expect(rows[0].totalCostUsd).toBeCloseTo(61.03); // authoritative cost wins
+		expect(rows[0].totalTokens).toBe(69000);
+		expect(rows[0].inputTokens).toBe(180);
+		expect(rows[0].cacheReadTokens).toBe(66600);
+		expect(rows[0].cacheCreationTokens).toBe(2300);
+	});
+
+	it("a thin row does NOT overwrite an authoritative one for the same turnKey", async () => {
+		const { raw, asUser } = makeT();
+		const credId = await seedCredential(raw, "u-a", "work");
+		const convoId = await seedConversation(raw, "u-a");
+		// Authoritative lands first (e.g. result message before the usage_update).
+		await raw.mutation(
+			internal.agentUsage.record,
+			turn({
+				agentCredentialId: credId,
+				conversationId: convoId,
+				turnKey: "s1:1",
+				costUsd: 61.03,
+				cacheReadTokens: 66600,
+				authoritative: true,
+			}),
+		);
+		// A later thin row for the same turn must be a no-op.
+		await raw.mutation(
+			internal.agentUsage.record,
+			turn({
+				agentCredentialId: credId,
+				conversationId: convoId,
+				turnKey: "s1:1",
+				costUsd: 0.01,
+			}),
+		);
+		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
+		expect(rows[0].turns).toBe(1);
+		expect(rows[0].totalCostUsd).toBeCloseTo(61.03);
+		expect(rows[0].cacheReadTokens).toBe(66600);
+	});
+
 	it("separates usage per credential and excludes other users", async () => {
 		const { raw, asUser } = makeT();
 		const work = await seedCredential(raw, "u-a", "work");

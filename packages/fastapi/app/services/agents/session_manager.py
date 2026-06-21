@@ -226,6 +226,9 @@ class AgentSession:
     # we persist per-turn DELTAs. Tracks the last cumulative cost seen; reset to
     # 0 whenever a fresh ACP session opens (the SDK cost restarts there).
     last_cost_usd: float = 0.0
+    # Latest Anthropic per-account rate-limit snapshot seen on a usage_update
+    # (_meta._claude/rateLimit); carried onto the authoritative result row.
+    last_rate_limit: object | None = None
     # Editor-grant collaborators authorized on this session (the session always
     # runs under the OWNER's user_id; collaborators are authorized separately).
     # Maps a collaborator's Clerk subject → the share token they joined with,
@@ -645,6 +648,11 @@ SDK_TASK_MESSAGE_FILTERS = [
     {"type": "system", "subtype": "compact_boundary"},
     {"type": "compact_boundary"},
     {"type": "user"},
+    # The SDK result message (terminal message of a turn) carries the
+    # authoritative total_cost_usd + full token usage (incl. cache), which the
+    # thin ACP usage_update lacks. We record agent usage from it for claude-code.
+    {"type": "result"},
+    {"type": "system", "subtype": "result"},
 ]
 
 _TASK_PHASES = {"task_started", "task_progress", "task_updated", "task_notification"}
@@ -925,6 +933,66 @@ class ParkedRuntime:
     # not adopt this runtime — its env would be stale.
     workspace_env_version: str = ""
     parked_at: float = field(default_factory=time.monotonic)
+
+
+def _result_token_categories(
+    usage: object, model_usage: object
+) -> dict[str, int]:
+    """Cumulative token counts by category from an SDK result message.
+
+    Prefers the top-level `usage` (snake_case, Messages-API shape); falls back to
+    summing the per-model `modelUsage` block (camelCase). Defensive: any missing
+    field reads as 0, so an unexpected shape degrades to zeros rather than error.
+    """
+    if isinstance(usage, dict):
+        return {
+            "input": int(usage.get("input_tokens") or 0),
+            "output": int(usage.get("output_tokens") or 0),
+            "cache_read": int(usage.get("cache_read_input_tokens") or 0),
+            "cache_creation": int(usage.get("cache_creation_input_tokens") or 0),
+        }
+    out = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
+    if isinstance(model_usage, dict):
+        for m in model_usage.values():
+            if not isinstance(m, dict):
+                continue
+            out["input"] += int(m.get("inputTokens") or 0)
+            out["output"] += int(m.get("outputTokens") or 0)
+            out["cache_read"] += int(m.get("cacheReadInputTokens") or 0)
+            out["cache_creation"] += int(m.get("cacheCreationInputTokens") or 0)
+    return out
+
+
+def _result_primary_model(model_usage: object) -> str | None:
+    """The model that produced the most output tokens in this result."""
+    if not isinstance(model_usage, dict):
+        return None
+    best: str | None = None
+    best_out = -1
+    for name, m in model_usage.items():
+        if not isinstance(m, dict):
+            continue
+        out = int(m.get("outputTokens") or 0)
+        if out > best_out:
+            best_out = out
+            best = name if isinstance(name, str) else None
+    return best
+
+
+def _session_model(session: "AgentSession") -> str | None:
+    """The model currently selected on the session's ACP config options."""
+    for opt in session.config_options:
+        if isinstance(opt, dict) and opt.get("id") == "model":
+            value = opt.get("currentValue")
+            return value if isinstance(value, str) else None
+    return None
+
+
+def _is_sdk_result_message(message: dict) -> bool:
+    """True for the SDK result message in either shape the adapter may use."""
+    if message.get("type") == "result":
+        return True
+    return message.get("type") == "system" and message.get("subtype") == "result"
 
 
 class AgentSessionManager:
@@ -1604,7 +1672,9 @@ class AgentSessionManager:
             meta=session_meta,
         )
         session.acp_session_id = result["sessionId"]
-        # Fresh ACP session → the SDK's cumulative cost restarts at ~0.
+        # Fresh ACP session → the thin usage_update's cumulative cost restarts at
+        # ~0, so reset its running baseline. (Result-message usage is per-turn,
+        # so it keeps no cross-turn baseline.)
         session.last_cost_usd = 0.0
         session.config_options = result.get("configOptions") or []
         # Replay notifications that raced the session/new response: Claude
@@ -1829,9 +1899,18 @@ class AgentSessionManager:
             session.available_commands = update.get("availableCommands") or []
         event = normalize_session_update(update)
         if event is not None:
+            # Capture the latest Anthropic rate-limit snapshot off ANY usage
+            # update (even one without cost), so the authoritative result-message
+            # row can carry the freshest quota state.
+            if event["event"] == "agent_usage":
+                rl = (update.get("_meta") or {}).get("_claude/rateLimit")
+                if rl is not None:
+                    session.last_rate_limit = rl
             # Persist per-credential agent usage on the terminal usage_update
-            # (the only one carrying cost). Informational only — never gates a
-            # turn — and fail-soft, so it can't disturb streaming.
+            # (the only one carrying cost). Thin: no cache tokens, cache-excluded
+            # cost — for claude-code the SDK result message upgrades this row in
+            # place (see _record_result_usage). Informational only — never gates
+            # a turn — and fail-soft, so it can't disturb streaming.
             if (
                 event["event"] == "agent_usage"
                 and event["data"].get("cost") is not None
@@ -1869,12 +1948,7 @@ class AgentSessionManager:
         cred_id = session.harness.agent_credential_id
         if not cred_id:
             return
-        model: str | None = None
-        for opt in session.config_options:
-            if isinstance(opt, dict) and opt.get("id") == "model":
-                value = opt.get("currentValue")
-                model = value if isinstance(value, str) else None
-                break
+        model = _session_model(session)
         # Authoritative-ish Anthropic per-account quota snapshot, if present.
         rate_limit = (update.get("_meta") or {}).get("_claude/rateLimit")
         from app.services.usage import record_agent_usage
@@ -1893,6 +1967,70 @@ class AgentSessionManager:
             currency=data.get("currency") or "USD",
             turn_key=f"{session.acp_session_id}:{session.turn_index}",
             rate_limit=rate_limit,
+        )
+
+    @staticmethod
+    def _result_usage_payload(
+        session: AgentSession, message: dict
+    ) -> dict | None:
+        """Extract THIS turn's authoritative usage from an SDK `result` message.
+
+        The result message fires once per ACP prompt turn — each turn is its own
+        SDK `query()` call — so its `total_cost_usd` and token usage are PER-TURN
+        totals (cumulative across the steps WITHIN the turn, not across turns).
+        We therefore record them directly; no cross-turn deltas. Returns None
+        when the message carries no real signal (cost ~0 AND zero tokens, e.g. an
+        error/aborted turn), so a hollow result can't clobber the thin
+        usage_update row already written for this turnKey.
+        """
+        usage = message.get("usage")
+        model_usage = message.get("modelUsage")
+        tokens = _result_token_categories(usage, model_usage)
+        raw_cost = message.get("total_cost_usd")
+        cost = max(0.0, float(raw_cost)) if isinstance(raw_cost, (int, float)) else 0.0
+        if cost <= 0.0 and sum(tokens.values()) == 0:
+            return None
+        return {
+            "model": _result_primary_model(model_usage) or _session_model(session),
+            "cost": cost,
+            "tokens": tokens,
+            "rate_limit": session.last_rate_limit,
+            "turn_key": f"{session.acp_session_id}:{session.turn_index}",
+        }
+
+    async def _record_result_usage(
+        self, session: AgentSession, payload: dict
+    ) -> None:
+        """Persist the precomputed authoritative result-message usage to Convex
+        (per-credential, fail-soft). Tagged `authoritative`, it upgrades the thin
+        usage_update row written for the same turnKey. Only claude-code emits
+        result messages.
+        """
+        cred_id = session.harness.agent_credential_id
+        if not cred_id:
+            return
+        tokens = payload["tokens"]
+        from app.services.usage import record_agent_usage
+
+        await record_agent_usage(
+            self._http_client(),
+            user_id=session.user_id,
+            agent_credential_id=cred_id,
+            agent=session.agent_id,
+            conversation_id=session.conversation_id,
+            acp_session_id=session.acp_session_id,
+            model=payload["model"],
+            used_tokens=sum(tokens.values()),
+            context_size=None,
+            cost=payload["cost"],
+            currency="USD",
+            turn_key=payload["turn_key"],
+            rate_limit=payload["rate_limit"],
+            input_tokens=tokens["input"],
+            output_tokens=tokens["output"],
+            cache_read_tokens=tokens["cache_read"],
+            cache_creation_tokens=tokens["cache_creation"],
+            authoritative=True,
         )
 
     async def _handle_sdk_compaction(self, session: AgentSession, message: dict) -> None:
@@ -1996,6 +2134,20 @@ class AgentSessionManager:
                     for event in normalize_sdk_task_message(raw):
                         await session.event_queue.put(event)
                     await self._handle_sdk_compaction(session, raw)
+                    # Authoritative usage (real cost + cache tokens) rides the
+                    # result message; record it (fail-soft) when a credential is
+                    # linked. Upgrades the thin usage_update row for this turn.
+                    if (
+                        _is_sdk_result_message(raw)
+                        and session.harness.agent_credential_id
+                    ):
+                        payload = self._result_usage_payload(session, raw)
+                        if payload is not None:
+                            task = asyncio.create_task(
+                                self._record_result_usage(session, payload)
+                            )
+                            self._usage_tasks.add(task)
+                            task.add_done_callback(self._usage_tasks.discard)
                 return
             if method != "session/update":
                 return

@@ -491,11 +491,23 @@ export default defineSchema({
 		conversationId: v.id("conversations"),
 		acpSessionId: v.optional(v.string()),
 		model: v.optional(v.string()),
-		usedTokens: v.number(), // usage_update.used (this turn's token total)
+		usedTokens: v.number(), // total tokens this turn (input+output, +cache when authoritative)
 		contextSize: v.optional(v.number()), // usage_update.size (context window)
+		// Per-category token deltas, present only on authoritative rows sourced
+		// from the SDK result message (claude-code). The thin usage_update path
+		// leaves these unset. cache-read tokens dominate raw counts but are cheap.
+		inputTokens: v.optional(v.number()),
+		outputTokens: v.optional(v.number()),
+		cacheReadTokens: v.optional(v.number()),
+		cacheCreationTokens: v.optional(v.number()),
 		costUsd: v.number(),
 		currency: v.string(),
 		isEstimate: v.boolean(), // SDK client-side estimate, not a bill
+		// True when sourced from the SDK result message's total_cost_usd + full
+		// token usage (authoritative). False/absent = the thin ACP usage_update
+		// (no cache tokens, cache-excluded cost). An authoritative row may replace
+		// a non-authoritative one for the same turnKey.
+		authoritative: v.optional(v.boolean()),
 		// Latest Anthropic per-account rate-limit snapshot (_meta._claude/rateLimit),
 		// authoritative-ish quota state; shape is upstream-defined so kept opaque.
 		rateLimit: v.optional(v.any()),
