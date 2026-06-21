@@ -2,7 +2,7 @@
 
 # Harness
 
-*Turn any coding agent into a chat — Claude Code, Codex, or Cursor, each in its own cloud sandbox, one polished interface.*
+*Share a chat with your AI coding agent like a Google Doc — viewers watch it think live, editors drive it on your keys.*
 
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](./LICENSE)
 [![Build](https://img.shields.io/badge/CI-pytest%20%2B%20vitest-success.svg)](.github/workflows/test.yml)
@@ -17,52 +17,51 @@
 ---
 
 > **Bring your own agent. Bring your own keys. Keep your secrets.**
-> Harness drops Claude Code, Codex CLI, and Cursor into isolated cloud sandboxes, hands them your MCP tools without ever leaking your tokens, and wraps the whole thing in one chat you can fork, share, and rewind.
 
-Most agent UIs lock you into one model or one CLI. Harness is the opposite: it's a thin, fast control plane over **whatever agent you want to drive** — plus a built-in 10-model chat for when you don't want an agent at all. Your model bill stays on your own account, your credentials are encrypted write-only, and every sensitive command surfaces an approval card before it runs.
+Harness is a thin, fast control plane over **whatever coding agent you want to drive** — Claude Code, Codex CLI, or Cursor, each in its own cloud sandbox — plus a built-in 10-model chat for when you don't want an agent at all. Your model bill stays on your account, your credentials are encrypted write-only, and every sensitive command surfaces an approval card before it runs.
 
-<details>
-<summary><b>📸 Product preview</b></summary>
+## Share a chat. They drive your agent. You watch live.
 
-<p align="center"><img src="./harness-landing-full-page.png" alt="Harness — full product tour" width="900" /></p>
+Share an agent session the way you share a Google Doc — one link, viewer or editor.
 
-</details>
+- **Viewers** (even logged-out) watch the agent think, call tools, and write code **live as it streams**, fanned out over Redis.
+- **Editors** do something Docs can't: they type a new prompt straight into your conversation and the agent runs it on **your** harness, **your** credentials, **your** budget. The editor's browser sends only the message and the share token — your MCP secrets, sandbox, and real cost never leave the server.
+
+Collaborative agent sessions, without ever handing over the keys.
 
 ---
 
 ## Features
 
-**🔌 Every coding agent, one chat.** Three live ACP agents ship with concrete launch specs — Codex CLI (`zed-industries/codex-acp` v0.16.0), Claude Code (`@agentclientprotocol/claude-agent-acp` v0.44.0), and Cursor (`cursor-agent --force acp`) — each spawned as a child process inside its own Daytona sandbox. *(`packages/fastapi/app/services/agents/registry.py:19-107`)*
+**Every coding agent, one chat.** Drive Claude Code, Codex CLI, or Cursor — each spawned in its own isolated Daytona sandbox — or use the built-in OpenRouter chat across 10 models from OpenAI, Anthropic, and Google. No CLI install required to start.
 
-**💬 Built-in multi-model chat, no agent required.** A default loop streams through OpenRouter across 10 model options from OpenAI, Anthropic, and Google (including "thinking" variants) — start instantly, no CLI install. *(`packages/fastapi/app/config.py:91-124`, `apps/web/src/lib/models.ts:11-53`)*
+**Harnesses: swap your whole toolset mid-chat.** A *harness* is a reusable profile of model + MCP servers + skills + system prompt + agent. Switch from a research stack to a GitHub-ops stack in one click while the conversation keeps going.
 
-**🔁 Rapid MCP context switching.** A *harness* is a reusable profile of model + MCP servers + skills + system prompt + agent. Swap your agent's entire toolset mid-conversation — research stack to GitHub-ops stack in one click — while the chat keeps going. *(`packages/convex-backend/convex/schema.ts:5-65`, `packages/fastapi/app/routes/agents.py`)*
+**One-click MCP with hands-off OAuth.** Connect GitHub, Notion, and Linear over OAuth 2.1 (PKCE, discovery, dynamic client registration, auto-refresh), plus AWS Knowledge, Exa, Context7, and Princeton TigerApps.
 
-**🛡️ MCP catalog with hands-off OAuth.** One-click connect GitHub, Notion, and Linear (OAuth 2.1 — PKCE S256, RFC 9728/8414 discovery, RFC 7591 dynamic client registration as fallback, auto-refresh), plus AWS Knowledge, Exa, Context7, and Princeton's TigerApps. *(`apps/web/src/lib/mcp.ts:30-186`, `packages/fastapi/app/services/mcp_oauth.py`)*
+**Secrets never enter the sandbox.** Sandbox egress is locked down; an in-box shim relays every MCP call back to the backend, which answers it server-side with your tokens. Your auth never touches the agent's box.
 
-**🔒 The MCP relay keeps tokens out of the sandbox.** Daytona sandboxes have restricted egress, so an in-sandbox shim emits each agent MCP call as a `relay_request` SSE event and the FastAPI backend answers it server-side — your auth tokens never enter the box. *(`packages/fastapi/app/services/agents/acp_shim.mjs:13-21`, `acp_client.py`)*
+**Real Linux boxes.** Live xterm terminal, file explorer, and a git panel (status/commit/diff/log/branches) on right-sized tiers — basic 1cpu/1GB, standard 2cpu/4GB, performance 4cpu/8GB — persistent or ephemeral.
 
-**🖥️ Real Linux boxes: terminal, files, and git.** Resource tiers map to real specs — basic 1cpu/1GB/3GB, standard 2/4/8, performance 4/8/10 — each with a live xterm terminal over WebSocket, a file explorer, and a git panel (status/add/commit/diff/log/branches), persistent or ephemeral. *(`packages/fastapi/app/services/daytona_service.py:83-94`, `packages/fastapi/app/routes/sandbox.py`)*
+**Approvals-first control.** Permission requests, plans, and questions render as inline cards. Nothing sensitive runs unseen.
 
-**✅ Approvals-first agent control.** The prompt stream emits `permission_request`, `plan`, and `question` events rendered as inline cards, each with a dedicated endpoint to answer — nothing sensitive runs unseen. *(emitted in `packages/fastapi/app/services/agents/session_manager.py:615,2313`; answered at `app/routes/agents.py:695-729`; `apps/web/src/components/agent-permission-card.tsx`)*
+**Live collaboration & sharing.** Share read-only or invite editors. Viewers follow the agent token-by-token over Redis; editor turns always run on the **owner's** harness, credentials, and billing.
 
-**📚 Skills from skills.sh.** Bundle battle-tested playbooks — code review, debugging, web search — onto a harness; your agent imports them on connect via a `get_skill_content` tool and a generated skills system block. *(`packages/fastapi/app/routes/chat.py:68-264`, `packages/convex-backend/convex/skills.ts`)*
+**Rewind, fork, and rewind-and-fork.** Branch any conversation, roll back to any message, or both. Your history is a tree, not a dead end. Anyone can fork a shared chat into their own account.
 
-**🗂️ Workspaces.** Organize chats into color-tinted workspaces, each with its own harness, sandbox, ordering, and scoped secrets — with exactly one undeletable default. *(`packages/convex-backend/convex/schema.ts:114-132`, `convex/workspaces.ts`)*
+**Skills from skills.sh.** Bundle battle-tested playbooks — code review, debugging, web search — onto a harness; your agent imports them on connect.
 
-**👥 Chat sharing with roles + live follow.** Share read-only or invite editors who can send messages into the chat, with public links backed by a 32-byte client-generated token. Passive viewers watch the agent think in real time via per-conversation Redis Streams; editors always run under the **owner's** harness, credentials, and billing. *(`packages/convex-backend/convex/shares.ts`, `packages/fastapi/app/services/stream_bus.py`)*
+**Workspaces.** Organize chats into color-tinted workspaces, each with its own harness, sandbox, and scoped secrets.
 
-**🌿 Rewind, fork, and rewind-and-fork.** Branch any conversation, roll back to any message, or do both — your history is a tree, not a dead end. Conversations track fork and edit parents with message-count anchors. *(`packages/convex-backend/convex/conversations.ts:304-528`, `apps/web/src/components/message-actions.tsx`)*
+**Context-compaction observability.** Claude Code `/compact` events are captured and persisted with pre/post token counts — then clone a fresh session seeded from the summary.
 
-**🧠 Context-compaction observability.** Claude Code `/compact` events (manual or auto) are captured from the ACP stream and persisted append-only with pre/post token counts — then you can clone a fresh session seeded from the summary. *(`packages/convex-backend/convex/schema.ts:177-192`, `convex/compactions.ts`)*
+**Background agents & subagent observability.** Subagents, workflows, and long-running commands group into live, collapsible task cards with running/failed/done state.
 
-**🔭 Background agents & subagent observability.** Subagents, workflows, and long-running commands group into live, collapsible task cards with running/failed/done state and an active-count badge. *(`apps/web/src/components/chat/background-agents-panel.tsx`)*
+**Bring-your-own credentials, encrypted.** Agent and per-workspace secrets are stored as AES-256-GCM ciphertext — Convex and the browser never see plaintext. Write-only, never echoed. Your usage bills to your own account.
 
-**🔐 Bring-your-own credentials, encrypted.** Agent and per-workspace secrets are stored as AES-256-GCM ciphertext (key held only in FastAPI) — Convex and the browser never see plaintext, and credentials are write-only/never echoed. Your agent usage bills to your own account. *(`packages/fastapi/app/services/secrets_crypto.py:22-47`, `packages/convex-backend/convex/schema.ts:271-312`)*
+**Two-layer usage limits.** An Arcjet token bucket handles per-minute rate limiting; Convex budgets gate runs on daily *and* weekly cost ceilings.
 
-**📊 Two-layer usage limits.** An Arcjet token bucket (refill 20/min, capacity 30, keyed on userId) handles per-minute rate limiting; Convex usage budgets gate runs on daily *and* weekly cost ceilings. *(`apps/web/src/lib/arcjet.ts:29-37`, `packages/convex-backend/convex/usage.ts:14-65`)*
-
-**⌘ Command palette, slash commands & an AI harness builder.** Drive everything from `Cmd/Ctrl-K`, fire MCP tools or agent built-ins (`/compact`, `/review`) with `/`, and let a streaming assistant recommend a model + MCPs + skills and emit a ready-to-save harness config. *(`apps/web/src/components/command-palette/command-palette.tsx`, `apps/web/src/components/slash-commands.tsx`, `packages/fastapi/app/routes/harness_suggest.py`)*
+**Command palette, slash commands & an AI harness builder.** Drive everything from `Cmd/Ctrl-K`, fire MCP tools or agent built-ins (`/compact`, `/review`) with `/`, and let a streaming assistant recommend a model + MCPs + skills and emit a ready-to-save harness config.
 
 ---
 
@@ -71,37 +70,45 @@ Most agent UIs lock you into one model or one CLI. Harness is the opposite: it's
 Harness is a three-tier monorepo: a **TanStack Start** frontend, a **Convex** realtime backend, and a **FastAPI** agent/stream gateway. The browser holds a live Convex WebSocket for data (chats, harnesses, workspaces, shares, usage) and an SSE stream to FastAPI for token-by-token model and agent output. Clerk issues the JWT that authenticates both.
 
 ```
-                                  ┌────────────────────────────────────────┐
-                                  │              Browser (SPA)              │
-                                  │   TanStack Start · React 19 · xterm.js  │
-                                  └──────┬──────────────────────────┬───────┘
-                      Convex WS (data)   │                          │  SSE (token/agent stream)
-                                         ▼                          ▼
-                         ┌───────────────────────┐      ┌───────────────────────────┐
-                         │   Convex backend      │      │     FastAPI gateway       │
-                         │  realtime DB · 19      │      │  /api/chat · /api/agents  │
-                         │  tables · Clerk JWT    │◄────►│  Clerk JWT · Redis follow │
-                         └───────────────────────┘      └─────┬───────────────┬─────┘
-                                                              │               │
-                                              OpenRouter      │               │  ACP over sandbox preview URL
-                                              (10 models)  ◄──┘               ▼
-                                                              ┌───────────────────────────────┐
-                                                              │      Daytona sandbox          │
-                                                              │  ┌─────────────────────────┐  │
-                                                  relay_resp  │  │  acp_shim.mjs (stdio↔   │  │
-                              ┌───────────────────◄───────────┼──┤  HTTP/SSE bridge)       │  │
-                              │  MCP w/ OAuth tokens          │  │      │                  │  │
-                         ┌────▼─────┐  relay_request          │  │      ▼ child process     │  │
-                         │   MCP    │────────────────────────►│  │  Claude Code / Codex /  │  │
-                         │ servers  │                         │  │  Cursor (ACP agent)     │  │
-                         └──────────┘                         │  └─────────────────────────┘  │
-                                                              └───────────────────────────────┘
+        ┌──────────────────────────────────────────────────────────┐
+        │                       Browser (SPA)                       │
+        │            TanStack Start · React 19 · xterm.js           │
+        └───────┬───────────────────────────────────────┬──────────┘
+   Convex WS    │                                        │   SSE (token / agent stream)
+   (data)       ▼                                        ▼
+   ┌────────────────────────┐              ┌──────────────────────────────┐
+   │     Convex backend     │   Clerk JWT  │       FastAPI gateway        │
+   │  realtime DB · 19      │◄────────────►│   /api/chat · /api/agents    │
+   │  tables · shareGrants  │              │   /api/chat/follow (read)    │
+   └────────────────────────┘              └──┬────────────┬──────────┬───┘
+                                              │            │          │
+                          OpenRouter ◄────────┘            │          │ ACP over
+                          (10 models)                      │          │ sandbox URL
+                                                           │          ▼
+                                      stream_bus.tee()     │  ┌─────────────────────────────┐
+                              (allowlist + sanitize,       │  │       Daytona sandbox       │
+                               1s breaker / fail-soft)     │  │  ┌───────────────────────┐  │
+                                          │ XADD           │  │  │ acp_shim.mjs (stdio↔  │  │
+                                          ▼                │  │  │ HTTP/SSE bridge)      │  │
+                  ┌──────────────────────────────────┐     │  │  │          │            │  │
+                  │  REDIS STREAM  (shared instance)  │     │  │  │          ▼ child proc │  │
+                  │  harness:stream:{conversationId}  │     │  │  │  Claude Code / Codex /│  │
+                  │  + harness:turn:{id} marker       │     │  │  │  Cursor (ACP agent)   │  │
+                  └──────────────────────────────────┘     │  │  └───────────┬───────────┘  │
+                       ▲     ▲     ▲  (blocking XREAD,      │  └──────────────┼─────────────┘
+                       │     │     │   own cursor each)     │      relay_request (MCP call)
+              GET /api/chat/follow (auth as shared read)    │                 ▼
+                       │     │     │                        │          ┌────────────┐
+                  Follower Follower Follower                └─────────►│ MCP servers│
+                  (other tab / sharee / late joiner)    relay_response │ (OAuth)    │
+                                                         w/ your tokens └────────────┘
 ```
 
-- **Convex realtime layer.** All durable state lives in Convex (19 tables: `messages`, `conversations`, `harnesses`, `workspaces`, `sandboxes`, `shareGrants`, `usageLedger`, and more — `packages/convex-backend/convex/schema.ts`), pushed to the browser over a WebSocket and authenticated with a Clerk-issued JWT.
+- **Convex realtime layer.** All durable state lives in Convex (19 tables: `messages`, `conversations`, `harnesses`, `workspaces`, `sandboxes`, `shareGrants`, `usageLedger`, and more), pushed to the browser over a WebSocket and authenticated with a Clerk JWT.
 - **FastAPI gateway.** Streams the default OpenRouter chat loop and orchestrates ACP agent sessions. It brokers MCP OAuth server-side, fans display-only events out to followers via Redis Streams, and resolves editor-collaborator runs to the owner's harness/credentials/billing.
-- **ACP in Daytona.** Each agent runs as a child process inside an isolated Daytona sandbox. An in-sandbox `acp_shim.mjs` bridges the agent's stdio JSON-RPC to HTTP/SSE, which the FastAPI ACP client reaches over the sandbox's preview URL.
-- **MCP relay.** Because sandbox egress is restricted, the shim surfaces `/mcp/<n>` endpoints and emits each agent MCP call as a `relay_request`; FastAPI executes it with your OAuth tokens and returns the result via `relay-response` — so secrets never enter the sandbox.
+- **ACP in Daytona.** Each agent runs as a child process inside an isolated sandbox. An in-box `acp_shim.mjs` bridges the agent's stdio JSON-RPC to HTTP/SSE, reached by the FastAPI ACP client over the sandbox's preview URL.
+- **MCP relay.** Because sandbox egress is restricted, the shim emits each agent MCP call as a `relay_request`; FastAPI executes it with your OAuth tokens and returns a `relay-response` — so secrets never enter the box.
+- **Live follow (Redis).** Each turn streams SSE 1:1 to its initiator *and* tees every display event into a per-conversation Redis Stream. Passive viewers hit `GET /api/chat/follow` — authorized exactly like a shared read — which replays the current turn from its start, then block-tails for new tokens. An allowlist relays only the transcript a viewer can already see; owner-only signals (MCP URLs, sandbox id, per-turn cost) are stripped. Fan-out is pull-based, so N viewers — and producers on other workers — all read the same shared stream. **Redis is fail-soft:** unset, and turns simply stream to the initiator only.
 
 ---
 
@@ -173,7 +180,7 @@ Fill in `packages/fastapi/.env` (`OPENROUTER_API_KEY`, `CONVEX_URL`, `DAYTONA_AP
 VITE_FASTAPI_URL=http://localhost:8000
 ```
 
-> A Redis URL is optional locally — live multi-viewer "follow" fan-out is fail-soft and no-ops when Redis isn't configured. AES-256-GCM credential encryption requires a 32-byte `AGENT_CREDENTIALS_KEY` on the FastAPI service — it isn't in `.env.example`, so add it yourself.
+> A Redis URL is optional locally — live multi-viewer "follow" fan-out is fail-soft and no-ops when Redis isn't configured. Credential encryption requires `AGENT_CREDENTIALS_KEY` on the FastAPI service (any non-empty secret; FastAPI SHA-256-derives the 32-byte AES-256-GCM key from it) — it isn't in `.env.example`, so add it yourself.
 
 ### 5. Run everything
 
