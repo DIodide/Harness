@@ -347,7 +347,7 @@ export function UsageBadge({ onClick }: { onClick?: () => void }) {
 			type="button"
 			onClick={onClick}
 			aria-haspopup="dialog"
-			aria-label={`Usage: ${Math.round(pct)}% of budget used — open usage details`}
+			aria-label={`Usage: ${Math.round(pct)}% used — open usage details`}
 			className={cn(
 				"flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors hover:bg-white/5",
 				color,
