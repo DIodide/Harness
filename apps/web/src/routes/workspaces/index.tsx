@@ -1586,7 +1586,10 @@ function WorkspaceSidebar({
 
 	return (
 		<div className="flex h-full w-[280px] flex-col bg-background">
-			<div className="flex items-center justify-between px-3 py-3">
+			{/* Shares min-h-[51px] + border-b with the main ChatHeader so the two
+			    header bottom-borders meet the sidebar's vertical divider at the same
+			    y (a seamless cross-junction). */}
+			<div className="flex min-h-[51px] items-center justify-between border-b border-border px-3 py-3">
 				<Link to="/" className="flex items-center gap-2">
 					<HarnessMark size={18} className="text-foreground" />
 					<span className="text-sm font-semibold tracking-tight text-foreground">
@@ -1612,8 +1615,6 @@ function WorkspaceSidebar({
 					</Tooltip>
 				</div>
 			</div>
-
-			<Separator />
 
 			<div className="shrink-0 px-2 py-2">
 				<div className="mb-1 flex items-center justify-between px-2">
@@ -2184,7 +2185,7 @@ function ChatHeader({
 	const workspaceColorHex = getWorkspaceColorHex(workspace?.color);
 
 	return (
-		<header className="flex items-center justify-between border-b border-border px-4 py-2.5">
+		<header className="flex min-h-[51px] items-center justify-between border-b border-border px-4 py-2.5">
 			<div className="flex items-center gap-2">
 				{!sidebarOpen && (
 					<Tooltip>
