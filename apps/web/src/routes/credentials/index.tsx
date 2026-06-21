@@ -1,8 +1,9 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeft, KeyRound, Plus, Trash2 } from "lucide-react";
+import { createFileRoute } from "@tanstack/react-router";
+import { KeyRound, Plus, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useState } from "react";
 import toast from "react-hot-toast";
+import { ManageHeader } from "../../components/manage/manage-tabs";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import {
@@ -99,27 +100,15 @@ function CredentialsPage() {
 
 	return (
 		<div className="flex h-full flex-col overflow-auto bg-background">
-			<header className="flex items-center justify-between border-b border-border px-6 py-4">
-				<div className="flex items-center gap-4">
-					<Button variant="ghost" size="icon-xs" asChild>
-						<Link to="/chat">
-							<ArrowLeft size={14} />
-						</Link>
+			<ManageHeader
+				count={credentials?.length ?? 0}
+				actions={
+					<Button size="sm" onClick={openNew}>
+						<Plus size={14} />
+						New Credential
 					</Button>
-					<div>
-						<h1 className="text-lg font-medium tracking-tight text-foreground">
-							Credentials
-						</h1>
-						<p className="text-xs text-muted-foreground">
-							{credentials?.length ?? 0} total
-						</p>
-					</div>
-				</div>
-				<Button size="sm" onClick={openNew}>
-					<Plus size={14} />
-					New Credential
-				</Button>
-			</header>
+				}
+			/>
 
 			<div className="flex-1 p-6">
 				{credentials && credentials.length === 0 ? (
@@ -431,10 +420,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
 function LoadingState() {
 	return (
 		<div className="flex h-full flex-col overflow-auto bg-background">
-			<header className="flex items-center justify-between border-b border-border px-6 py-4">
-				<Skeleton className="h-6 w-32" />
-				<Skeleton className="h-8 w-32" />
-			</header>
+			<ManageHeader actions={<Skeleton className="h-7 w-32" />} />
 			<div className="flex-1 p-6">
 				<div className="mx-auto max-w-3xl space-y-2">
 					{["a", "b", "c"].map((key) => (

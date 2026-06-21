@@ -5,7 +5,6 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
 	AlertCircle,
-	ArrowLeft,
 	Copy,
 	Cpu,
 	Edit,
@@ -30,6 +29,7 @@ import {
 import { credentialDisplayName } from "../../components/agent-loop-picker";
 import { HarnessCreationAssistant } from "../../components/harness-creation-assistant";
 import { HarnessMark } from "../../components/harness-mark";
+import { ManageHeader } from "../../components/manage/manage-tabs";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -130,39 +130,27 @@ function HarnessesPage() {
 
 	return (
 		<div className="flex h-full flex-col overflow-auto bg-background">
-			<header className="flex items-center justify-between border-b border-border px-6 py-4">
-				<div className="flex items-center gap-4">
-					<Button variant="ghost" size="icon-xs" asChild>
-						<Link to="/chat">
-							<ArrowLeft size={14} />
-						</Link>
-					</Button>
-					<div>
-						<h1 className="text-lg font-medium tracking-tight text-foreground">
-							Your Harnesses
-						</h1>
-						<p className="text-xs text-muted-foreground">
-							{harnesses?.length ?? 0} total
-						</p>
-					</div>
-				</div>
-				<div className="flex items-center gap-2">
-					<Button
-						size="sm"
-						variant="outline"
-						onClick={() => setCreationAssistantOpen(true)}
-					>
-						<Sparkles size={14} />
-						Create with AI
-					</Button>
-					<Button size="sm" asChild>
-						<Link to="/onboarding">
-							<Plus size={14} />
-							Create New
-						</Link>
-					</Button>
-				</div>
-			</header>
+			<ManageHeader
+				count={harnesses?.length ?? 0}
+				actions={
+					<>
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={() => setCreationAssistantOpen(true)}
+						>
+							<Sparkles size={14} />
+							Create with AI
+						</Button>
+						<Button size="sm" asChild>
+							<Link to="/onboarding">
+								<Plus size={14} />
+								Create New
+							</Link>
+						</Button>
+					</>
+				}
+			/>
 
 			<HarnessCreationAssistant
 				open={creationAssistantOpen}
@@ -575,10 +563,7 @@ function EmptyState() {
 function LoadingSkeleton() {
 	return (
 		<div className="flex h-full flex-col bg-background">
-			<header className="flex items-center justify-between border-b border-border px-6 py-4">
-				<Skeleton className="h-6 w-40" />
-				<Skeleton className="h-8 w-24" />
-			</header>
+			<ManageHeader actions={<Skeleton className="h-7 w-44" />} />
 			<div className="flex-1 p-6">
 				<div className="mx-auto max-w-4xl">
 					<Skeleton className="mb-4 h-4 w-20" />

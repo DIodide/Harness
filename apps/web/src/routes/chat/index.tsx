@@ -15,15 +15,12 @@ import {
 	Check,
 	ChevronDown,
 	Cpu,
-	KeyRound,
 	MessageSquare,
 	PanelLeftClose,
 	PanelLeftOpen,
 	Plus,
 	Search, // Icon for search
-	Settings,
 	Share2,
-	SlidersHorizontal,
 	X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -47,6 +44,7 @@ import { useChatPaletteCommands } from "../../components/command-palette/command
 import { HarnessAgentBadge } from "../../components/harness-agent-badge";
 import { HarnessMark } from "../../components/harness-mark";
 import { HeaderSkillsMenu } from "../../components/header-skills-menu";
+import { ManageNavFooter } from "../../components/manage/manage-nav-footer";
 import {
 	type HealthStatus,
 	McpServerStatus,
@@ -1317,50 +1315,7 @@ function ChatSidebar({
 				<UsageBadge onClick={() => setUsageOpen(true)} />
 			</div>
 			<Separator />
-			<div className="space-y-0.5 p-2">
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					asChild
-				>
-					<Link to="/sandboxes">
-						<Box size={12} />
-						Manage Sandboxes
-					</Link>
-				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					asChild
-				>
-					<Link to="/harnesses">
-						<SlidersHorizontal size={12} />
-						Manage Harnesses
-					</Link>
-				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					asChild
-				>
-					<Link to="/credentials">
-						<KeyRound size={12} />
-						Manage Credentials
-					</Link>
-				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					onClick={() => setSettingsOpen(true)}
-				>
-					<Settings size={12} />
-					Settings
-				</Button>
-			</div>
+			<ManageNavFooter onOpenSettings={() => setSettingsOpen(true)} />
 
 			<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 			<UsageDialog open={usageOpen} onOpenChange={setUsageOpen} />
