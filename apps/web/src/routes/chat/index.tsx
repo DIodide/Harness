@@ -1203,7 +1203,7 @@ function ChatSidebar({
 										)}
 									>
 										<MessageSquare size={12} className="shrink-0" />
-										<span className="truncate">
+										<span className="min-w-0 flex-1 truncate">
 											<HighlightText text={convo.title} query={searchQuery} />
 										</span>
 									</button>
