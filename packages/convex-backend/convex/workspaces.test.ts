@@ -260,3 +260,77 @@ describe("workspaces.ensureDefault", () => {
 		expect(ws?.isDefault).toBe(true);
 	});
 });
+
+describe("workspaces.reorder", () => {
+	it("requires authentication", async () => {
+		const { raw } = makeT();
+		await expect(
+			raw.mutation(api.workspaces.reorder, { orderedIds: [] }),
+		).rejects.toThrow(/Unauthenticated/);
+	});
+
+	it("stamps each owned workspace with its index and list reflects it", async () => {
+		const { asUser } = makeT();
+		const a = asUser("user-a");
+		const w1 = await a.mutation(api.workspaces.create, { name: "one" });
+		const w2 = await a.mutation(api.workspaces.create, { name: "two" });
+		const w3 = await a.mutation(api.workspaces.create, { name: "three" });
+		// Reorder to three, one, two.
+		await a.mutation(api.workspaces.reorder, { orderedIds: [w3, w1, w2] });
+		const rows = await a.query(api.workspaces.list, {});
+		expect(rows.map((r) => r._id)).toEqual([w3, w1, w2]);
+		expect(rows.map((r) => r.order)).toEqual([0, 1, 2]);
+	});
+
+	it("falls back to most-recently-used when order is unset", async () => {
+		const { asUser } = makeT();
+		const a = asUser("user-a");
+		await a.mutation(api.workspaces.create, { name: "older" });
+		await new Promise((r) => setTimeout(r, 2));
+		await a.mutation(api.workspaces.create, { name: "newer" });
+		const rows = await a.query(api.workspaces.list, {});
+		// No order set anywhere → most-recently-used first (unchanged behavior).
+		expect(rows.map((r) => r.name)).toEqual(["newer", "older"]);
+	});
+
+	it("appends owned workspaces omitted from the payload (full reconcile)", async () => {
+		const { asUser } = makeT();
+		const a = asUser("user-a");
+		const w1 = await a.mutation(api.workspaces.create, { name: "first" });
+		await a.mutation(api.workspaces.create, { name: "omitted" });
+		// Client sends only w1; the omitted one is reconciled to the end with a
+		// contiguous order (no stale/undefined outlier).
+		await a.mutation(api.workspaces.reorder, { orderedIds: [w1] });
+		const rows = await a.query(api.workspaces.list, {});
+		expect(rows.map((r) => r.name)).toEqual(["first", "omitted"]);
+		expect(rows.map((r) => r.order)).toEqual([0, 1]);
+	});
+
+	it("places a workspace created after reordering at the top", async () => {
+		const { asUser } = makeT();
+		const a = asUser("user-a");
+		const w1 = await a.mutation(api.workspaces.create, { name: "one" });
+		const w2 = await a.mutation(api.workspaces.create, { name: "two" });
+		await a.mutation(api.workspaces.reorder, { orderedIds: [w1, w2] });
+		// Now every existing workspace has a finite order; a fresh one must still
+		// surface at the top, not sink below the ordered ones.
+		const fresh = await a.mutation(api.workspaces.create, { name: "fresh" });
+		const rows = await a.query(api.workspaces.list, {});
+		expect(rows.map((r) => r.name)).toEqual(["fresh", "one", "two"]);
+		expect(rows[0]._id).toBe(fresh);
+	});
+
+	it("ignores ids the caller does not own (can't reorder others' workspaces)", async () => {
+		const { asUser } = makeT();
+		const a = asUser("user-a");
+		const b = asUser("user-b");
+		const mine = await a.mutation(api.workspaces.create, { name: "mine" });
+		const theirs = await b.mutation(api.workspaces.create, { name: "theirs" });
+		await a.mutation(api.workspaces.reorder, { orderedIds: [theirs, mine] });
+		// `theirs` is skipped, so `mine` gets index 0; theirs stays untouched.
+		expect((await a.query(api.workspaces.get, { id: mine }))?.order).toBe(0);
+		expect(
+			(await b.query(api.workspaces.get, { id: theirs }))?.order,
+		).toBeUndefined();
+	});
+});

@@ -20,11 +20,66 @@ export const list = query({
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) return [];
 
-		return await ctx.db
+		const all = await ctx.db
 			.query("workspaces")
-			.withIndex("by_user_last_used", (q) => q.eq("userId", identity.subject))
-			.order("desc")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
 			.collect();
+
+		// Manual order (ascending) takes precedence; workspaces never reordered
+		// (order undefined) fall back to most-recently-used, after the ordered ones.
+		return all.sort((a, b) => {
+			const ao = a.order ?? Number.POSITIVE_INFINITY;
+			const bo = b.order ?? Number.POSITIVE_INFINITY;
+			if (ao !== bo) return ao - bo;
+			return b.lastUsedAt - a.lastUsedAt;
+		});
+	},
+});
+
+/**
+ * Persist the user's manual workspace ordering. `orderedIds` is the sidebar
+ * order; ALL of the caller's owned workspaces are re-stamped with a contiguous
+ * 0..n-1 — the requested ids first, then any owned workspace the client omitted
+ * (appended in its current relative order). Ids that aren't the caller's are
+ * ignored, so a stale client can't reorder someone else's workspaces.
+ */
+export const reorder = mutation({
+	args: { orderedIds: v.array(v.id("workspaces")) },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+		// Defensive bound — a real account has a handful of workspaces.
+		if (args.orderedIds.length > 1000) {
+			throw new Error("Too many workspaces to reorder");
+		}
+
+		const owned = await ctx.db
+			.query("workspaces")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.collect();
+		const ownedById = new Map(owned.map((w) => [w._id, w]));
+
+		// The caller's requested order, restricted to workspaces they own.
+		const requested = args.orderedIds.filter((id) => ownedById.has(id));
+		const requestedSet = new Set(requested);
+		// Any owned workspace the client didn't include (e.g. one created
+		// concurrently in another tab) is appended after — keeping its current
+		// relative order — so the persisted order is always a clean contiguous
+		// 0..n-1 with no stale/colliding outliers.
+		const remaining = owned
+			.filter((w) => !requestedSet.has(w._id))
+			.sort(
+				(a, b) =>
+					(a.order ?? Number.POSITIVE_INFINITY) -
+						(b.order ?? Number.POSITIVE_INFINITY) ||
+					b.lastUsedAt - a.lastUsedAt,
+			)
+			.map((w) => w._id);
+
+		const finalOrder = [...requested, ...remaining];
+		for (let i = 0; i < finalOrder.length; i++) {
+			await ctx.db.patch(finalOrder[i], { order: i });
+		}
 	},
 });
 
@@ -128,6 +183,20 @@ export const create = mutation({
 			throw new Error("Sandbox not found");
 		}
 
+		// Place new workspaces at the TOP of the sidebar (matching the prior
+		// newest-first behavior). For accounts that have manually reordered, every
+		// workspace has a finite order, so undefined would sink the new one to the
+		// bottom; give it one less than the current minimum instead.
+		const existing = await ctx.db
+			.query("workspaces")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.collect();
+		const minOrder = existing.reduce(
+			(m, w) => (w.order !== undefined && w.order < m ? w.order : m),
+			Number.POSITIVE_INFINITY,
+		);
+		const order = Number.isFinite(minOrder) ? minOrder - 1 : undefined;
+
 		const now = Date.now();
 		return await ctx.db.insert("workspaces", {
 			userId: identity.subject,
@@ -135,6 +204,7 @@ export const create = mutation({
 			...(args.harnessId ? { harnessId: args.harnessId } : {}),
 			...(args.sandboxId ? { sandboxId: args.sandboxId } : {}),
 			...(args.color ? { color: args.color } : {}),
+			...(order !== undefined ? { order } : {}),
 			createdAt: now,
 			lastUsedAt: now,
 		});

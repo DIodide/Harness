@@ -5,8 +5,12 @@ import { useWorkspaceSelection } from "./use-workspace-selection";
 
 const wid = (s: string) => s as Id<"workspaces">;
 const cid = (s: string) => s as Id<"conversations">;
-type WS = { _id: Id<"workspaces">; name: string };
-const ws = (id: string, name = id): WS => ({ _id: wid(id), name });
+type WS = { _id: Id<"workspaces">; name: string; lastUsedAt: number };
+const ws = (id: string, name = id, lastUsedAt = 0): WS => ({
+	_id: wid(id),
+	name,
+	lastUsedAt,
+});
 
 describe("useWorkspaceSelection", () => {
 	it("seeds activeConvoId from the URL (deep link opens directly)", () => {
@@ -31,11 +35,14 @@ describe("useWorkspaceSelection", () => {
 		expect(result.current.activeWorkspace?._id).toBe("w2");
 	});
 
-	it("falls back to the first (most-recently-used) workspace with no URL hint", () => {
+	it("falls back to the most-recently-used workspace (not list order) with no URL hint", () => {
 		const { result } = renderHook(() =>
-			useWorkspaceSelection({ workspaces: [ws("w1"), ws("w2")] }),
+			useWorkspaceSelection({
+				// w1 is first in the (manually-ordered) list, but w2 was used later.
+				workspaces: [ws("w1", "w1", 100), ws("w2", "w2", 200)],
+			}),
 		);
-		expect(result.current.activeWorkspaceId).toBe("w1");
+		expect(result.current.activeWorkspaceId).toBe("w2");
 	});
 
 	it("does NOT wipe a URL-seeded conversation while workspaces is still loading (regression)", () => {
