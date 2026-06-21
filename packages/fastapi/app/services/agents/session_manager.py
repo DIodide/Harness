@@ -1221,6 +1221,18 @@ class AgentSessionManager:
                     with contextlib.suppress(Exception):
                         await session.connection.close()
                     session.connection = None
+                # Reclaim an OWNED box from the failed attempt before retrying.
+                # Sandbox registration runs only AFTER conn.start()/initialize,
+                # so a transient failure there leaves a freshly-created, owned,
+                # unlinked box; the next attempt provisions a new one and
+                # overwrites session.runtime, orphaning the first. Attached
+                # (non-owned) boxes are left in place for the retry to re-attach.
+                if session.runtime is not None and session.runtime.owns_sandbox:
+                    with contextlib.suppress(Exception):
+                        await self._destroy_runtime(
+                            session.runtime, session.agent_id,
+                        )
+                    session.runtime = None
                 await asyncio.sleep(1.0 * attempt)
 
     async def _provision_once(self, session: AgentSession, creds, user_ctx) -> None:

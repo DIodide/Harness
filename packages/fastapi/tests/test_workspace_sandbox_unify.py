@@ -5,8 +5,13 @@ spinning a separate session-owned box.
 Covers AgentSessionManager._resolve_sandbox_plan (which sandbox a session uses)
 and _register_workspace_sandbox (link-back + orphan-avoidance on failure)."""
 
+import asyncio
+
+from daytona_sdk import DaytonaError
+
 import app.services.convex as convex_mod
 from app.models import HarnessConfig
+from app.services.agents import session_manager as sm
 from app.services.agents.daytona_runtime import ProvisionedRuntime
 from app.services.agents.session_manager import (
     AgentSession,
@@ -161,3 +166,52 @@ class TestRegisterWorkspaceSandbox:
         await mgr._register_workspace_sandbox(s, _Agent())
         # Lost the race → reclaim the duplicate box on teardown.
         assert s.runtime.owns_sandbox is True
+
+
+class TestRetryReclaimsOwnedBox:
+    def test_owned_box_from_failed_attempt_is_destroyed_before_retry(
+        self, monkeypatch,
+    ):
+        # Registration runs only AFTER conn.start(); a transient failure there
+        # must not leave the first attempt's owned box orphaned when the retry
+        # provisions a second one and overwrites session.runtime.
+        mgr = AgentSessionManager()
+        h = HarnessConfig(
+            model="x", name="h", agent="claude-code", workspace_id="ws1",
+        )
+        session = _session(h)
+        destroyed: list[str] = []
+
+        async def fake_destroy(runtime, _agent_id):
+            destroyed.append(runtime.sandbox_id)
+
+        monkeypatch.setattr(mgr, "_destroy_runtime", fake_destroy)
+
+        calls = {"n": 0}
+
+        async def once(s, _creds, _user_ctx):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Box provisioned (owned), then a transient connection blip.
+                s.runtime = ProvisionedRuntime(
+                    sandbox_id="box1", base_url="", headers={},
+                    owns_sandbox=True,
+                )
+                raise DaytonaError("blip")  # status_code None → transient
+            s.runtime = ProvisionedRuntime(
+                sandbox_id="box2", base_url="", headers={}, owns_sandbox=False,
+            )
+            s.status = "ready"
+
+        monkeypatch.setattr(mgr, "_provision_once", once)
+
+        async def no_sleep(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(sm.asyncio, "sleep", no_sleep)
+        asyncio.run(mgr._provision_with_retry(session, creds=None, user_ctx=None))
+
+        assert calls["n"] == 2
+        # Box #1 was reclaimed before the retry — not orphaned.
+        assert destroyed == ["box1"]
+        assert session.runtime.sandbox_id == "box2"
