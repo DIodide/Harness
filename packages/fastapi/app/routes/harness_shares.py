@@ -21,15 +21,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def _verified_emails(http_client: httpx.AsyncClient, user_id: str) -> list[str]:
+async def _verified_emails(
+    http_client: httpx.AsyncClient, user_id: str
+) -> list[str] | None:
     """The caller's verified email addresses, per the Clerk Backend API.
 
     Mirrors the verified-email enumeration in mcp_client.resolve_princeton_netid:
     only addresses whose verification.status == "verified" are returned, from
-    both primary email_addresses and external_accounts. Empty on any error.
+    both primary email_addresses and external_accounts.
+
+    Returns None on a TRANSIENT failure (Clerk non-200 / network error) so the
+    caller reports a retriable failure; returns [] only when the lookup
+    genuinely succeeded with no verified emails (or Clerk isn't configured).
     """
     if not settings.clerk_secret_key:
-        return []
+        return []  # persistent config gap — not retriable, treat as "no emails"
     out: set[str] = set()
     try:
         resp = await http_client.get(
@@ -41,7 +47,7 @@ async def _verified_emails(http_client: httpx.AsyncClient, user_id: str) -> list
             logger.warning(
                 "Clerk API returned %d for user '%s' (claim)", resp.status_code, user_id
             )
-            return []
+            return None  # transient → caller retries next visit
         data = resp.json()
         for email_obj in data.get("email_addresses", []):
             addr = (email_obj.get("email_address") or "").strip().lower()
@@ -53,7 +59,7 @@ async def _verified_emails(http_client: httpx.AsyncClient, user_id: str) -> list
                 out.add(addr)
     except Exception as e:
         logger.warning("Failed to fetch Clerk user '%s' for claim: %s", user_id, e)
-        return []
+        return None  # transient → caller retries next visit
     return list(out)
 
 
@@ -68,6 +74,9 @@ async def claim_harness_shares(
     """
     user_id = user["sub"]
     emails = await _verified_emails(http_client, user_id)
+    if emails is None:
+        # Transient lookup failure — tell the client so it retries next visit.
+        return {"ok": False, "bound": 0}
     if not emails:
         return {"ok": True, "bound": 0}
     try:

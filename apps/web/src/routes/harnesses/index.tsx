@@ -110,21 +110,30 @@ function HarnessesPage() {
 	});
 	// Claim ONCE per browser session (sessionStorage, not a component ref) so the
 	// relay doesn't re-fire a Clerk lookup + bind on every navigation back here.
+	// The key is cleared on ANY non-success (network error, 401 token race, or a
+	// soft {ok:false} from a transient Clerk/Convex failure) so a real failure
+	// retries next visit instead of being suppressed for the whole session.
 	useEffect(() => {
 		if (!isSignedIn || sessionStorage.getItem(SHARES_CLAIMED_KEY)) return;
 		sessionStorage.setItem(SHARES_CLAIMED_KEY, "1");
+		const unclaim = () => {
+			try {
+				sessionStorage.removeItem(SHARES_CLAIMED_KEY);
+			} catch {}
+		};
 		(async () => {
 			try {
 				const token = await getToken({ template: "convex" });
-				await fetch(`${FASTAPI_URL}/api/harness-shares/claim`, {
+				const res = await fetch(`${FASTAPI_URL}/api/harness-shares/claim`, {
 					method: "POST",
 					headers: token ? { Authorization: `Bearer ${token}` } : {},
 				});
+				const body = (await res.json().catch(() => null)) as {
+					ok?: boolean;
+				} | null;
+				if (!res.ok || !body?.ok) unclaim();
 			} catch {
-				// Best-effort: let it retry next visit, and invites still bind then.
-				try {
-					sessionStorage.removeItem(SHARES_CLAIMED_KEY);
-				} catch {}
+				unclaim();
 			}
 		})();
 	}, [isSignedIn, getToken]);

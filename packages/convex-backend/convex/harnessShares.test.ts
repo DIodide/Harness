@@ -225,6 +225,18 @@ describe("editSharedHarness — lock + role gating", () => {
 		expect(row?.name).toBe("Edited by bob"); // unchanged
 	});
 
+	it("editSharedHarness enforces the owner's systemPrompt length cap", async () => {
+		const { raw, asUser } = makeT();
+		const h = await seedHarness(raw, "owner");
+		await shareToUser(raw, asUser, h, "bob", "editor");
+		await expect(
+			asUser("bob").mutation(api.harnessShares.editSharedHarness, {
+				harnessId: h,
+				patch: { systemPrompt: "x".repeat(4001) },
+			}),
+		).rejects.toThrow("at most");
+	});
+
 	it("a viewer can never edit", async () => {
 		const { raw, asUser } = makeT();
 		const h = await seedHarness(raw, "owner");

@@ -7,6 +7,7 @@ import {
 	mutation,
 	query,
 } from "./_generated/server";
+import { assertSystemPromptLength } from "./harnesses";
 import {
 	ALLOWED_AVATAR_HOSTS,
 	MIN_TOKEN_LENGTH,
@@ -603,10 +604,13 @@ export const editSharedHarness = mutation({
 		if (harness.sharedLocked === true) {
 			throw new Error("This harness is locked by its owner");
 		}
-		// Only the explicitly-allowed, non-secret fields.
+		// Only the explicitly-allowed, non-secret fields. Hold the editor to the
+		// SAME bounds the owner's harnesses.update enforces (a less-trusted editor
+		// must not write unbounded data into the owner's document).
+		assertSystemPromptLength(args.patch.systemPrompt);
 		const patch: Record<string, unknown> = {};
 		const p = args.patch;
-		if (p.name !== undefined) patch.name = p.name;
+		if (p.name !== undefined) patch.name = p.name.slice(0, 200);
 		if (p.model !== undefined) patch.model = p.model;
 		if (p.systemPrompt !== undefined) patch.systemPrompt = p.systemPrompt;
 		if (p.suggestedPrompts !== undefined) {
