@@ -78,7 +78,15 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
         # PATH lookup: npm global bin location depends on the node install
         # (/usr/bin with nodesource, /usr/local/bin with the official image).
         command=["claude-agent-acp"],
-        env={},
+        # IS_SANDBOX=1 unlocks the "bypassPermissions" mode. claude-agent-acp
+        # computes ALLOW_BYPASS = !IS_ROOT || !!process.env.IS_SANDBOX and only
+        # advertises/accepts bypassPermissions when it's true. Our Daytona
+        # sandboxes run the wrapper as ROOT, so without this flag the wrapper
+        # drops bypassPermissions from availableModes and set_config_option(
+        # mode, bypassPermissions) throws "Mode … not available" → JSON-RPC
+        # -32603. We ARE in an isolated, ephemeral, per-user sandbox, so the
+        # flag is accurate; it only ENABLES the option (default mode unchanged).
+        env={"IS_SANDBOX": "1"},
         port_offset=1,
         # Mirrors settings.claude_available_models (written to the
         # sandbox's ~/.claude/settings.json availableModels).

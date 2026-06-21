@@ -86,6 +86,9 @@ _RESERVED_NAMES: frozenset[str] = frozenset(
         "AGENT_CMD",
         "CODEX_HOME",
         "CLAUDE_HOME",
+        # Set by the claude-code launcher to unlock bypassPermissions as root;
+        # a user value here must not shadow or inject it into other agents.
+        "IS_SANDBOX",
         # Agent auth (managed by agent credentials, not here)
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY",

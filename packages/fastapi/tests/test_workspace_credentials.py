@@ -82,6 +82,12 @@ class TestValidateEnvCredential:
                      "SHIM_TOKEN", "SHIM_PORT", "AGENT_CMD"):
             assert "reserved" in validate_env_credential(name, "v"), name
 
+    def test_launcher_flags_rejected(self):
+        # IS_SANDBOX unlocks bypassPermissions in the claude-code launcher; a
+        # user value must not shadow it or inject it into other agents.
+        for name in ("IS_SANDBOX", "is_sandbox", "CLAUDE_HOME", "CODEX_HOME"):
+            assert "reserved" in validate_env_credential(name, "v"), name
+
     def test_trailing_newline_cannot_bypass_denylist(self):
         # Regression: Python's `$` matches before a trailing "\n", so a name
         # like "PATH\n" used to pass the shape check and then dodge the
