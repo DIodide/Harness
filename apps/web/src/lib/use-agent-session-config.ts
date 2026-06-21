@@ -1,13 +1,23 @@
 import { useAuth } from "@clerk/tanstack-react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 import {
 	type AgentCommand,
 	type AgentConfigOption,
 	type AgentMode,
+	cacheAgentConfigOptions,
+	defaultAgentConfigOptions,
 	fetchAgentSession,
 	getCachedAgentSessionId,
 	setAgentConfigOption,
 } from "./agent-mode";
+
+/** Harness-persisted ACP defaults used to seed the pre-session controls. */
+export interface HarnessAgentDefaults {
+	model?: string | null;
+	agentMode?: string | null;
+	reasoningEffort?: string | null;
+}
 
 interface SessionConfig {
 	sessionId: string | null;
@@ -23,6 +33,7 @@ interface SessionConfig {
 export function useAgentSessionConfig(
 	conversationId: string | null,
 	agent: AgentMode,
+	harnessDefaults?: HarnessAgentDefaults,
 ) {
 	const { getToken } = useAuth();
 	const queryClient = useQueryClient();
@@ -39,9 +50,13 @@ export function useAgentSessionConfig(
 			if (!sessionId) return { sessionId: null, options: [], commands: [] };
 			const token = await getToken({ template: "convex" });
 			const info = await fetchAgentSession(token, sessionId);
+			const options = info?.config_options ?? [];
+			// Cache the wrapper's REAL options so the controls render with exact
+			// ids/labels before the next session exists.
+			if (options.length > 0) cacheAgentConfigOptions(agent, options);
 			return {
 				sessionId,
-				options: info?.config_options ?? [],
+				options,
 				commands: info?.available_commands ?? [],
 			};
 		},
@@ -82,10 +97,30 @@ export function useAgentSessionConfig(
 		},
 	});
 
+	const liveOptions = query.data?.options ?? [];
+	const optionsAreLive = liveOptions.length > 0;
+
+	// Pre-session: render the controls from cached/static defaults overlaid with
+	// the harness-persisted selections, so they're usable before the first send.
+	// Depend on the primitive values (not the object identity, which churns).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: deliberate primitive deps
+	const fallback = useMemo(
+		() => defaultAgentConfigOptions(agent, harnessDefaults),
+		[
+			agent,
+			harnessDefaults?.model,
+			harnessDefaults?.agentMode,
+			harnessDefaults?.reasoningEffort,
+		],
+	);
+
 	return {
-		options: query.data?.options ?? [],
+		options: optionsAreLive ? liveOptions : fallback,
 		commands: query.data?.commands ?? [],
 		sessionReady: Boolean(query.data?.sessionId),
+		// True only when the options come from a live ACP session (vs the
+		// pre-session fallback) — callers apply edits to the session vs the harness.
+		optionsAreLive,
 		setOption,
 	};
 }

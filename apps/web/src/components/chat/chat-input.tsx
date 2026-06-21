@@ -33,6 +33,7 @@ import { useFileAttachments } from "../../hooks/use-file-attachments";
 import {
 	AGENT_MODES,
 	type AgentMode,
+	agentModelLabel,
 	cancelAgentTurn,
 	flattenConfigChoices,
 	getCachedAgentSessionId,
@@ -140,6 +141,8 @@ export function ChatInput({
 		systemPrompt?: string;
 		agent?: string;
 		agentCredentialId?: string;
+		agentMode?: string;
+		reasoningEffort?: string;
 		sandboxEnabled?: boolean;
 		daytonaSandboxId?: string;
 		sandboxConfig?: {
@@ -294,10 +297,67 @@ export function ChatInput({
 	const {
 		options: agentConfigOptions,
 		commands: agentCommands,
+		optionsAreLive,
 		setOption: setAgentOption,
-	} = useAgentSessionConfig(conversationId, agentMode);
+	} = useAgentSessionConfig(conversationId, agentMode, {
+		model: activeHarness?.model,
+		agentMode: activeHarness?.agentMode,
+		reasoningEffort: activeHarness?.reasoningEffort,
+	});
 	const agentModeActive = agentMode !== "default";
 	const effortOption = agentConfigOptions.find((o) => isEffortOption(o.id));
+
+	// Apply an agent config change. With a LIVE session, POST to the session
+	// (and, in harness scope, persist to the harness too). BEFORE a session
+	// exists, write to the harness — it seeds the upcoming session and is the
+	// home for these settings.
+	const applyAgentOption = useCallback(
+		(optionId: string, value: string) => {
+			if (optionsAreLive) {
+				setAgentOption.mutate(
+					{ configId: optionId, value },
+					{ onError: (error) => toast.error(error.message) },
+				);
+				if (modelSelectorMode === "harness" && activeHarness) {
+					if (optionId === "model" && value !== activeHarness.model) {
+						updateHarnessAgent.mutate({ id: activeHarness._id, model: value });
+					} else if (optionId === "mode" && value !== activeHarness.agentMode) {
+						updateHarnessAgent.mutate({
+							id: activeHarness._id,
+							agentMode: value,
+						});
+					} else if (
+						isEffortOption(optionId) &&
+						value !== activeHarness.reasoningEffort
+					) {
+						updateHarnessAgent.mutate({
+							id: activeHarness._id,
+							reasoningEffort: value,
+						});
+					}
+				}
+				return;
+			}
+			if (!activeHarness) return;
+			if (optionId === "model") {
+				updateHarnessAgent.mutate({ id: activeHarness._id, model: value });
+			} else if (optionId === "mode") {
+				updateHarnessAgent.mutate({ id: activeHarness._id, agentMode: value });
+			} else if (isEffortOption(optionId)) {
+				updateHarnessAgent.mutate({
+					id: activeHarness._id,
+					reasoningEffort: value,
+				});
+			}
+		},
+		[
+			optionsAreLive,
+			setAgentOption,
+			modelSelectorMode,
+			activeHarness,
+			updateHarnessAgent,
+		],
+	);
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
 	const currentModelLabel =
@@ -904,10 +964,7 @@ export function ChatInput({
 							<EffortSlider
 								effortOption={effortOption}
 								onSetEffort={(value) =>
-									setAgentOption.mutate(
-										{ configId: effortOption.id, value },
-										{ onError: (error) => toast.error(error.message) },
-									)
+									applyAgentOption(effortOption.id, value)
 								}
 								text={text}
 								onSetText={setText}
@@ -975,7 +1032,7 @@ export function ChatInput({
 											: "External agent — usage billed to your own account"}
 									</TooltipContent>
 								</Tooltip>
-								<DropdownMenuContent align="end">
+								<DropdownMenuContent align="end" className="w-72">
 									{AGENT_MODES.map((agentOption) => {
 										const unavailable =
 											agentOption.id !== "default" &&
@@ -992,9 +1049,9 @@ export function ChatInput({
 												) : (
 													<span className="w-3 shrink-0" />
 												)}
-												<div className="flex flex-col">
+												<div className="flex min-w-0 flex-col">
 													<span>{agentOption.label}</span>
-													<span className="text-[10px] text-muted-foreground">
+													<span className="whitespace-normal text-[10px] text-muted-foreground leading-snug">
 														{unavailable
 															? "Add a credential first (harness settings or Settings → Agent Credentials)"
 															: agentOption.description}
@@ -1030,8 +1087,9 @@ export function ChatInput({
 															{agentOptionIcon(option.id)}
 															<span className="max-w-[100px] truncate">
 																{current?.name ??
-																	option.currentValue ??
-																	option.name}
+																	(option.id === "model" && option.currentValue
+																		? agentModelLabel(option.currentValue)
+																		: (option.currentValue ?? option.name))}
 															</span>
 															<ChevronDown size={10} />
 														</button>
@@ -1043,7 +1101,7 @@ export function ChatInput({
 											</Tooltip>
 											<DropdownMenuContent
 												align="end"
-												className="max-h-72 w-52 overflow-y-auto"
+												className="max-h-72 w-80 overflow-y-auto"
 											>
 												<DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
 													{option.name}
@@ -1051,28 +1109,9 @@ export function ChatInput({
 												{choices.map((choice) => (
 													<DropdownMenuItem
 														key={choice.value}
-														onClick={() => {
-															setAgentOption.mutate(
-																{ configId: option.id, value: choice.value },
-																{
-																	onError: (error) =>
-																		toast.error(error.message),
-																},
-															);
-															// Harness-scope chat changes persist the model
-															// to the harness itself (session opt-out only).
-															if (
-																option.id === "model" &&
-																modelSelectorMode === "harness" &&
-																activeHarness &&
-																choice.value !== activeHarness.model
-															) {
-																updateHarnessAgent.mutate({
-																	id: activeHarness._id,
-																	model: choice.value,
-																});
-															}
-														}}
+														onClick={() =>
+															applyAgentOption(option.id, choice.value)
+														}
 														className="flex items-center gap-2"
 													>
 														{choice.value === option.currentValue ? (
@@ -1082,10 +1121,13 @@ export function ChatInput({
 														)}
 														<div className="flex min-w-0 flex-col">
 															<span className="truncate">
-																{choice.name ?? choice.value}
+																{choice.name ??
+																	(option.id === "model"
+																		? agentModelLabel(choice.value)
+																		: choice.value)}
 															</span>
 															{choice.description && (
-																<span className="max-w-[200px] truncate text-[10px] text-muted-foreground">
+																<span className="whitespace-normal text-[10px] text-muted-foreground leading-snug">
 																	{choice.description}
 																</span>
 															)}

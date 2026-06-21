@@ -142,6 +142,8 @@ function OnboardingPage() {
 	const [agentCredentialId, setAgentCredentialId] = useState<string | null>(
 		null,
 	);
+	const [agentMode, setAgentMode] = useState("default");
+	const [reasoningEffort, setReasoningEffort] = useState("high");
 	const [systemPrompt, setSystemPrompt] = useState("");
 	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>(
 		[],
@@ -256,6 +258,8 @@ function OnboardingPage() {
 			systemPrompt?: string;
 			agent?: string;
 			agentCredentialId?: Id<"agentCredentials">;
+			agentMode?: string;
+			reasoningEffort?: string;
 			sandboxEnabled?: boolean;
 			sandboxConfig?: SandboxConfig;
 			defaultSandbox?: {
@@ -517,6 +521,8 @@ function OnboardingPage() {
 					agent !== "default" && agentCredentialId
 						? (agentCredentialId as Id<"agentCredentials">)
 						: undefined,
+				agentMode: agent === "claude-code" ? agentMode : undefined,
+				reasoningEffort: agent === "claude-code" ? reasoningEffort : undefined,
 				sandboxEnabled: sandboxEnabled || undefined,
 				sandboxConfig: sandboxEnabled ? defaultSandbox?.config : undefined,
 				defaultSandbox: sandboxEnabled ? defaultSandbox : undefined,
@@ -735,6 +741,10 @@ function OnboardingPage() {
 									setAgent={setAgent}
 									agentCredentialId={agentCredentialId}
 									setAgentCredentialId={setAgentCredentialId}
+									agentMode={agentMode}
+									setAgentMode={setAgentMode}
+									reasoningEffort={reasoningEffort}
+									setReasoningEffort={setReasoningEffort}
 									systemPrompt={systemPrompt}
 									setSystemPrompt={setSystemPrompt}
 								/>
@@ -850,6 +860,10 @@ function StepNameModel({
 	setAgent,
 	agentCredentialId,
 	setAgentCredentialId,
+	agentMode,
+	setAgentMode,
+	reasoningEffort,
+	setReasoningEffort,
 	systemPrompt,
 	setSystemPrompt,
 }: {
@@ -861,6 +875,10 @@ function StepNameModel({
 	setAgent: (v: AgentMode) => void;
 	agentCredentialId: string | null;
 	setAgentCredentialId: (v: string | null) => void;
+	agentMode: string;
+	setAgentMode: (v: string) => void;
+	reasoningEffort: string;
+	setReasoningEffort: (v: string) => void;
 	systemPrompt: string;
 	setSystemPrompt: (v: string) => void;
 }) {
@@ -894,6 +912,10 @@ function StepNameModel({
 				onCredentialChange={setAgentCredentialId}
 				model={model}
 				onModelChange={setModel}
+				agentMode={agentMode}
+				onAgentModeChange={setAgentMode}
+				reasoningEffort={reasoningEffort}
+				onReasoningEffortChange={setReasoningEffort}
 			/>
 			<div>
 				<label

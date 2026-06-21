@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # ~/.claude/settings.json (availableModels). Entries surface in the ACP
     # config options and pass through to setModel verbatim, exposing models
     # the headless SDK doesn't list on its own (e.g. Fable).
-    claude_available_models: str = "claude-fable-5,opus,sonnet,haiku"
+    claude_available_models: str = "claude-fable-5,opus,opus[1m],sonnet,haiku"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

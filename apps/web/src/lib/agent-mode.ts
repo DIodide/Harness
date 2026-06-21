@@ -335,6 +335,157 @@ export function flattenConfigChoices(
 	return out;
 }
 
+/** Display labels for Claude Code's bare model ids (the ACP wrapper sends raw
+ *  ids like "sonnet"; a gateway-supplied `name` always wins over this). */
+export const CLAUDE_MODEL_LABELS: Record<string, string> = {
+	"claude-fable-5": "Fable",
+	opus: "Opus",
+	"opus[1m]": "Opus (1M)",
+	sonnet: "Sonnet",
+	"sonnet[1m]": "Sonnet (1M)",
+	haiku: "Haiku",
+};
+
+/** Pretty label for a Claude Code model value; falls back to the raw value. */
+export function agentModelLabel(value: string | null | undefined): string {
+	if (!value) return "";
+	return CLAUDE_MODEL_LABELS[value] ?? value;
+}
+
+/** True for the reasoning-effort config option (the gateway uses either id). */
+export function isEffortConfigId(id: string): boolean {
+	return id === "effort" || id === "reasoning_effort";
+}
+
+/**
+ * Static fallback config options for Claude Code, used to render the Mode /
+ * Model / Effort controls BEFORE any ACP session exists. These are best-effort
+ * placeholders: once a real session reports its options (or a cached copy from
+ * a prior session is available — see {@link getCachedAgentConfigOptions}), those
+ * REPLACE these, so a slightly-off value here self-corrects. Mode values follow
+ * the Claude Agent SDK / claude-agent-acp permission modes.
+ */
+export const CLAUDE_CODE_CONFIG_OPTIONS: AgentConfigOption[] = [
+	{
+		id: "mode",
+		name: "Mode",
+		currentValue: "default",
+		options: [
+			{
+				value: "default",
+				name: "Default",
+				description: "Standard behavior — prompts before dangerous actions.",
+			},
+			{
+				value: "auto",
+				name: "Auto",
+				description: "Use a model classifier to approve or deny tool calls.",
+			},
+			{
+				value: "acceptEdits",
+				name: "Accept Edits",
+				description: "Auto-accept file edit operations.",
+			},
+			{
+				value: "plan",
+				name: "Plan Mode",
+				description: "Plan the work first; no tools are actually run.",
+			},
+			{
+				value: "dontAsk",
+				name: "Don't Ask",
+				description: "Don't prompt for permissions.",
+			},
+		],
+	},
+	{
+		id: "model",
+		name: "Model",
+		currentValue: "sonnet",
+		options: [
+			{ value: "claude-fable-5", name: "Fable" },
+			{ value: "opus", name: "Opus" },
+			{
+				value: "opus[1m]",
+				name: "Opus (1M)",
+				description: "Opus with a 1M-token context window.",
+			},
+			{ value: "sonnet", name: "Sonnet" },
+			{ value: "haiku", name: "Haiku" },
+		],
+	},
+	{
+		id: "effort",
+		name: "Effort",
+		currentValue: "high",
+		options: [
+			{ value: "low", name: "Low" },
+			{ value: "medium", name: "Medium" },
+			{ value: "high", name: "High" },
+		],
+	},
+];
+
+const CONFIG_CACHE_PREFIX = "acp-config-options:";
+
+/** Cache a live session's REAL config options (per agent) so the controls can
+ *  render with the exact wrapper-provided ids/labels before the next session
+ *  exists. No-op on the server / when empty. */
+export function cacheAgentConfigOptions(
+	agent: string,
+	options: AgentConfigOption[],
+): void {
+	if (typeof localStorage === "undefined" || options.length === 0) return;
+	try {
+		localStorage.setItem(CONFIG_CACHE_PREFIX + agent, JSON.stringify(options));
+	} catch {
+		// storage full / disabled — fall back to the static defaults
+	}
+}
+
+function getCachedAgentConfigOptions(
+	agent: string,
+): AgentConfigOption[] | null {
+	if (typeof localStorage === "undefined") return null;
+	try {
+		const raw = localStorage.getItem(CONFIG_CACHE_PREFIX + agent);
+		if (!raw) return null;
+		const parsed = JSON.parse(raw);
+		return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Pre-session config options for an agent: the cached real options from a prior
+ * session if available, else the static fallback, with `currentValue` overlaid
+ * from the harness-persisted defaults so the chips reflect the saved selection.
+ */
+export function defaultAgentConfigOptions(
+	agent: string,
+	harnessDefaults?: {
+		model?: string | null;
+		agentMode?: string | null;
+		reasoningEffort?: string | null;
+	},
+): AgentConfigOption[] {
+	const base =
+		getCachedAgentConfigOptions(agent) ??
+		(agent === "claude-code" ? CLAUDE_CODE_CONFIG_OPTIONS : []);
+	return base.map((opt) => {
+		let currentValue = opt.currentValue ?? null;
+		if (opt.id === "model" && harnessDefaults?.model) {
+			currentValue = harnessDefaults.model;
+		} else if (opt.id === "mode" && harnessDefaults?.agentMode) {
+			currentValue = harnessDefaults.agentMode;
+		} else if (isEffortConfigId(opt.id) && harnessDefaults?.reasoningEffort) {
+			currentValue = harnessDefaults.reasoningEffort;
+		}
+		return { ...opt, currentValue };
+	});
+}
+
 /** Agent-advertised slash command (ACP available_commands_update). */
 export interface AgentCommand {
 	name: string;

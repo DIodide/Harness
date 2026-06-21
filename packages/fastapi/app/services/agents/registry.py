@@ -82,7 +82,7 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
         port_offset=1,
         # Mirrors settings.claude_available_models (written to the
         # sandbox's ~/.claude/settings.json availableModels).
-        models=("claude-fable-5", "opus", "sonnet", "haiku"),
+        models=("claude-fable-5", "opus", "opus[1m]", "sonnet", "haiku"),
     ),
     "cursor": AgentDefinition(
         id="cursor",

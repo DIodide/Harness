@@ -86,6 +86,9 @@ export const resolveForCollab = internalQuery({
 			// "default" | "claude-code" | "codex" | ... | null
 			agent: harness.agent ?? null,
 			agentCredentialId: harness.agentCredentialId ?? null,
+			// Persisted ACP session defaults (seed the collaborator's server run).
+			agentMode: harness.agentMode ?? null,
+			reasoningEffort: harness.reasoningEffort ?? null,
 			mcpServers: harness.mcpServers.map((s) => ({
 				name: s.name,
 				url: s.url,
@@ -115,6 +118,8 @@ export const create = mutation({
 		systemPrompt: v.optional(v.string()),
 		agent: v.optional(v.string()),
 		agentCredentialId: v.optional(v.id("agentCredentials")),
+		agentMode: v.optional(v.string()),
+		reasoningEffort: v.optional(v.string()),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxConfig: v.optional(
 			v.object({
@@ -162,6 +167,8 @@ export const update = mutation({
 		suggestedPrompts: v.optional(v.array(v.string())),
 		agent: v.optional(v.string()),
 		agentCredentialId: v.optional(v.id("agentCredentials")),
+		agentMode: v.optional(v.string()),
+		reasoningEffort: v.optional(v.string()),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxId: v.optional(v.id("sandboxes")),
 		daytonaSandboxId: v.optional(v.string()),
@@ -230,6 +237,8 @@ export const duplicate = mutation({
 			// a default-loop harness with an agent-only model id.
 			agent: harness.agent,
 			agentCredentialId: harness.agentCredentialId,
+			agentMode: harness.agentMode,
+			reasoningEffort: harness.reasoningEffort,
 			suggestedPrompts: harness.suggestedPrompts,
 			userId: identity.subject,
 			lastUsedAt: Date.now(),

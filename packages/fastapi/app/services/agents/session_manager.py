@@ -1539,6 +1539,7 @@ class AgentSessionManager:
             await self._reapply_config(session, prior_config)
         else:
             await self._apply_harness_model(session)
+            await self._apply_harness_config(session)
 
     @staticmethod
     def _config_value_offered(option: dict, value: str) -> bool:
@@ -1585,6 +1586,24 @@ class AgentSessionManager:
                     "Could not re-apply %s=%r on session '%s': %s",
                     option_id, value, session.id, e,
                 )
+
+    async def _apply_harness_config(self, session: AgentSession) -> None:
+        """Best-effort: seed the harness's persisted ACP mode/effort defaults on
+        a fresh session (like _apply_harness_model). Values the wrapper doesn't
+        offer are skipped via _reapply_config's offered-value guard."""
+        desired: dict[str, str] = {}
+        mode = (session.harness.agent_mode or "").strip()
+        if mode:
+            desired["mode"] = mode
+        effort = (session.harness.reasoning_effort or "").strip()
+        if effort:
+            # The wrapper names the option either "effort" or "reasoning_effort".
+            for oid in ("effort", "reasoning_effort"):
+                if any(o.get("id") == oid for o in session.config_options):
+                    desired[oid] = effort
+                    break
+        if desired:
+            await self._reapply_config(session, desired)
 
     async def _apply_harness_model(self, session: AgentSession) -> None:
         """Best-effort: select the harness's configured model on a fresh ACP

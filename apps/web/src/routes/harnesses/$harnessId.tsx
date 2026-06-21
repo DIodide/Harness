@@ -257,6 +257,8 @@ function HarnessEditPage() {
 	const [agentCredentialId, setAgentCredentialId] = useState<
 		string | null | undefined
 	>(undefined);
+	const [agentMode, setAgentMode] = useState<string | null>(null);
+	const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
 	const [status, setStatus] = useState<HarnessStatus | null>(null);
 	const [mcpServers, setMcpServers] = useState<McpServerEntry[] | null>(null);
 	const [skills, setSkills] = useState<SkillEntry[] | null>(null);
@@ -275,6 +277,12 @@ function HarnessEditPage() {
 		agentCredentialId === undefined
 			? ((harness?.agentCredentialId as string | undefined) ?? null)
 			: agentCredentialId;
+	const currentAgentMode =
+		agentMode ?? (harness?.agentMode as string | undefined) ?? "default";
+	const currentReasoningEffort =
+		reasoningEffort ??
+		(harness?.reasoningEffort as string | undefined) ??
+		"high";
 	const currentStatus: HarnessStatus =
 		status ?? (harness?.status as HarnessStatus | undefined) ?? "draft";
 	const currentMcpServers = mcpServers ?? harness?.mcpServers ?? [];
@@ -382,6 +390,8 @@ function HarnessEditPage() {
 		if (name !== null) updates.name = name;
 		if (model !== null) updates.model = model;
 		if (agent !== null) updates.agent = agent;
+		if (agentMode !== null) updates.agentMode = agentMode;
+		if (reasoningEffort !== null) updates.reasoningEffort = reasoningEffort;
 		// The update mutation auto-unlinks a stale credential when the agent
 		// changes without one; only send an explicit selection.
 		if (agentCredentialId !== undefined && agentCredentialId !== null) {
@@ -608,6 +618,10 @@ function HarnessEditPage() {
 							onCredentialChange={(id) => setAgentCredentialId(id)}
 							model={currentModel}
 							onModelChange={(value) => setModel(value)}
+							agentMode={currentAgentMode}
+							onAgentModeChange={(value) => setAgentMode(value)}
+							reasoningEffort={currentReasoningEffort}
+							onReasoningEffortChange={(value) => setReasoningEffort(value)}
 						/>
 					</motion.section>
 

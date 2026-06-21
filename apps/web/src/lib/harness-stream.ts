@@ -25,6 +25,8 @@ export interface HarnessDocLike {
 	systemPrompt?: string;
 	agent?: string;
 	agentCredentialId?: string;
+	agentMode?: string;
+	reasoningEffort?: string;
 	sandboxConfig?: {
 		persistent: boolean;
 		autoStart: boolean;
@@ -61,6 +63,11 @@ export function buildHarnessStreamConfig(
 		harness_id: harness._id,
 		system_prompt: harness.systemPrompt ?? undefined,
 		agent,
+		// Persisted ACP session defaults — seed the new session's mode/effort
+		// (the model rides the existing `model` field above). The gateway only
+		// applies a value the wrapper actually offers.
+		agent_mode: harness.agentMode ?? undefined,
+		reasoning_effort: harness.reasoningEffort ?? undefined,
 		// Only the harness's own credential may ride along — under a
 		// session-scope agent override the backend falls back to the user's
 		// newest credential for that agent instead.

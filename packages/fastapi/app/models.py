@@ -36,6 +36,11 @@ class HarnessConfig(BaseModel):
     agent: str | None = None
     # The stored credential this harness's agent runs with.
     agent_credential_id: str | None = None
+    # Persisted ACP session defaults (Claude Code et al), seeded into a new
+    # session; applied only if the wrapper offers the value. The agent MODEL
+    # reuses `model` above.
+    agent_mode: str | None = None
+    reasoning_effort: str | None = None
     sandbox_enabled: bool = False
     sandbox_id: str | None = None
     sandbox_config: SandboxConfig | None = None
@@ -98,6 +103,8 @@ def harness_config_from_resolved(resolved: dict) -> "HarnessConfig":
         ],
         agent=resolved.get("agent"),
         agent_credential_id=resolved.get("agentCredentialId"),
+        agent_mode=resolved.get("agentMode"),
+        reasoning_effort=resolved.get("reasoningEffort"),
         harness_id=resolved.get("harnessId"),
         sandbox_enabled=resolved.get("sandboxEnabled", False),
         sandbox_id=resolved.get("sandboxId"),
