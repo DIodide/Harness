@@ -1,9 +1,50 @@
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
 import { contentFromParts } from "./messageParts";
 import { getOrCreateDefaultWorkspace } from "./workspaces";
+
+// Trailing "(fork)" / "(fork N)" suffix, case-insensitive, tolerant of spacing.
+const FORK_SUFFIX = /\s*\(fork(?:\s+\d+)?\)$/i;
+
+/** Strip an existing fork suffix so re-forking a fork yields "(fork 2)", not
+ *  "(fork) (fork)". */
+function forkBaseTitle(title: string): string {
+	return title.replace(FORK_SUFFIX, "").trimEnd();
+}
+
+/**
+ * Next available fork title for `rawBase` given the user's existing titles:
+ * "X (fork)", then "X (fork 2)", "X (fork 3)", filling gaps. "(fork)" holds
+ * slot 1. Case-insensitive matching; always emits lowercase "(fork)".
+ */
+function nextForkTitle(rawBase: string, siblingTitles: string[]): string {
+	const base = forkBaseTitle(rawBase);
+	const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const re = new RegExp(`^${escaped}\\s*\\(fork(?:\\s+(\\d+))?\\)$`, "i");
+	const taken = new Set<number>();
+	for (const t of siblingTitles) {
+		const m = t.match(re);
+		if (m) taken.add(m[1] ? Number(m[1]) : 1);
+	}
+	if (!taken.has(1)) return `${base} (fork)`;
+	let n = 2;
+	while (taken.has(n)) n++;
+	return `${base} (fork ${n})`;
+}
+
+/** Pinned conversations first (most-recently-pinned on top), then by recency.
+ *  The input is already lastMessageAt-desc, so the final tiebreak is stable. */
+function sortPinnedFirst(rows: Array<Doc<"conversations">>) {
+	return [...rows].sort((a, b) => {
+		const ap = a.pinnedAt != null;
+		const bp = b.pinnedAt != null;
+		if (ap !== bp) return ap ? -1 : 1;
+		if (ap && bp) return (b.pinnedAt as number) - (a.pinnedAt as number);
+		return b.lastMessageAt - a.lastMessageAt;
+	});
+}
 
 export const list = query({
 	args: { workspaceId: v.optional(v.id("workspaces")) },
@@ -13,26 +54,26 @@ export const list = query({
 		if (args.workspaceId) {
 			const workspace = await ctx.db.get(args.workspaceId);
 			if (!workspace || workspace.userId !== identity.subject) return [];
-			return await ctx.db
+			const rows = await ctx.db
 				.query("conversations")
 				.withIndex("by_workspace_last_message", (q) =>
 					q.eq("workspaceId", args.workspaceId),
 				)
 				.order("desc")
 				.take(50);
+			return sortPinnedFirst(rows);
 		}
-		return await ctx.db
+		// /chat lists ALL the user's recent conversations regardless of workspace
+		// (workspace-assigned ones are tinted client-side). Previously this
+		// excluded any conversation with a workspaceId.
+		const rows = await ctx.db
 			.query("conversations")
 			.withIndex("by_user_last_message", (q) =>
 				q.eq("userId", identity.subject),
 			)
 			.order("desc")
-			.take(100)
-			.then((conversations) =>
-				conversations
-					.filter((conversation) => !conversation.workspaceId)
-					.slice(0, 50),
-			);
+			.take(50);
+		return sortPinnedFirst(rows);
 	},
 });
 
@@ -132,10 +173,71 @@ export const updateTitle = mutation({
 	},
 });
 
+/** Pin / unpin a conversation. Pinned chats sort to the top of the sidebar. */
+export const setPinned = mutation({
+	args: { id: v.id("conversations"), pinned: v.boolean() },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+		const convo = await ctx.db.get(args.id);
+		if (!convo || convo.userId !== identity.subject) {
+			throw new Error("Not found");
+		}
+		await ctx.db.patch(args.id, {
+			pinnedAt: args.pinned ? Date.now() : undefined,
+		});
+	},
+});
+
+/**
+ * Move a conversation to a workspace (or to the Default workspace when
+ * `workspaceId` is omitted). Re-stamps every message's `workspaceId` too, since
+ * the message search index filters per-row — without it a moved conversation's
+ * messages would be invisible to a workspace-scoped search. Cross-harness moves
+ * are allowed (reorganizing shouldn't be blocked by the harness-match rule).
+ */
+export const moveToWorkspace = mutation({
+	args: {
+		id: v.id("conversations"),
+		workspaceId: v.optional(v.id("workspaces")),
+	},
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+		const convo = await ctx.db.get(args.id);
+		if (!convo || convo.userId !== identity.subject) {
+			throw new Error("Not found");
+		}
+
+		const targetWorkspaceId =
+			args.workspaceId ??
+			(await getOrCreateDefaultWorkspace(ctx, identity.subject));
+		const workspace = await ctx.db.get(targetWorkspaceId);
+		if (!workspace || workspace.userId !== identity.subject) {
+			throw new Error("Workspace not found");
+		}
+		if (convo.workspaceId === targetWorkspaceId) return targetWorkspaceId;
+
+		await ctx.db.patch(args.id, { workspaceId: targetWorkspaceId });
+		const messages = await ctx.db
+			.query("messages")
+			.withIndex("by_conversation", (q) => q.eq("conversationId", args.id))
+			.collect();
+		await Promise.all(
+			messages.map((m) =>
+				ctx.db.patch(m._id, { workspaceId: targetWorkspaceId }),
+			),
+		);
+		return targetWorkspaceId;
+	},
+});
+
 export const fork = mutation({
 	args: {
 		conversationId: v.id("conversations"),
-		upToMessageId: v.id("messages"),
+		// Omit to fork the ENTIRE conversation (sidebar "Fork"); set to fork up to
+		// and including a specific message (rewind & fork).
+		upToMessageId: v.optional(v.id("messages")),
 		// "Rewind & fork into the middle of an assistant message": when set, the
 		// LAST copied message (must be the boundary assistant message, with
 		// parts) is copied TRUNCATED to this many flat parts, with `content`
@@ -159,15 +261,29 @@ export const fork = mutation({
 			)
 			.take(8192);
 
-		const targetIdx = allMessages.findIndex(
-			(m) => m._id === args.upToMessageId,
+		let messagesToCopy = allMessages;
+		if (args.upToMessageId != null) {
+			const targetIdx = allMessages.findIndex(
+				(m) => m._id === args.upToMessageId,
+			);
+			if (targetIdx === -1)
+				throw new Error("Message not found in this conversation");
+			messagesToCopy = allMessages.slice(0, targetIdx + 1);
+		}
+
+		// Name the fork "X (fork)" / "X (fork N)" relative to the user's existing
+		// titles (computed in-transaction so concurrent forks don't collide).
+		const siblings = await ctx.db
+			.query("conversations")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.take(2000);
+		const title = nextForkTitle(
+			convo.title,
+			siblings.map((s) => s.title),
 		);
-		if (targetIdx === -1)
-			throw new Error("Message not found in this conversation");
-		const messagesToCopy = allMessages.slice(0, targetIdx + 1);
 
 		const newConvoId = await ctx.db.insert("conversations", {
-			title: `Fork of ${convo.title}`,
+			title,
 			lastHarnessId: convo.lastHarnessId,
 			workspaceId: convo.workspaceId,
 			userId: identity.subject,

@@ -23,7 +23,6 @@ import {
 	Settings,
 	Share2,
 	SlidersHorizontal,
-	Trash2,
 	X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -40,6 +39,7 @@ import {
 	McpFailureBanner,
 	SandboxPanelToggle,
 } from "../../components/chat/chat-misc";
+import { ConversationRow } from "../../components/chat/conversation-row";
 import { SettingsDialog } from "../../components/chat/settings-dialog";
 import { ShareDialog } from "../../components/chat/share-dialog";
 import { useChatPaletteCommands } from "../../components/command-palette/commands/chat-commands";
@@ -51,7 +51,6 @@ import {
 	McpServerStatus,
 } from "../../components/mcp-server-status";
 import type { DisplayMode } from "../../components/message-actions";
-import { RoseCurveSpinner } from "../../components/rose-curve-spinner";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -141,6 +140,7 @@ function ChatPage() {
 		convexQuery(api.conversations.list, {}),
 	);
 	const { data: sandboxes } = useQuery(convexQuery(api.sandboxes.list, {}));
+	const { data: workspaces } = useQuery(convexQuery(api.workspaces.list, {}));
 	const { data: userSettings } = useQuery(
 		convexQuery(api.userSettings.get, {}),
 	);
@@ -782,6 +782,7 @@ function ChatPage() {
 									(c) =>
 										!(c as Record<string, unknown>).editParentConversationId,
 								)}
+								workspaces={workspaces ?? []}
 								activeConvoId={activeConvoId}
 								onSelect={handleSelectConversation}
 								onSelectMessage={handleSelectMessage}
@@ -978,6 +979,7 @@ function ChatPage() {
 
 function ChatSidebar({
 	conversations,
+	workspaces,
 	activeConvoId,
 	onSelect,
 	onSelectMessage, // called when user clicks a content match
@@ -991,6 +993,14 @@ function ChatSidebar({
 		title: string;
 		lastMessageAt: number;
 		lastHarnessId?: Id<"harnesses">;
+		workspaceId?: Id<"workspaces">;
+		pinnedAt?: number;
+	}>;
+	workspaces: Array<{
+		_id: Id<"workspaces">;
+		name: string;
+		color?: string;
+		isDefault?: boolean;
 	}>;
 	activeConvoId: Id<"conversations"> | null;
 	onSelect: (id: Id<"conversations"> | null) => void;
@@ -1003,13 +1013,6 @@ function ChatSidebar({
 	streamingConvoIds: Set<string>;
 	doneConvoIds: Set<string>;
 }) {
-	const removeConvo = useMutation({
-		mutationFn: useConvexMutation(api.conversations.remove),
-		onSuccess: () => {
-			if (activeConvoId) onSelect(null);
-		},
-	});
-
 	const handleNew = () => {
 		if (!harnessId) return;
 		onSelect(null);
@@ -1053,10 +1056,34 @@ function ChatSidebar({
 		),
 	});
 
-	const grouped = groupByDate(conversations);
+	// Pinned chats render in a dedicated top section; the rest group by date.
+	const pinned = conversations.filter((c) => c.pinnedAt != null);
+	const grouped = groupByDate(conversations.filter((c) => c.pinnedAt == null));
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [usageOpen, setUsageOpen] = useState(false);
+	// One lifted ShareDialog for the whole list — the kebab's "Can edit…" opens it.
+	const [shareTarget, setShareTarget] = useState<Id<"conversations"> | null>(
+		null,
+	);
+
+	const renderRow = (convo: (typeof conversations)[number]) => (
+		<ConversationRow
+			key={convo._id}
+			convo={convo}
+			workspaces={workspaces}
+			active={activeConvoId === convo._id}
+			streaming={streamingConvoIds.has(convo._id)}
+			done={doneConvoIds.has(convo._id)}
+			tintEnabled
+			onSelect={(id) => onSelect(id)}
+			onForked={(id) => onSelect(id)}
+			onRequestShare={(id) => setShareTarget(id)}
+			onDeleted={() => {
+				if (activeConvoId === convo._id) onSelect(null);
+			}}
+		/>
+	);
 
 	return (
 		<div className="flex h-full w-[280px] flex-col bg-background">
@@ -1248,79 +1275,20 @@ function ChatSidebar({
 					</p>
 				) : (
 					<div className="space-y-4">
+						{pinned.length > 0 && (
+							<div>
+								<p className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+									Pinned
+								</p>
+								{pinned.map((convo) => renderRow(convo))}
+							</div>
+						)}
 						{grouped.map((group) => (
 							<div key={group.label}>
 								<p className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
 									{group.label}
 								</p>
-								{group.items.map((convo) => (
-									<div key={convo._id} className="group relative">
-										<button
-											type="button"
-											onClick={() => onSelect(convo._id)}
-											className={cn(
-												"flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs transition-colors",
-												activeConvoId === convo._id
-													? "bg-muted text-foreground"
-													: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-											)}
-										>
-											<AnimatePresence mode="wait">
-												{streamingConvoIds.has(convo._id) ? (
-													<motion.span
-														key="spinner"
-														initial={{ opacity: 0, scale: 0.5 }}
-														animate={{ opacity: 1, scale: 1 }}
-														exit={{ opacity: 0, scale: 0.5 }}
-														transition={{ duration: 0.15 }}
-														className="flex shrink-0"
-													>
-														<RoseCurveSpinner
-															size={12}
-															className="text-muted-foreground"
-														/>
-													</motion.span>
-												) : doneConvoIds.has(convo._id) ? (
-													<motion.span
-														key="check"
-														initial={{ opacity: 0, scale: 0.5 }}
-														animate={{ opacity: 1, scale: 1 }}
-														exit={{ opacity: 0, scale: 0.5 }}
-														transition={{ duration: 0.15 }}
-														className="flex shrink-0"
-													>
-														<Check size={12} className="text-emerald-500" />
-													</motion.span>
-												) : (
-													<motion.span
-														key="icon"
-														initial={{ opacity: 0, scale: 0.5 }}
-														animate={{ opacity: 1, scale: 1 }}
-														exit={{ opacity: 0, scale: 0.5 }}
-														transition={{ duration: 0.15 }}
-														className="flex shrink-0"
-													>
-														<MessageSquare size={12} />
-													</motion.span>
-												)}
-											</AnimatePresence>
-											<span className="truncate">{convo.title}</span>
-										</button>
-										<Button
-											variant="ghost"
-											size="icon-xs"
-											className="absolute right-1 top-1 opacity-0 group-hover:opacity-100"
-											onClick={(e) => {
-												e.stopPropagation();
-												removeConvo.mutate({
-													id: convo._id,
-												});
-											}}
-										>
-											<Trash2 size={10} />
-										</Button>
-									</div>
-								))}
+								{group.items.map((convo) => renderRow(convo))}
 							</div>
 						))}
 					</div>
@@ -1368,6 +1336,15 @@ function ChatSidebar({
 
 			<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 			<UsageDialog open={usageOpen} onOpenChange={setUsageOpen} />
+			{shareTarget && (
+				<ShareDialog
+					conversationId={shareTarget}
+					open={shareTarget !== null}
+					onOpenChange={(o) => {
+						if (!o) setShareTarget(null);
+					}}
+				/>
+			)}
 		</div>
 	);
 }

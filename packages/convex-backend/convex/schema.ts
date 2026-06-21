@@ -139,6 +139,10 @@ export default defineSchema({
 		// from summary") — provenance + lets the agent route seed its context
 		// from the summary instead of the full transcript.
 		seededFromCompactionId: v.optional(v.id("compactions")),
+		// Timestamp the conversation was pinned (Date.now()); undefined = not
+		// pinned. A number (not a bool) so pinned chats sort by most-recently
+		// pinned. Pinned chats render in a dedicated "Pinned" sidebar section.
+		pinnedAt: v.optional(v.number()),
 	})
 		.index("by_user", ["userId"])
 		.index("by_user_last_message", ["userId", "lastMessageAt"])
