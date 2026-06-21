@@ -20,16 +20,22 @@
 
 Harness is a thin, fast control plane over **whatever coding agent you want to drive** — Claude Code, Codex CLI, or Cursor, each in its own cloud sandbox — plus a built-in 10-model chat for when you don't want an agent at all. Your model bill stays on your account, your credentials are encrypted write-only, and every sensitive command surfaces an approval card before it runs.
 
-<p align="center"><img src="./assets/screenshots/hero-chat.png" alt="Harness — a coding agent session: an MCP doc lookup, a terminal build, a file edit, a subagent, and a workflow in one chat" width="960" /></p>
+<p align="center"><img src="./assets/screenshots/real-agent-hero.png" alt="Harness — a live Claude Code session exploring a sandbox: real tool calls, a terminal run with exit 0, and the output" width="960" /></p>
+
+<div align="center"><sub>A real Claude Code run in a cloud sandbox — not a mockup.</sub></div>
 
 <div align="center">
 
 <details>
-<summary><b>More screenshots</b> — subagents &amp; workflows, MCP, harnesses, sharing</summary>
+<summary><b>More screenshots</b> — background agents, planning, approvals, MCP, harnesses, sharing</summary>
 
 <br/>
 
-<img src="./assets/screenshots/agent-workflow.png" alt="A subagent audit and a multi-phase Workflow card in the transcript" width="900" />
+<img src="./assets/screenshots/agents-sidebar.png" alt="Live background-agents panel — two subagents running in parallel with their steps" width="900" />
+
+<img src="./assets/screenshots/agent-plan.png" alt="A multi-step agent run — the plan, file edits, and a passing test suite" width="900" />
+
+<img src="./assets/screenshots/approval-card.png" alt="An approval card — the agent asks before writing a file" width="900" />
 
 <img src="./assets/screenshots/mcp-context7.png" alt="MCP servers on a harness — Context7 connected" width="900" />
 
