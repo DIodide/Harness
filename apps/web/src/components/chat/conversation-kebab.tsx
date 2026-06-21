@@ -63,12 +63,14 @@ export function ConversationKebab({
 	onRequestShare,
 	onForked,
 	onDeleted,
+	onMoved,
 }: {
 	convo: KebabConversation;
 	workspaces: KebabWorkspace[];
 	onRequestShare: (id: Id<"conversations">) => void;
 	onForked?: (id: Id<"conversations">) => void;
 	onDeleted?: (id: Id<"conversations">) => void;
+	onMoved?: (id: Id<"conversations">) => void;
 }) {
 	const { user } = useUser();
 	const ownerProfile = {
@@ -116,18 +118,34 @@ export function ConversationKebab({
 	};
 
 	const handleCopyLink = async () => {
-		try {
-			const { token } = await ensureLink.mutateAsync({
+		// The token comes from a network round-trip, so a plain await-then-copy
+		// loses the user-gesture window and Safari refuses the clipboard write.
+		// Initiate the write SYNCHRONOUSLY with a promised value where supported.
+		const urlPromise = ensureLink
+			.mutateAsync({
 				conversationId: convo._id,
 				role: "viewer",
 				token: generateShareToken(),
 				...ownerProfile,
-			});
-			if (await copyToClipboard(buildShareUrl(token)))
+			})
+			.then(({ token }) => buildShareUrl(token));
+		try {
+			if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+				await navigator.clipboard.write([
+					new ClipboardItem({
+						"text/plain": urlPromise.then(
+							(url) => new Blob([url], { type: "text/plain" }),
+						),
+					}),
+				]);
 				toast.success("Link copied");
+				return;
+			}
+			const url = await urlPromise;
+			if (await copyToClipboard(url)) toast.success("Link copied");
 			else toast.error("Couldn't copy — use the Share dialog");
 		} catch {
-			toast.error("Couldn't create the link");
+			toast.error("Couldn't copy the link — use the Share dialog");
 		}
 	};
 
@@ -139,9 +157,13 @@ export function ConversationKebab({
 				token: generateShareToken(),
 				...ownerProfile,
 			});
-			if (role !== "viewer")
+			if (role !== "viewer") {
 				await setRole.mutateAsync({ grantId, role: "viewer" });
-			toast.success("Shared — view only");
+				// Be explicit: existing collaborators just lost send access.
+				toast.success("Editing turned off — link is now view-only");
+			} else {
+				toast.success("Shared — view only");
+			}
 		} catch {
 			toast.error("Couldn't share");
 		}
@@ -151,6 +173,7 @@ export function ConversationKebab({
 		try {
 			await move.mutateAsync({ id: convo._id, workspaceId });
 			toast.success("Moved");
+			onMoved?.(convo._id);
 		} catch {
 			toast.error("Couldn't move");
 		}
@@ -229,7 +252,10 @@ export function ConversationKebab({
 							return (
 								<DropdownMenuItem
 									key={w._id}
-									onClick={() => handleMove(w.isDefault ? undefined : w._id)}
+									onClick={() => {
+										// Re-selecting the current workspace is a no-op.
+										if (!here) handleMove(w.isDefault ? undefined : w._id);
+									}}
 								>
 									{here ? (
 										<Check size={12} />

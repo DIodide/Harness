@@ -1165,6 +1165,12 @@ function WorkspaceSidebar({
 			onDeleted={() => {
 				if (activeConvoId === convo._id) onSelect(null);
 			}}
+			onMoved={() => {
+				// In a workspace-scoped view, a moved chat leaves the current list
+				// (same-workspace moves are guarded out) — deselect so we don't
+				// strand an orphaned open pane.
+				if (activeConvoId === convo._id) onSelect(null);
+			}}
 		/>
 	);
 

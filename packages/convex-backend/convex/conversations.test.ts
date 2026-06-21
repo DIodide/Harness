@@ -100,6 +100,27 @@ describe("conversations.list", () => {
 		const rows2 = await a.query(api.conversations.list, {});
 		expect(rows2[0].title).toBe("c1");
 	});
+
+	it("keeps a pinned chat visible even when it's far outside the recency window", async () => {
+		const a = makeT().asUser("u-a");
+		const h = await a.mutation(api.harnesses.create, baseHarness());
+		// Oldest conversation — pin it, then bury it under 110 newer ones (past
+		// the 100-row recency cap). The separate pinned fetch must still surface it.
+		const old = await a.mutation(api.conversations.create, {
+			title: "old-pinned",
+			harnessId: h,
+		});
+		await a.mutation(api.conversations.setPinned, { id: old, pinned: true });
+		for (let i = 0; i < 110; i++) {
+			await a.mutation(api.conversations.create, {
+				title: `filler-${i}`,
+				harnessId: h,
+			});
+		}
+		const rows = await a.query(api.conversations.list, {});
+		expect(rows[0].title).toBe("old-pinned");
+		expect(rows.some((c) => c.title === "old-pinned")).toBe(true);
+	});
 });
 
 describe("conversations.create", () => {
@@ -282,6 +303,37 @@ describe("conversations.fork", () => {
 		});
 		expect((await a.query(api.conversations.get, { id: f3 }))?.title).toBe(
 			"Recipes (fork 3)",
+		);
+	});
+
+	it("fork-naming prefix scan doesn't false-match a different, longer title", async () => {
+		const { raw, asUser } = makeT();
+		const a = asUser("u-a");
+		const h = await a.mutation(api.harnesses.create, baseHarness());
+		// "Doc" and "Document" share a prefix; a fork of "Doc" must not treat
+		// "Document" as a sibling (nextForkTitle requires an exact base match).
+		const doc = await a.mutation(api.conversations.create, {
+			title: "Doc",
+			harnessId: h,
+		});
+		await a.mutation(api.conversations.create, {
+			title: "Document",
+			harnessId: h,
+		});
+		const msg = await raw.run(async (ctx) =>
+			ctx.db.insert("messages", {
+				conversationId: doc,
+				role: "user",
+				content: "x",
+				userId: "u-a",
+			}),
+		);
+		const f = await a.mutation(api.conversations.fork, {
+			conversationId: doc,
+			upToMessageId: msg,
+		});
+		expect((await a.query(api.conversations.get, { id: f }))?.title).toBe(
+			"Doc (fork)",
 		);
 	});
 

@@ -8,6 +8,10 @@ import { getOrCreateDefaultWorkspace } from "./workspaces";
 // Trailing "(fork)" / "(fork N)" suffix, case-insensitive, tolerant of spacing.
 const FORK_SUFFIX = /\s*\(fork(?:\s+\d+)?\)$/i;
 
+// High code point that sorts after any normal title char, for prefix-range
+// scans ("title >= base AND title < base+PREFIX_END" → titles starting with base).
+const PREFIX_END = "￿";
+
 /** Strip an existing fork suffix so re-forking a fork yields "(fork 2)", not
  *  "(fork) (fork)". */
 function forkBaseTitle(title: string): string {
@@ -34,8 +38,9 @@ function nextForkTitle(rawBase: string, siblingTitles: string[]): string {
 	return `${base} (fork ${n})`;
 }
 
-/** Pinned conversations first (most-recently-pinned on top), then by recency.
- *  The input is already lastMessageAt-desc, so the final tiebreak is stable. */
+const LIST_CAP = 100;
+
+/** Pinned conversations first (most-recently-pinned on top), then by recency. */
 function sortPinnedFirst(rows: Array<Doc<"conversations">>) {
 	return [...rows].sort((a, b) => {
 		const ap = a.pinnedAt != null;
@@ -46,6 +51,27 @@ function sortPinnedFirst(rows: Array<Doc<"conversations">>) {
 	});
 }
 
+/**
+ * Merge the always-included pinned rows with the recency window: drop edit-fork
+ * sibling rows (not user-visible), dedupe, then pinned-first. Fetching pinned
+ * SEPARATELY guarantees a pinned chat is never truncated out by the recency cap,
+ * and filtering edit-forks server-side keeps the cap spent on visible chats.
+ */
+function mergeConversationList(
+	pinned: Array<Doc<"conversations">>,
+	recent: Array<Doc<"conversations">>,
+) {
+	const seen = new Set<string>();
+	const out: Array<Doc<"conversations">> = [];
+	for (const c of [...pinned, ...recent]) {
+		if (c.editParentConversationId) continue;
+		if (seen.has(c._id)) continue;
+		seen.add(c._id);
+		out.push(c);
+	}
+	return sortPinnedFirst(out);
+}
+
 export const list = query({
 	args: { workspaceId: v.optional(v.id("workspaces")) },
 	handler: async (ctx, args) => {
@@ -54,26 +80,40 @@ export const list = query({
 		if (args.workspaceId) {
 			const workspace = await ctx.db.get(args.workspaceId);
 			if (!workspace || workspace.userId !== identity.subject) return [];
-			const rows = await ctx.db
+			const recent = await ctx.db
 				.query("conversations")
 				.withIndex("by_workspace_last_message", (q) =>
 					q.eq("workspaceId", args.workspaceId),
 				)
 				.order("desc")
-				.take(50);
-			return sortPinnedFirst(rows);
+				.take(LIST_CAP);
+			const pinned = await ctx.db
+				.query("conversations")
+				.withIndex("by_workspace_pinned", (q) =>
+					q.eq("workspaceId", args.workspaceId).gt("pinnedAt", 0),
+				)
+				.order("desc")
+				.take(LIST_CAP);
+			return mergeConversationList(pinned, recent);
 		}
 		// /chat lists ALL the user's recent conversations regardless of workspace
 		// (workspace-assigned ones are tinted client-side). Previously this
 		// excluded any conversation with a workspaceId.
-		const rows = await ctx.db
+		const recent = await ctx.db
 			.query("conversations")
 			.withIndex("by_user_last_message", (q) =>
 				q.eq("userId", identity.subject),
 			)
 			.order("desc")
-			.take(50);
-		return sortPinnedFirst(rows);
+			.take(LIST_CAP);
+		const pinned = await ctx.db
+			.query("conversations")
+			.withIndex("by_user_pinned", (q) =>
+				q.eq("userId", identity.subject).gt("pinnedAt", 0),
+			)
+			.order("desc")
+			.take(LIST_CAP);
+		return mergeConversationList(pinned, recent);
 	},
 });
 
@@ -272,10 +312,18 @@ export const fork = mutation({
 		}
 
 		// Name the fork "X (fork)" / "X (fork N)" relative to the user's existing
-		// titles (computed in-transaction so concurrent forks don't collide).
+		// titles. Scan only titles sharing the stripped base prefix (exact, via
+		// the by_user_title index) so naming is correct even on large accounts —
+		// an unordered global cap could miss recent forks.
+		const base = forkBaseTitle(convo.title);
 		const siblings = await ctx.db
 			.query("conversations")
-			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.withIndex("by_user_title", (q) =>
+				q
+					.eq("userId", identity.subject)
+					.gte("title", base)
+					.lt("title", `${base}${PREFIX_END}`),
+			)
 			.take(2000);
 		const title = nextForkTitle(
 			convo.title,

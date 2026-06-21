@@ -27,6 +27,7 @@ export function ConversationRow({
 	onForked,
 	onRequestShare,
 	onDeleted,
+	onMoved,
 }: {
 	convo: KebabConversation;
 	workspaces: KebabWorkspace[];
@@ -39,33 +40,39 @@ export function ConversationRow({
 	onForked: (id: Id<"conversations">) => void;
 	onRequestShare: (id: Id<"conversations">) => void;
 	onDeleted: (id: Id<"conversations">) => void;
+	onMoved?: (id: Id<"conversations">) => void;
 }) {
 	const tint = tintEnabled
 		? getConversationTintHex(convo.workspaceId, workspaces)
 		: null;
 
 	return (
-		<div className="group relative">
+		// The tint wash + left accent bar live on the WRAPPER: an inset box-shadow
+		// draws the 2px bar without shifting the text, and the row button stays
+		// transparent over the wash so its hover overlay still reads.
+		<div
+			className="group relative"
+			style={
+				tint
+					? {
+							backgroundColor: `color-mix(in srgb, ${tint} 14%, transparent)`,
+							boxShadow: `inset 2px 0 0 0 ${tint}`,
+						}
+					: undefined
+			}
+		>
 			<button
 				type="button"
 				onClick={() => onSelect(convo._id)}
-				style={
-					tint
-						? {
-								borderLeftColor: tint,
-								backgroundColor: `color-mix(in srgb, ${tint} 14%, transparent)`,
-							}
-						: undefined
-				}
 				className={cn(
 					"flex w-full items-center gap-2 py-1.5 pr-7 pl-2 text-left text-xs transition-colors",
-					tint && "border-l-2",
-					active && !tint && "bg-muted text-foreground",
-					active &&
-						tint &&
-						"text-foreground ring-1 ring-foreground/30 ring-inset",
-					!active &&
-						"text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+					tint
+						? active
+							? "text-foreground ring-1 ring-foreground/30 ring-inset"
+							: "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
+						: active
+							? "bg-muted text-foreground"
+							: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
 				)}
 			>
 				<AnimatePresence mode="wait">
@@ -112,6 +119,7 @@ export function ConversationRow({
 				onRequestShare={onRequestShare}
 				onForked={onForked}
 				onDeleted={onDeleted}
+				onMoved={onMoved}
 			/>
 		</div>
 	);

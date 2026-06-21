@@ -147,6 +147,13 @@ export default defineSchema({
 		.index("by_user", ["userId"])
 		.index("by_user_last_message", ["userId", "lastMessageAt"])
 		.index("by_workspace_last_message", ["workspaceId", "lastMessageAt"])
+		// Pinned chats are fetched independently of the recency window so they
+		// never fall out of the sidebar once a user has 50+ newer chats.
+		.index("by_user_pinned", ["userId", "pinnedAt"])
+		.index("by_workspace_pinned", ["workspaceId", "pinnedAt"])
+		// Exact title-prefix scan for fork-sibling naming (avoids an unordered
+		// global cap that could miss recent forks on large accounts).
+		.index("by_user_title", ["userId", "title"])
 		.searchIndex("search_title", {
 			searchField: "title",
 			filterFields: ["userId", "workspaceId"],
