@@ -1,0 +1,250 @@
+"""Per-user, workspace-assignable environment-variable credentials.
+
+A "workspace credential" is a named secret (e.g. GITHUB_TOKEN, LINEAR_API_KEY)
+that the user creates once and assigns to one or more workspaces. At run time
+the assigned credentials are decrypted here and injected as environment
+variables into whatever sandbox runs the workspace's code — the ACP agent
+sandbox AND standalone code-execution sandboxes.
+
+Security (mirrors agents/credentials.py):
+  * Plaintext exists only transiently in this process. The browser submits a
+    value over HTTPS (Clerk JWT), we AES-256-GCM encrypt it with the key held
+    only in this FastAPI env, and Convex stores ciphertext. The value is never
+    returned to the browser.
+  * Decrypted values ride ONLY `sandbox.process.exec(..., env=...)`. They are
+    NEVER written to the on-disk launcher, baked into a snapshot, or logged
+    (commit 9f7bf0a). Do not add the env dict to any log line.
+  * The Convex deploy key can read any tenant, so every internal fn re-checks
+    `row.userId === userId`; we always pass the authenticated user_id through.
+"""
+
+import asyncio
+import contextlib
+import logging
+import re
+
+import httpx
+
+from app.services.convex import (
+    ConvexMutationError,
+    query_convex,
+    run_convex_mutation,
+)
+from app.services.secrets_crypto import (
+    MAX_SECRET_LENGTH,
+    CredentialCryptoError,
+    decrypt_secret,
+    encrypt_secret,
+)
+
+logger = logging.getLogger(__name__)
+
+# A POSIX-ish env-var name: a letter/underscore followed by letters/digits/
+# underscores. Rejects lowercase-only? No — env names are case-sensitive, so
+# both GITHUB_TOKEN and my_var are allowed by shape; the denylist below is what
+# blocks dangerous names.
+_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+MAX_ENV_NAME_LENGTH = 128
+
+# Exact names that must never be user-settable (compared case-insensitively).
+# These either let a credential hijack process behavior (loader/runtime
+# injection, the login shell), impersonate the agent's own auth, or leak the
+# server's secrets. The user explicitly chose to reject these at creation time.
+_RESERVED_NAMES: frozenset[str] = frozenset(
+    n.upper()
+    for n in (
+        # Shell / process environment
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "PWD",
+        "OLDPWD",
+        "TMPDIR",
+        "IFS",
+        "ENV",
+        "BASH_ENV",
+        "PS1",
+        "PS2",
+        "PS4",
+        "PROMPT_COMMAND",
+        # Loader / language-runtime injection
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "PERL5LIB",
+        "RUBYOPT",
+        "GEM_PATH",
+        "GIT_SSH_COMMAND",
+        # Harness ACP shim / launcher internals
+        "SHIM_PORT",
+        "SHIM_TOKEN",
+        "AGENT_CMD",
+        "CODEX_HOME",
+        "CLAUDE_HOME",
+        # Agent auth (managed by agent credentials, not here)
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY",
+        "CURSOR_API_KEY",
+        # Server secrets — must never originate from a user value
+        "AGENT_CREDENTIALS_KEY",
+        "CONVEX_DEPLOY_KEY",
+        "CONVEX_URL",
+    )
+)
+
+# Name prefixes that are categorically dangerous (case-insensitive):
+#   LD_*    dynamic-linker injection on Linux (LD_PRELOAD, LD_LIBRARY_PATH, …)
+#   DYLD_*  the macOS equivalent
+#   BASH_FUNC_*  exported shell functions (shellshock-style injection)
+_RESERVED_PREFIXES: tuple[str, ...] = ("LD_", "DYLD_", "BASH_FUNC_")
+
+
+class WorkspaceCredentialError(Exception):
+    """A workspace credential could not be stored or resolved."""
+
+
+def validate_env_credential(name: str, value: str) -> str | None:
+    """Sanity-check a submitted env-var credential.
+
+    Returns a human-readable error string, or None when the credential is OK.
+    """
+    name = name or ""
+    if not _NAME_RE.match(name):
+        return (
+            "Name must start with a letter or underscore and contain only "
+            "letters, digits, and underscores (e.g. GITHUB_TOKEN)."
+        )
+    if len(name) > MAX_ENV_NAME_LENGTH:
+        return "Name is too long."
+    upper = name.upper()
+    if upper in _RESERVED_NAMES or any(
+        upper.startswith(p) for p in _RESERVED_PREFIXES
+    ):
+        return (
+            f"'{name}' is a reserved name and can't be used as a credential "
+            "(it controls how the sandbox runs or is managed elsewhere)."
+        )
+    if not value or not value.strip():
+        return "Value is empty."
+    if len(value) > MAX_SECRET_LENGTH:
+        return "Value is too large."
+    return None
+
+
+async def store_workspace_credential(
+    http_client: httpx.AsyncClient,
+    user_id: str,
+    name: str,
+    value: str,
+    label: str | None = None,
+    credential_id: str | None = None,
+) -> str:
+    """Encrypt and persist a workspace credential. Returns its id.
+
+    Without credential_id this upserts by (user, name): re-creating an existing
+    name rotates its value. With credential_id the specific row is rotated in
+    place (ownership re-checked in Convex).
+    """
+    ciphertext = encrypt_secret(value)
+    try:
+        if credential_id:
+            result = await run_convex_mutation(
+                http_client,
+                "workspaceCredentials:updateSecret",
+                {
+                    "credentialId": credential_id,
+                    "userId": user_id,
+                    "ciphertext": ciphertext,
+                    **({"label": label} if label else {}),
+                },
+            )
+        else:
+            result = await run_convex_mutation(
+                http_client,
+                "workspaceCredentials:create",
+                {
+                    "userId": user_id,
+                    "name": name,
+                    "ciphertext": ciphertext,
+                    **({"label": label} if label else {}),
+                },
+            )
+    except ConvexMutationError as e:
+        raise WorkspaceCredentialError(
+            f"Could not save the credential: {e}"
+        ) from e
+    return str(result)
+
+
+async def resolve_workspace_env(
+    http_client: httpx.AsyncClient,
+    workspace_id: str,
+    user_id: str,
+) -> dict[str, str]:
+    """Resolve a workspace's assigned credentials to a {NAME: value} env dict.
+
+    Best-effort: a credential that fails to decrypt (e.g. after a key rotation)
+    is skipped with a logged error rather than failing the whole run — it is
+    supplementary env, not the agent's own auth. Returns {} when the workspace
+    has no assigned credentials, isn't owned by the user, or Convex is down.
+
+    NEVER log the returned dict — it holds plaintext secrets.
+    """
+    if not workspace_id or not user_id:
+        return {}
+    rows = await query_convex(
+        http_client,
+        "workspaceCredentials:getForWorkspace",
+        {"workspaceId": workspace_id, "userId": user_id},
+    )
+    if not rows:
+        return {}
+
+    env: dict[str, str] = {}
+    touch_ids: list[str] = []
+    for row in rows:
+        name = row.get("name")
+        ciphertext = row.get("ciphertext")
+        if not name or not ciphertext:
+            continue
+        try:
+            env[name] = decrypt_secret(ciphertext)
+        except CredentialCryptoError as e:
+            logger.error(
+                "Workspace credential '%s' (workspace '%s', user '%s') is "
+                "unreadable and will be skipped: %s",
+                name,
+                workspace_id,
+                user_id,
+                e,
+            )
+            continue
+        cid = row.get("credentialId")
+        if cid:
+            touch_ids.append(cid)
+
+    if touch_ids:
+        await _touch_all(http_client, touch_ids)
+    return env
+
+
+async def _touch_all(
+    http_client: httpx.AsyncClient, credential_ids: list[str]
+) -> None:
+    """Fire lastUsedAt bumps concurrently; failures are ignored (best-effort)."""
+
+    async def _one(cid: str) -> None:
+        with contextlib.suppress(ConvexMutationError):
+            await run_convex_mutation(
+                http_client,
+                "workspaceCredentials:touch",
+                {"credentialId": cid},
+            )
+
+    await asyncio.gather(*(_one(cid) for cid in credential_ids))

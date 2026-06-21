@@ -388,6 +388,7 @@ def execute_sandbox_tool(
     tool_name: str,
     arguments: dict,
     git_credentials: dict | None = None,
+    env: dict[str, str] | None = None,
 ) -> str:
     """
     Execute a sandbox tool and return the result as a JSON string.
@@ -397,6 +398,8 @@ def execute_sandbox_tool(
 
     git_credentials: optional dict with 'username' and 'password' keys,
         resolved from the user's GitHub MCP OAuth token.
+    env: optional workspace credentials injected as env vars into code/command
+        execution. Passed only to the Daytona SDK call — NEVER logged.
     """
     try:
         # Strip the sandbox__ prefix for dispatch
@@ -408,6 +411,7 @@ def execute_sandbox_tool(
                 arguments["code"],
                 arguments.get("language", "python"),
                 arguments.get("timeout", 30),
+                env=env or None,
             )
             payload: dict = {
                 "type": "code_execution",
@@ -427,6 +431,7 @@ def execute_sandbox_tool(
                 arguments["command"],
                 arguments.get("working_directory", "/home/daytona"),
                 arguments.get("timeout", 60),
+                env=env or None,
             )
             return json.dumps({
                 "type": "command_result",

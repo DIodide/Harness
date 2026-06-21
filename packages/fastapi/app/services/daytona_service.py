@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from daytona_sdk import (
+    CodeRunParams,
     CreateSandboxFromSnapshotParams,
     Daytona,
     DaytonaConfig,
@@ -315,8 +316,13 @@ class DaytonaService:
         code: str,
         language: str = "python",
         timeout: int = 30,
+        env: dict[str, str] | None = None,
     ) -> CodeExecutionResult:
-        """Execute code in a sandbox (stateless)."""
+        """Execute code in a sandbox (stateless).
+
+        `env` (e.g. resolved workspace credentials) is passed only to the SDK
+        call — it is never logged. NEVER add it to any log line below.
+        """
         sandbox = self._ensure_running(sandbox_id)
         logger.info(
             "Executing %s code in sandbox '%s' (timeout=%ds)",
@@ -325,7 +331,9 @@ class DaytonaService:
 
         start = time.time()
         response = sandbox.process.code_run(
-            code, timeout=timeout,
+            code,
+            params=CodeRunParams(env=env) if env else None,
+            timeout=timeout,
         )
         elapsed = time.time() - start
 
@@ -358,15 +366,20 @@ class DaytonaService:
         command: str,
         cwd: str = "/home/daytona",
         timeout: int = 60,
+        env: dict[str, str] | None = None,
     ) -> CommandResult:
-        """Execute a shell command in a sandbox."""
+        """Execute a shell command in a sandbox.
+
+        `env` (e.g. resolved workspace credentials) is passed only to the SDK
+        call — it is never logged. NEVER add it to the command log line.
+        """
         sandbox = self._ensure_running(sandbox_id)
         logger.info(
             "Running command in sandbox '%s': %s",
             sandbox_id, command[:100],
         )
         response = sandbox.process.exec(
-            command, cwd=cwd, timeout=timeout,
+            command, cwd=cwd, timeout=timeout, env=env or None,
         )
         return CommandResult(
             exit_code=response.exit_code,

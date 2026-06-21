@@ -7,11 +7,8 @@ the ciphertext is fetched, decrypted, and materialized into the sandbox
 (auth file or env var). The browser can never read a stored value back.
 """
 
-import base64
-import hashlib
 import json
 import logging
-import os
 
 import httpx
 
@@ -22,6 +19,12 @@ from app.services.agents.registry import (
     AgentCredentialsError,
 )
 from app.services.convex import ConvexMutationError, query_convex, run_convex_mutation
+from app.services.secrets_crypto import (
+    MAX_SECRET_LENGTH,
+    CredentialCryptoError,
+    decrypt_secret,
+    encrypt_secret,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,43 +35,10 @@ VALID_KINDS: dict[str, set[str]] = {
     "cursor": {"auth_json", "api_key"},
 }
 
-MAX_SECRET_LENGTH = 32_768
-
-
-class CredentialCryptoError(Exception):
-    """Encryption key missing or ciphertext cannot be decrypted."""
-
-
-def _aes_key() -> bytes:
-    raw = settings.agent_credentials_key
-    if not raw:
-        raise CredentialCryptoError(
-            "AGENT_CREDENTIALS_KEY is not set — per-user agent credentials "
-            "are disabled on this deployment."
-        )
-    # Accept any non-empty string; derive a uniform 32-byte key.
-    return hashlib.sha256(raw.encode("utf-8")).digest()
-
-
-def encrypt_secret(plaintext: str) -> str:
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-    nonce = os.urandom(12)
-    sealed = AESGCM(_aes_key()).encrypt(nonce, plaintext.encode("utf-8"), None)
-    return base64.b64encode(nonce + sealed).decode("ascii")
-
-
-def decrypt_secret(ciphertext_b64: str) -> str:
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-    try:
-        blob = base64.b64decode(ciphertext_b64)
-        nonce, sealed = blob[:12], blob[12:]
-        return AESGCM(_aes_key()).decrypt(nonce, sealed, None).decode("utf-8")
-    except CredentialCryptoError:
-        raise
-    except Exception as e:
-        raise CredentialCryptoError(f"Failed to decrypt credential: {e}") from e
+# Crypto (encrypt_secret / decrypt_secret / MAX_SECRET_LENGTH /
+# CredentialCryptoError) now lives in app.services.secrets_crypto and is
+# re-imported above so existing call sites here stay unchanged. One key
+# (AGENT_CREDENTIALS_KEY), one rotation story across agent + workspace creds.
 
 
 def validate_secret(agent_id: str, kind: str, value: str) -> str | None:

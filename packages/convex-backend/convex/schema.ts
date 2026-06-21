@@ -280,6 +280,37 @@ export default defineSchema({
 		.index("by_user", ["userId"])
 		.index("by_user_agent", ["userId", "agent"]),
 
+	// Per-user named env-var secrets ("credentials"), assignable to workspaces and
+	// injected into the workspace/agent sandbox at run time. `name` is the env var
+	// NAME (e.g. GITHUB_TOKEN) — NOT secret; `ciphertext` is AES-256-GCM(value)
+	// encrypted by FastAPI with the same AGENT_CREDENTIALS_KEY as agentCredentials.
+	// Convex and the browser never see the plaintext value.
+	workspaceCredentials: defineTable({
+		userId: v.string(),
+		name: v.string(),
+		ciphertext: v.string(),
+		label: v.optional(v.string()),
+		createdAt: v.number(),
+		lastUsedAt: v.optional(v.number()),
+	})
+		.index("by_user", ["userId"])
+		// One credential per env-var name per user (dedupe / upsert-by-name).
+		.index("by_user_name", ["userId", "name"]),
+
+	// Join: which credentials are assigned to which workspace (M:N). A dedicated
+	// table (not an array field) keeps the workspace→creds inject-time lookup a
+	// single index scan and makes per-row ownership re-checks + cascade-delete
+	// clean.
+	credentialAssignments: defineTable({
+		userId: v.string(),
+		credentialId: v.id("workspaceCredentials"),
+		workspaceId: v.id("workspaces"),
+		createdAt: v.number(),
+	})
+		.index("by_workspace", ["workspaceId"])
+		.index("by_credential", ["credentialId"])
+		.index("by_workspace_credential", ["workspaceId", "credentialId"]),
+
 	mcpOAuthTokens: defineTable({
 		userId: v.string(),
 		mcpServerUrl: v.string(),

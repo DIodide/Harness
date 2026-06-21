@@ -38,6 +38,7 @@ from app.services.daytona_service import (
     _sandbox_state,
     get_daytona_service,
 )
+from app.services.workspace_credentials import resolve_workspace_env
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -45,6 +46,31 @@ logger = logging.getLogger(__name__)
 
 def _get_service() -> DaytonaService:
     return get_daytona_service()
+
+
+async def _resolve_workspace_env(
+    http_client: httpx.AsyncClient,
+    workspace_id: str | None,
+    user: dict,
+) -> dict[str, str] | None:
+    """Resolve a workspace's assigned credentials for code/command execution.
+
+    Ownership of the workspace is re-checked server-side inside
+    resolve_workspace_env. Best-effort: returns None when there's no workspace,
+    no assigned credentials, or resolution fails — never blocks execution.
+    NEVER log the result.
+    """
+    if not workspace_id:
+        return None
+    try:
+        env = await resolve_workspace_env(http_client, workspace_id, user["sub"])
+    except Exception:
+        logger.warning(
+            "Failed to resolve workspace credentials for sandbox execution",
+            exc_info=True,
+        )
+        return None
+    return env or None
 
 
 async def _assert_sandbox_owner(sandbox_id: str, user: dict) -> None:
@@ -236,13 +262,15 @@ async def execute_code(
     sandbox_id: str,
     body: SandboxExecuteRequest,
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Execute code in a sandbox."""
     await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
+    env = await _resolve_workspace_env(http_client, body.workspace_id, user)
     try:
         result = service.execute_code(
-            sandbox_id, body.code, body.language, body.timeout
+            sandbox_id, body.code, body.language, body.timeout, env=env
         )
         return {
             "exit_code": result.exit_code,
@@ -260,13 +288,16 @@ async def run_command(
     sandbox_id: str,
     body: SandboxCommandRequest,
     user: dict = Depends(get_current_user),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Run a shell command in a sandbox."""
     await _assert_sandbox_owner(sandbox_id, user)
     service = _get_service()
+    env = await _resolve_workspace_env(http_client, body.workspace_id, user)
     try:
         result = service.run_command(
-            sandbox_id, body.command, body.working_directory, body.timeout
+            sandbox_id, body.command, body.working_directory, body.timeout,
+            env=env,
         )
         return {
             "exit_code": result.exit_code,

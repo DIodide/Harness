@@ -39,6 +39,9 @@ class HarnessConfig(BaseModel):
     sandbox_enabled: bool = False
     sandbox_id: str | None = None
     sandbox_config: SandboxConfig | None = None
+    # The workspace this run belongs to. Used to resolve and inject assigned
+    # workspace credentials (env vars) into whatever sandbox runs the code.
+    workspace_id: str | None = None
 
 
 class MessagePayload(BaseModel):
@@ -118,12 +121,18 @@ class SandboxExecuteRequest(BaseModel):
     code: str
     language: Literal["python", "javascript", "typescript", "bash"] = "python"
     timeout: int = Field(default=30, gt=0, le=300)
+    # Workspace whose assigned credentials to inject as env vars (ownership
+    # re-checked server-side before any value is resolved).
+    workspace_id: str | None = None
 
 
 class SandboxCommandRequest(BaseModel):
     command: str
     working_directory: str = "/home/daytona"
     timeout: int = Field(default=60, gt=0, le=300)
+    # Workspace whose assigned credentials to inject as env vars (ownership
+    # re-checked server-side before any value is resolved).
+    workspace_id: str | None = None
 
 
 class SandboxFileWriteRequest(BaseModel):
@@ -219,6 +228,16 @@ class AgentCredentialStoreRequest(BaseModel):
     value: str  # plaintext secret; encrypted server-side, never echoed back
     label: str | None = Field(default=None, max_length=80)
     # Replace this existing credential's secret instead of creating a new one.
+    credential_id: str | None = None
+
+
+class WorkspaceCredentialStoreRequest(BaseModel):
+    # Env-var name (e.g. GITHUB_TOKEN). Validated server-side against a
+    # denylist of reserved/dangerous names.
+    name: str = Field(max_length=128)
+    value: str  # plaintext secret; encrypted server-side, never echoed back
+    label: str | None = Field(default=None, max_length=80)
+    # Rotate this existing credential's secret instead of creating a new one.
     credential_id: str | None = None
 
 
