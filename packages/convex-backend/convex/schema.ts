@@ -35,6 +35,10 @@ export default defineSchema({
 		suggestedPrompts: v.optional(v.array(v.string())),
 		userId: v.string(),
 		lastUsedAt: v.optional(v.number()),
+		// When shared, the owner can LOCK the harness: recipients may view and
+		// clone it but never edit it in place. Single source of truth for the
+		// lock (unambiguous across multiple grants). Absent = unlocked.
+		sharedLocked: v.optional(v.boolean()),
 		// Agent loop this harness runs on: "default" (Harness via OpenRouter)
 		// or an ACP agent id ("claude-code" | "codex" | "cursor"). Absent =
 		// default.
@@ -374,7 +378,46 @@ export default defineSchema({
 	})
 		.index("by_token", ["publicToken"])
 		.index("by_conversation", ["conversationId"])
-		.index("by_grantee", ["grantedToUserId"]),
+		.index("by_grantee", ["grantedToUserId"])
+		// All grants a user owns, across conversations — powers the Manage
+		// Sharing page (added to an existing populated table; reads are wrapped
+		// in tolerateBackfill during the index backfill window).
+		.index("by_owner", ["ownerUserId"]),
+
+	// Harness sharing grants. Mirrors `shareGrants` exactly (same auth model:
+	// authorization is ALWAYS resolved through an ACTIVE grant here, never a
+	// denormalized field), for harnesses instead of conversations. Three grant
+	// modes: public link (publicToken), bound per-user grant (grantedToUserId),
+	// or an email invite awaiting bind (granteeEmail — an invite POINTER, never
+	// an authorization key; it's bound to grantedToUserId only after the
+	// recipient's email is server-verified). Lock lives on the harness
+	// (`sharedLocked`), not here, so it's unambiguous across multiple grants.
+	harnessShareGrants: defineTable({
+		harnessId: v.id("harnesses"),
+		// = harness.userId at mint time (denormalized: cheap revoke + by_owner
+		// listing, and the public query never exposes the owner id).
+		ownerUserId: v.string(),
+		// Owner's public profile snapshot (name + avatar ONLY, never email),
+		// clamped at write time. Best-effort.
+		ownerName: v.optional(v.string()),
+		ownerImageUrl: v.optional(v.string()),
+		role: v.union(v.literal("viewer"), v.literal("editor")),
+		// Exactly one of these identifies the grantee.
+		grantedToUserId: v.optional(v.string()),
+		// Normalized (trim+lowercase) email invite pointer for a not-yet-bound
+		// recipient; replaced by grantedToUserId on first verified sign-in.
+		granteeEmail: v.optional(v.string()),
+		publicToken: v.optional(v.string()),
+		createdAt: v.number(),
+		expiresAt: v.optional(v.number()),
+		revokedAt: v.optional(v.number()),
+		lastAccessedAt: v.optional(v.number()),
+	})
+		.index("by_token", ["publicToken"])
+		.index("by_harness", ["harnessId"])
+		.index("by_grantee", ["grantedToUserId"])
+		.index("by_grantee_email", ["granteeEmail"])
+		.index("by_owner", ["ownerUserId"]),
 
 	skillDetails: defineTable({
 		name: v.string(),

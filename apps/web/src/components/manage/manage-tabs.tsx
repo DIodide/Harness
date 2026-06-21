@@ -4,6 +4,7 @@ import {
 	Box,
 	KeyRound,
 	Package,
+	Share2,
 	SlidersHorizontal,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -12,7 +13,7 @@ import { Button } from "../ui/button";
 
 /**
  * The "manage" destinations, shared by the tabbed header and the sidebar
- * footer rail so they can never drift. Adding a manage screen is a
+ * footer rail so they can never drift. Adding another manage screen is a
  * one-line edit here.
  *
  * `as const` is load-bearing: the typed route tree makes <Link to> strict, so
@@ -23,6 +24,7 @@ export const MANAGE_TABS = [
 	{ to: "/harnesses", label: "Harnesses", icon: SlidersHorizontal },
 	{ to: "/skill-packs", label: "Skill Packs", icon: Package },
 	{ to: "/credentials", label: "Credentials", icon: KeyRound },
+	{ to: "/manage-sharing", label: "Sharing", icon: Share2 },
 ] as const;
 
 /** True when `pathname` is `to` or any nested child of it (e.g. /sandboxes/$id). */
@@ -74,9 +76,9 @@ export function ManageTabs() {
 }
 
 /**
- * The full header band shared by all manage routes (and their loading
+ * The full header band shared by every manage route (and their loading
  * skeletons). Owns the back arrow, the tab control, the count, and a slot for
- * each page's own action buttons — so the screens can never drift.
+ * each page's own action buttons — so the manage screens can never drift.
  */
 export function ManageHeader({
 	count,

@@ -1,3 +1,4 @@
+import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
@@ -12,6 +13,7 @@ import {
 	MoreHorizontal,
 	Play,
 	Plus,
+	Share2,
 	Sparkles,
 	Square,
 	Terminal,
@@ -19,7 +21,7 @@ import {
 	Zap,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import {
 	ClaudeLogo,
@@ -29,6 +31,8 @@ import {
 import { credentialDisplayName } from "../../components/agent-loop-picker";
 import { HarnessCreationAssistant } from "../../components/harness-creation-assistant";
 import { HarnessMark } from "../../components/harness-mark";
+import { HarnessShareDialog } from "../../components/harnesses/harness-share-dialog";
+import { SharedHarnessesSection } from "../../components/harnesses/shared-harnesses-section";
 import { ManageHeader } from "../../components/manage/manage-tabs";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -55,7 +59,12 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "../../components/ui/tooltip";
+import { env } from "../../env";
 import { useAgentCatalog } from "../../lib/use-agent-catalog";
+
+const FASTAPI_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
+// Bind pending email harness-shares at most once per browser session.
+const SHARES_CLAIMED_KEY = "harnessSharesClaimed";
 
 export const Route = createFileRoute("/harnesses/")({
 	beforeLoad: ({ context }) => {
@@ -89,7 +98,45 @@ function HarnessesPage() {
 	const [deleteTarget, setDeleteTarget] = useState<Id<"harnesses"> | null>(
 		null,
 	);
+	const [shareTarget, setShareTarget] = useState<Id<"harnesses"> | null>(null);
 	const [creationAssistantOpen, setCreationAssistantOpen] = useState(false);
+
+	// Harnesses shared TO this user (bound grants). Also bind any pending email
+	// invites on mount via the FastAPI claim endpoint (verified-email match).
+	const { getToken, isSignedIn } = useAuth();
+	const { data: incomingShares } = useQuery({
+		...convexQuery(api.harnessShares.listIncomingSharedHarnesses, {}),
+		enabled: isSignedIn === true,
+	});
+	// Claim ONCE per browser session (sessionStorage, not a component ref) so the
+	// relay doesn't re-fire a Clerk lookup + bind on every navigation back here.
+	// The key is cleared on ANY non-success (network error, 401 token race, or a
+	// soft {ok:false} from a transient Clerk/Convex failure) so a real failure
+	// retries next visit instead of being suppressed for the whole session.
+	useEffect(() => {
+		if (!isSignedIn || sessionStorage.getItem(SHARES_CLAIMED_KEY)) return;
+		sessionStorage.setItem(SHARES_CLAIMED_KEY, "1");
+		const unclaim = () => {
+			try {
+				sessionStorage.removeItem(SHARES_CLAIMED_KEY);
+			} catch {}
+		};
+		(async () => {
+			try {
+				const token = await getToken({ template: "convex" });
+				const res = await fetch(`${FASTAPI_URL}/api/harness-shares/claim`, {
+					method: "POST",
+					headers: token ? { Authorization: `Bearer ${token}` } : {},
+				});
+				const body = (await res.json().catch(() => null)) as {
+					ok?: boolean;
+				} | null;
+				if (!res.ok || !body?.ok) unclaim();
+			} catch {
+				unclaim();
+			}
+		})();
+	}, [isSignedIn, getToken]);
 
 	if (isLoading) {
 		return <LoadingSkeleton />;
@@ -158,79 +205,92 @@ function HarnessesPage() {
 			/>
 
 			<div className="flex-1 p-6">
-				{harnesses?.length === 0 ? (
-					<EmptyState />
-				) : (
-					<div className="mx-auto max-w-4xl space-y-8">
-						{duplicateHarnessNames.length > 0 && (
-							<div className="flex items-start gap-2 border border-border bg-muted/40 px-4 py-3 text-xs text-foreground">
-								<AlertCircle
-									size={16}
-									className="mt-0.5 shrink-0 text-muted-foreground"
-								/>
-								<div>
-									<p className="font-medium">
-										Duplicate harness name
-										{duplicateHarnessNames.length > 1 ? "s" : ""}
-									</p>
-									<p className="mt-0.5 text-muted-foreground">
-										You have multiple harnesses named{" "}
-										{duplicateHarnessNames.map((n) => `"${n}"`).join(", ")}.
-										This is allowed, but it can make picking the right one
-										harder elsewhere — consider renaming them so each name is
-										unique.
-									</p>
+				<div className="mx-auto max-w-4xl space-y-8">
+					<SharedHarnessesSection items={incomingShares ?? []} />
+					{(harnesses?.length ?? 0) === 0 &&
+					(incomingShares?.length ?? 0) === 0 ? (
+						<EmptyState />
+					) : (
+						<>
+							{duplicateHarnessNames.length > 0 && (
+								<div className="flex items-start gap-2 border border-border bg-muted/40 px-4 py-3 text-xs text-foreground">
+									<AlertCircle
+										size={16}
+										className="mt-0.5 shrink-0 text-muted-foreground"
+									/>
+									<div>
+										<p className="font-medium">
+											Duplicate harness name
+											{duplicateHarnessNames.length > 1 ? "s" : ""}
+										</p>
+										<p className="mt-0.5 text-muted-foreground">
+											You have multiple harnesses named{" "}
+											{duplicateHarnessNames.map((n) => `"${n}"`).join(", ")}.
+											This is allowed, but it can make picking the right one
+											harder elsewhere — consider renaming them so each name is
+											unique.
+										</p>
+									</div>
 								</div>
-							</div>
-						)}
-						{active.length > 0 && (
-							<HarnessGroup
-								title="Active"
-								harnesses={active}
-								onToggle={handleToggleStatus}
-								onDelete={setDeleteTarget}
-								onDuplicate={handleDuplicate}
-								onEdit={(id) =>
-									navigate({
-										to: "/harnesses/$harnessId",
-										params: { harnessId: id },
-									})
-								}
-							/>
-						)}
-						{stopped.length > 0 && (
-							<HarnessGroup
-								title="Stopped"
-								harnesses={stopped}
-								onToggle={handleToggleStatus}
-								onDelete={setDeleteTarget}
-								onDuplicate={handleDuplicate}
-								onEdit={(id) =>
-									navigate({
-										to: "/harnesses/$harnessId",
-										params: { harnessId: id },
-									})
-								}
-							/>
-						)}
-						{drafts.length > 0 && (
-							<HarnessGroup
-								title="Drafts"
-								harnesses={drafts}
-								onToggle={handleToggleStatus}
-								onDelete={setDeleteTarget}
-								onDuplicate={handleDuplicate}
-								onEdit={(id) =>
-									navigate({
-										to: "/harnesses/$harnessId",
-										params: { harnessId: id },
-									})
-								}
-							/>
-						)}
-					</div>
-				)}
+							)}
+							{active.length > 0 && (
+								<HarnessGroup
+									title="Active"
+									harnesses={active}
+									onToggle={handleToggleStatus}
+									onDelete={setDeleteTarget}
+									onDuplicate={handleDuplicate}
+									onEdit={(id) =>
+										navigate({
+											to: "/harnesses/$harnessId",
+											params: { harnessId: id },
+										})
+									}
+									onShare={setShareTarget}
+								/>
+							)}
+							{stopped.length > 0 && (
+								<HarnessGroup
+									title="Stopped"
+									harnesses={stopped}
+									onToggle={handleToggleStatus}
+									onDelete={setDeleteTarget}
+									onDuplicate={handleDuplicate}
+									onEdit={(id) =>
+										navigate({
+											to: "/harnesses/$harnessId",
+											params: { harnessId: id },
+										})
+									}
+									onShare={setShareTarget}
+								/>
+							)}
+							{drafts.length > 0 && (
+								<HarnessGroup
+									title="Drafts"
+									harnesses={drafts}
+									onToggle={handleToggleStatus}
+									onDelete={setDeleteTarget}
+									onDuplicate={handleDuplicate}
+									onEdit={(id) =>
+										navigate({
+											to: "/harnesses/$harnessId",
+											params: { harnessId: id },
+										})
+									}
+									onShare={setShareTarget}
+								/>
+							)}
+						</>
+					)}
+				</div>
 			</div>
+
+			<HarnessShareDialog
+				harnessId={shareTarget as Id<"harnesses">}
+				open={shareTarget !== null}
+				onOpenChange={(o) => !o && setShareTarget(null)}
+			/>
 
 			<Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
 				<DialogContent>
@@ -309,6 +369,7 @@ function HarnessGroup({
 	onDelete,
 	onDuplicate,
 	onEdit,
+	onShare,
 }: {
 	title: string;
 	harnesses: HarnessRow[];
@@ -319,6 +380,7 @@ function HarnessGroup({
 	onDelete: (id: Id<"harnesses">) => void;
 	onDuplicate: (id: Id<"harnesses">) => void;
 	onEdit: (id: Id<"harnesses">) => void;
+	onShare: (id: Id<"harnesses">) => void;
 }) {
 	return (
 		<div>
@@ -342,6 +404,7 @@ function HarnessGroup({
 							onDelete={onDelete}
 							onDuplicate={onDuplicate}
 							onEdit={onEdit}
+							onShare={onShare}
 						/>
 					</motion.div>
 				))}
@@ -356,6 +419,7 @@ function HarnessCard({
 	onDelete,
 	onDuplicate,
 	onEdit,
+	onShare,
 }: {
 	harness: HarnessRow;
 	onToggle: (
@@ -365,6 +429,7 @@ function HarnessCard({
 	onDelete: (id: Id<"harnesses">) => void;
 	onDuplicate: (id: Id<"harnesses">) => void;
 	onEdit: (id: Id<"harnesses">) => void;
+	onShare: (id: Id<"harnesses">) => void;
 }) {
 	const navigate = useNavigate();
 	const { data: catalog } = useAgentCatalog();
@@ -418,6 +483,10 @@ function HarnessCard({
 							<DropdownMenuItem onClick={() => onDuplicate(harness._id)}>
 								<Copy size={12} />
 								Duplicate
+							</DropdownMenuItem>
+							<DropdownMenuItem onClick={() => onShare(harness._id)}>
+								<Share2 size={12} />
+								Share
 							</DropdownMenuItem>
 							{!isDraft && (
 								<DropdownMenuItem

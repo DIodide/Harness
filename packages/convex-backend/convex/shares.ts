@@ -26,9 +26,13 @@ import { getOrCreateDefaultWorkspace } from "./workspaces";
 
 // A client-generated 256-bit token (base64url of 32 bytes ≈ 43 chars). We
 // require a healthy minimum so a caller can't pass a guessable short string.
-const MIN_TOKEN_LENGTH = 32;
+export const MIN_TOKEN_LENGTH = 32;
 
-function isActiveGrant(grant: Doc<"shareGrants">): boolean {
+// Generic over shareGrants AND harnessShareGrants (same active semantics):
+// active = not revoked and not expired.
+export function isActiveGrant<
+	T extends { revokedAt?: number; expiresAt?: number },
+>(grant: T): boolean {
 	if (grant.revokedAt) return false;
 	if (grant.expiresAt && grant.expiresAt <= Date.now()) return false;
 	return true;
@@ -187,7 +191,7 @@ export const MAX_MESSAGE_CONTENT_CHARS = 16000;
 // arbitrary host would be a tracking-pixel beacon. Restrict to the hosts our
 // auth provider actually serves avatars from (Clerk proxies OAuth avatars
 // through img.clerk.com). A disallowed/garbage URL just falls back to initials.
-const ALLOWED_AVATAR_HOSTS = new Set([
+export const ALLOWED_AVATAR_HOSTS = new Set([
 	"img.clerk.com",
 	"images.clerk.dev",
 	"www.gravatar.com",
@@ -196,12 +200,12 @@ const ALLOWED_AVATAR_HOSTS = new Set([
 // A client-supplied author/owner snapshot is untrusted, so clamp the name and
 // accept only an https avatar URL on a known host. Name + avatar ONLY — never
 // email (locked product decision).
-function clampAuthorName(name?: string): string | undefined {
+export function clampAuthorName(name?: string): string | undefined {
 	if (!name) return undefined;
 	const trimmed = name.trim().slice(0, 80);
 	return trimmed || undefined;
 }
-function clampAuthorImageUrl(url?: string): string | undefined {
+export function clampAuthorImageUrl(url?: string): string | undefined {
 	if (!url || url.length > 2048) return undefined;
 	let parsed: URL;
 	try {
@@ -443,6 +447,75 @@ export const listShareGrants = query({
 			createdAt: g.createdAt,
 			lastAccessedAt: g.lastAccessedAt ?? null,
 		}));
+	},
+});
+
+/**
+ * Every conversation the current user has shared, grouped by conversation —
+ * powers the Manage Sharing page. Uses the `by_owner` index (added to an
+ * existing populated table); reads tolerate the backfill window.
+ */
+export const listMySharedConversations = query({
+	args: {},
+	handler: async (ctx) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return [];
+		let grants: Doc<"shareGrants">[];
+		try {
+			grants = await ctx.db
+				.query("shareGrants")
+				.withIndex("by_owner", (q) => q.eq("ownerUserId", identity.subject))
+				.collect();
+		} catch (e) {
+			// Index still backfilling on a fresh deploy → empty rather than throw.
+			if (e instanceof Error && e.message.includes("backfilling")) return [];
+			throw e;
+		}
+		const active = grants.filter(isActiveGrant);
+		const byConvo = new Map<
+			string,
+			{
+				conversationId: Id<"conversations">;
+				title: string;
+				grants: {
+					_id: Id<"shareGrants">;
+					role: "viewer" | "editor";
+					publicToken: string | null;
+					grantedToUserId: string | null;
+					createdAt: number;
+					lastAccessedAt: number | null;
+				}[];
+			}
+		>();
+		for (const g of active) {
+			const key = g.conversationId as string;
+			let entry = byConvo.get(key);
+			if (!entry) {
+				// Title needs the conversation; skip a grant whose conversation was
+				// deleted out from under it (stale grant).
+				const convo = await ctx.db.get(g.conversationId);
+				if (!convo || convo.userId !== identity.subject) continue;
+				entry = {
+					conversationId: g.conversationId,
+					title: convo.title,
+					grants: [],
+				};
+				byConvo.set(key, entry);
+			}
+			entry.grants.push({
+				_id: g._id,
+				role: g.role,
+				publicToken: g.publicToken ?? null,
+				grantedToUserId: g.grantedToUserId ?? null,
+				createdAt: g.createdAt,
+				lastAccessedAt: g.lastAccessedAt ?? null,
+			});
+		}
+		return [...byConvo.values()].sort(
+			(a, b) =>
+				Math.max(...b.grants.map((g) => g.createdAt)) -
+				Math.max(...a.grants.map((g) => g.createdAt)),
+		);
 	},
 });
 

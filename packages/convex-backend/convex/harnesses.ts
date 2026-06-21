@@ -3,9 +3,9 @@ import { internalQuery, mutation, query } from "./_generated/server";
 import { resolveConversationRole } from "./shares";
 
 /** Match apps/web `SYSTEM_PROMPT_MAX_LENGTH` and FastAPI `HarnessConfig.system_prompt`. */
-const SYSTEM_PROMPT_MAX_CHARS = 4000;
+export const SYSTEM_PROMPT_MAX_CHARS = 4000;
 
-function assertSystemPromptLength(systemPrompt: string | undefined) {
+export function assertSystemPromptLength(systemPrompt: string | undefined) {
 	if (systemPrompt !== undefined && systemPrompt.length > SYSTEM_PROMPT_MAX_CHARS) {
 		throw new Error(
 			`System prompt must be at most ${SYSTEM_PROMPT_MAX_CHARS} characters`,

@@ -15,6 +15,7 @@ import type * as compactions from "../compactions.js";
 import type * as conversations from "../conversations.js";
 import type * as files from "../files.js";
 import type * as harnessConfigRatings from "../harnessConfigRatings.js";
+import type * as harnessShares from "../harnessShares.js";
 import type * as harnesses from "../harnesses.js";
 import type * as mcpOAuthTokens from "../mcpOAuthTokens.js";
 import type * as messageParts from "../messageParts.js";
@@ -44,6 +45,7 @@ declare const fullApi: ApiFromModules<{
   conversations: typeof conversations;
   files: typeof files;
   harnessConfigRatings: typeof harnessConfigRatings;
+  harnessShares: typeof harnessShares;
   harnesses: typeof harnesses;
   mcpOAuthTokens: typeof mcpOAuthTokens;
   messageParts: typeof messageParts;
