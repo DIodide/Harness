@@ -1,11 +1,12 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import {
 	action,
 	internalMutation,
 	internalQuery,
 	query,
 } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { getIdentity } from "./authDev";
 
 // ── skillDetails (full SKILL.md content, cached) ────────────────────
 
@@ -107,7 +108,6 @@ export const searchSkillsIndex = query({
 		return merged.slice(0, args.limit);
 	},
 });
-
 
 /** Upsert a batch of skills discovered from skills.sh search API */
 export const upsertSkillsIndexBatch = internalMutation({
@@ -254,7 +254,10 @@ async function fetchSkillMdFromRepo(
 	const normalizedId = normalizeSkillId(skillId);
 	const branches = ["main", "master"];
 
-	const idsToTry = [skillId, ...(normalizedId !== skillId ? [normalizedId] : [])];
+	const idsToTry = [
+		skillId,
+		...(normalizedId !== skillId ? [normalizedId] : []),
+	];
 
 	// 1. Try direct paths (both branches)
 	for (const branch of branches) {
@@ -312,8 +315,7 @@ async function fetchSkillMdFromRepo(
 					const dir = p.split("/").slice(-2, -1)[0] ?? "";
 					const normDir = dir.toLowerCase();
 					return (
-						normalizedId.includes(normDir) ||
-						normDir.includes(normalizedId)
+						normalizedId.includes(normDir) || normDir.includes(normalizedId)
 					);
 				});
 
@@ -326,9 +328,7 @@ async function fetchSkillMdFromRepo(
 			}
 
 			// Check for a shallow SKILL.md (e.g. skill/SKILL.md at repo root)
-			const rootSkillMd = skillFiles.find(
-				(p) => p.split("/").length <= 2,
-			);
+			const rootSkillMd = skillFiles.find((p) => p.split("/").length <= 2);
 			if (rootSkillMd) {
 				const mdResp = await fetch(
 					`${ghRaw}/${source}/${branch}/${rootSkillMd}`,
@@ -393,7 +393,7 @@ async function fetchSkillMd(
 export const ensureSkillDetails = action({
 	args: { names: v.array(v.string()) },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		// Batch-fetch cached details and sources in two queries instead of 2N
@@ -425,7 +425,7 @@ export const ensureSkillDetails = action({
 				// skillId is the portion of fullId after the source prefix
 				skillId = name.startsWith(source + "/")
 					? name.slice(source.length + 1)
-					: name.split("/").pop() ?? name;
+					: (name.split("/").pop() ?? name);
 			} else {
 				const parts = name.split("/");
 				skillId = parts.pop() ?? name;
@@ -536,8 +536,7 @@ export const discoverSkillsFromSearch = action({
 		),
 	},
 	handler: async (ctx, args): Promise<number> => {
-
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return 0;
 		// Check which ones we already have
 		const fullIds = args.skills.map((s) => s.fullId);
@@ -547,9 +546,7 @@ export const discoverSkillsFromSearch = action({
 		);
 		const existingSet = new Set(existingIds);
 
-		const newSkills = args.skills.filter(
-			(s) => !existingSet.has(s.fullId),
-		);
+		const newSkills = args.skills.filter((s) => !existingSet.has(s.fullId));
 		if (newSkills.length === 0) return 0;
 
 		// Just insert index entries with empty descriptions — SKILL.md fetching
@@ -572,13 +569,15 @@ export const discoverSkillsFromSearch = action({
 export const searchForCreationAssistant = query({
 	args: { query: v.string() },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 
 		const [byName, byDesc] = await Promise.all([
 			ctx.db
 				.query("skillsIndex")
-				.withSearchIndex("search_skills", (q) => q.search("skillId", args.query))
+				.withSearchIndex("search_skills", (q) =>
+					q.search("skillId", args.query),
+				)
 				.take(20),
 			ctx.db
 				.query("skillsIndex")

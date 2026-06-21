@@ -1,6 +1,6 @@
-import { useAuth } from "@clerk/clerk-react";
 import { FileText, Search, X } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useAuth } from "@/lib/auth";
 import { createSandboxApi, type SearchMatch } from "../../lib/sandbox-api";
 import { useSandboxPanel } from "../../lib/sandbox-panel-context";
 import { RoseCurveSpinner } from "../rose-curve-spinner";

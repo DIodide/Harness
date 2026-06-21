@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useQuery } from "@tanstack/react-query";
@@ -6,6 +5,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { AlertCircle, ArrowLeft, Loader2 } from "lucide-react";
 import { useState } from "react";
 import toast from "react-hot-toast";
+import { useAuth } from "@/lib/auth";
 import { SandboxConfigForm } from "../../components/sandbox/sandbox-config-form";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";

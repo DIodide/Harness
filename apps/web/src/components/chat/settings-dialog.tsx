@@ -1,9 +1,9 @@
-import { useClerk, useUser } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { LogOut, User } from "lucide-react";
+import { useClerk, useUser } from "@/lib/auth";
 import { AgentConnections } from "../agent-connections";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Button } from "../ui/button";

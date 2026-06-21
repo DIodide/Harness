@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/clerk-react";
 import {
 	Check,
 	ChevronRight,
@@ -9,6 +8,7 @@ import {
 	RefreshCw,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAuth } from "@/lib/auth";
 import {
 	createSandboxApi,
 	type GitCommit,

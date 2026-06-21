@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import {
 	convexQuery,
 	useConvexAction,
@@ -32,6 +31,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
+import { useAuth } from "@/lib/auth";
 import { AgentLoopPicker } from "../components/agent-loop-picker";
 import { HarnessCreationAssistant } from "../components/harness-creation-assistant";
 import { HarnessMark } from "../components/harness-mark";

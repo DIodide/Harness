@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation, query } from "./_generated/server";
+import { getIdentity } from "./authDev";
 
 /**
  * Per-credential usage for ACP agents (Claude Code, Codex, Cursor).
@@ -142,7 +143,7 @@ const MAX_LEDGER_ROWS = 8000;
 export const getMyAgentUsage = query({
 	args: {},
 	handler: async (ctx) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 		const userId = identity.subject;
 
@@ -221,7 +222,11 @@ export const getMyAgentUsage = query({
 				// ledger's last seen value for back-compat.
 				rateLimit: cred.lastRateLimit ?? acc.rateLimit,
 				perModel: [...acc.perModel.entries()]
-					.map(([model, m]) => ({ model, tokens: m.tokens, costUsd: m.costUsd }))
+					.map(([model, m]) => ({
+						model,
+						tokens: m.tokens,
+						costUsd: m.costUsd,
+					}))
 					.sort((a, b) => b.costUsd - a.costUsd),
 			};
 		});

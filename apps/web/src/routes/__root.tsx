@@ -1,4 +1,4 @@
-import { ClerkProvider, useAuth } from "@clerk/tanstack-react-start";
+import { ClerkProvider } from "@clerk/tanstack-react-start";
 import { auth } from "@clerk/tanstack-react-start/server";
 import type { ConvexQueryClient } from "@convex-dev/react-query";
 import { TanStackDevtools } from "@tanstack/react-devtools";
@@ -15,8 +15,8 @@ import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { createServerFn } from "@tanstack/react-start";
 import type { ConvexReactClient } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
-
 import { Toaster } from "react-hot-toast";
+import { DEV_AUTH, DEV_USER_ID, useAuth } from "@/lib/auth";
 import { CommandPalette } from "../components/command-palette/command-palette";
 import { GlobalCommands } from "../components/command-palette/commands/global-commands";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -27,6 +27,13 @@ import appCss from "../styles.css?url";
 const CHROMELESS_ROUTES = ["/", "/sign-in", "/onboarding"];
 
 const fetchClerkAuth = createServerFn({ method: "GET" }).handler(async () => {
+	// LOCAL DEV: skip Clerk's server auth entirely and hand back a fixed dev
+	// identity with NO token — a fake token fails Convex's JWT parse. The Convex
+	// deployment + FastAPI run with ENABLE_DEV_AUTH, so unauthenticated calls
+	// still resolve to the dev user.
+	if (DEV_AUTH) {
+		return { userId: DEV_USER_ID, token: null as string | null };
+	}
 	const { userId, getToken } = await auth();
 	const token = await getToken({ template: "convex" });
 
@@ -90,73 +97,76 @@ function RootComponent() {
 	const isChromeless =
 		CHROMELESS_ROUTES.includes(pathname) || pathname.startsWith("/share/");
 
-	return (
-		<ClerkProvider
-			appearance={{
-				variables: {
-					borderRadius: "0rem",
-					fontFamily: "'Geist', -apple-system, BlinkMacSystemFont, sans-serif",
-					colorBackground: "var(--background)",
-					colorText: "var(--foreground)",
-					colorPrimary: "var(--primary)",
-					colorTextOnPrimaryBackground: "var(--primary-foreground)",
-					colorDanger: "var(--destructive)",
-					colorInputBackground: "var(--background)",
-					colorInputText: "var(--foreground)",
-				},
-				elements: {
-					modalContent: "rounded-none shadow-none border border-border",
-					modalCloseButton: "rounded-none",
-					card: "shadow-none rounded-none border-0",
-					navbar: "border-r border-border",
-					navbarButton: "rounded-none text-xs font-medium",
-					pageScrollBox: "p-6",
-					formButtonPrimary:
-						"rounded-none text-xs font-medium h-9 shadow-none bg-foreground text-background hover:bg-foreground/90",
-					formButtonReset:
-						"rounded-none text-xs font-medium h-9 shadow-none border border-border",
-					formFieldInput: "rounded-none border-border text-sm shadow-none",
-					formFieldLabel: "text-xs font-medium",
-					badge: "rounded-none text-[10px]",
-					dividerLine: "bg-border",
-					dividerText: "text-muted-foreground text-xs",
-					footerActionLink: "text-foreground hover:text-foreground/80",
-					socialButtonsBlockButton:
-						"rounded-none border-border text-xs font-medium",
-				},
-			}}
-		>
-			<ConvexProviderWithClerk client={context.convexClient} useAuth={useAuth}>
-				<TooltipProvider delayDuration={300}>
-					<CommandPaletteProvider>
-						<ChatStreamProvider>
-							{isChromeless ? (
-								<Outlet />
-							) : (
-								<div className="flex h-screen overflow-hidden">
-									<div className="flex flex-1 flex-col overflow-hidden">
-										<Outlet />
-									</div>
+	const tree = (
+		<ConvexProviderWithClerk client={context.convexClient} useAuth={useAuth}>
+			<TooltipProvider delayDuration={300}>
+				<CommandPaletteProvider>
+					<ChatStreamProvider>
+						{isChromeless ? (
+							<Outlet />
+						) : (
+							<div className="flex h-screen overflow-hidden">
+								<div className="flex flex-1 flex-col overflow-hidden">
+									<Outlet />
 								</div>
-							)}
-							<GlobalCommands />
-							<CommandPalette />
-							<Toaster
-								position="bottom-right"
-								toastOptions={{
-									style: {
-										borderRadius: "0px",
-										fontSize: "13px",
-									},
-								}}
-							/>
-						</ChatStreamProvider>
-					</CommandPaletteProvider>
-				</TooltipProvider>
-			</ConvexProviderWithClerk>
-		</ClerkProvider>
+							</div>
+						)}
+						<GlobalCommands />
+						<CommandPalette />
+						<Toaster
+							position="bottom-right"
+							toastOptions={{
+								style: {
+									borderRadius: "0px",
+									fontSize: "13px",
+								},
+							}}
+						/>
+					</ChatStreamProvider>
+				</CommandPaletteProvider>
+			</TooltipProvider>
+		</ConvexProviderWithClerk>
 	);
+
+	// LOCAL DEV (VITE_ENABLE_DEV_AUTH): run without Clerk at all — the dev
+	// useAuth stub feeds ConvexProviderWithClerk a fixed identity.
+	if (DEV_AUTH) return tree;
+
+	return <ClerkProvider appearance={CLERK_APPEARANCE}>{tree}</ClerkProvider>;
 }
+
+const CLERK_APPEARANCE = {
+	variables: {
+		borderRadius: "0rem",
+		fontFamily: "'Geist', -apple-system, BlinkMacSystemFont, sans-serif",
+		colorBackground: "var(--background)",
+		colorText: "var(--foreground)",
+		colorPrimary: "var(--primary)",
+		colorTextOnPrimaryBackground: "var(--primary-foreground)",
+		colorDanger: "var(--destructive)",
+		colorInputBackground: "var(--background)",
+		colorInputText: "var(--foreground)",
+	},
+	elements: {
+		modalContent: "rounded-none shadow-none border border-border",
+		modalCloseButton: "rounded-none",
+		card: "shadow-none rounded-none border-0",
+		navbar: "border-r border-border",
+		navbarButton: "rounded-none text-xs font-medium",
+		pageScrollBox: "p-6",
+		formButtonPrimary:
+			"rounded-none text-xs font-medium h-9 shadow-none bg-foreground text-background hover:bg-foreground/90",
+		formButtonReset:
+			"rounded-none text-xs font-medium h-9 shadow-none border border-border",
+		formFieldInput: "rounded-none border-border text-sm shadow-none",
+		formFieldLabel: "text-xs font-medium",
+		badge: "rounded-none text-[10px]",
+		dividerLine: "bg-border",
+		dividerText: "text-muted-foreground text-xs",
+		footerActionLink: "text-foreground hover:text-foreground/80",
+		socialButtonsBlockButton: "rounded-none border-border text-xs font-medium",
+	},
+};
 
 function RootDocument({ children }: { children: React.ReactNode }) {
 	return (

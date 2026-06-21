@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { getIdentity } from "./authDev";
 import { resolveConversationRole } from "./shares";
 
 // Clamp the stored summary so a pathological capture can't blow the Convex
@@ -58,7 +59,7 @@ export const record = internalMutation({
 export const listByConversation = query({
 	args: { conversationId: v.id("conversations") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 		const convo = await ctx.db.get(args.conversationId);
 		if (!convo || convo.userId !== identity.subject) return [];
@@ -86,7 +87,7 @@ export const cloneFromCompaction = mutation({
 		harnessId: v.optional(v.id("harnesses")),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		const compaction = await ctx.db.get(args.compactionId);

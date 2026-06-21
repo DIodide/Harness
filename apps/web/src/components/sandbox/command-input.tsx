@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/clerk-react";
 import { AlertCircle, ChevronRight, TerminalSquare } from "lucide-react";
 import {
 	useCallback,
@@ -8,6 +7,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { useAuth } from "@/lib/auth";
 import { type CommandResponse, createSandboxApi } from "../../lib/sandbox-api";
 import { useSandboxPanel } from "../../lib/sandbox-panel-context";
 import { cn } from "../../lib/utils";

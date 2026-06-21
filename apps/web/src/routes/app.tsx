@@ -7,13 +7,14 @@
 // server-side userId present → fast server redirect; absent → render a
 // client gate that waits for Clerk's client state (authoritative) and
 // routes from there.
-import { useAuth } from "@clerk/tanstack-react-start";
+
 import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useConvexAuth } from "convex/react";
 import { useEffect } from "react";
+import { DEV_AUTH, useAuth } from "@/lib/auth";
 import { RoseCurveSpinner } from "../components/rose-curve-spinner";
 
 export const Route = createFileRoute("/app")({
@@ -49,9 +50,12 @@ function AuthGate() {
 	const search = Route.useSearch();
 	const { isLoaded, isSignedIn } = useAuth();
 	const { isAuthenticated: convexReady } = useConvexAuth();
+	// In dev-auth the fake token never completes the Convex auth handshake, but
+	// the backend resolves every call to the dev user anyway — so don't gate the
+	// settings fetch on convexReady.
 	const { data: settings } = useQuery({
 		...convexQuery(api.userSettings.get, {}),
-		enabled: convexReady,
+		enabled: convexReady || DEV_AUTH,
 	});
 
 	useEffect(() => {

@@ -1,6 +1,6 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useAuth } from "@/lib/auth";
 import type { HealthStatus } from "../components/mcp-server-status";
 import { env } from "../env";
 import type { McpAuthType } from "../lib/mcp";

@@ -1,8 +1,8 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useAuth } from "@/lib/auth";
 import { env } from "../env";
 
 const FASTAPI_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";

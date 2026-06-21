@@ -1,4 +1,3 @@
-import { useAuth, useClerk } from "@clerk/tanstack-react-start";
 import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useQuery } from "@tanstack/react-query";
@@ -14,6 +13,7 @@ import {
 	SlidersHorizontal,
 } from "lucide-react";
 import { useMemo } from "react";
+import { useAuth, useClerk } from "@/lib/auth";
 import { useRegisterCommands } from "../../../hooks/use-register-commands";
 import type { Command } from "../../../lib/command-palette/types";
 

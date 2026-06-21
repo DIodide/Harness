@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 // The module pulls in Clerk + convex query hooks at import time; mock the
 // heavier deps so the pure helper can be imported in isolation.
 vi.mock("@clerk/tanstack-react-start", () => ({
+	// The `@/lib/auth` wrapper re-exports all of these from Clerk, so the mock
+	// must provide each one even though the component only uses useAuth.
 	useAuth: () => ({ getToken: async () => null }),
+	useUser: () => ({ isLoaded: true, isSignedIn: true, user: null }),
+	useClerk: () => ({ signOut: async () => {} }),
+	useReverification: <T>(fn: T) => fn,
 }));
 vi.mock("@convex-dev/react-query", () => ({
 	convexQuery: () => ({}),

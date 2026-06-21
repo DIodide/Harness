@@ -1,5 +1,5 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { useCallback, useEffect, useState } from "react";
+import { useAuth } from "@/lib/auth";
 import { env } from "../env";
 import { agentStatusLabel } from "./agent-mode";
 import type { ConvoStreamState, StreamPart } from "./use-chat-stream";

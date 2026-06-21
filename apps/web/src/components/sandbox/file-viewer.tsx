@@ -1,6 +1,6 @@
-import { useAuth } from "@clerk/clerk-react";
 import { Check, Copy, Download, Pencil, Save, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "@/lib/auth";
 import { createSandboxApi } from "../../lib/sandbox-api";
 import { useSandboxPanel } from "../../lib/sandbox-panel-context";
 import { detectLanguage, useHighlighted } from "../../lib/syntax-highlight";

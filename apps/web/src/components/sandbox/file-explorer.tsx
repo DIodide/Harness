@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/clerk-react";
 import {
 	ChevronRight,
 	File,
@@ -8,6 +7,7 @@ import {
 	Search,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAuth } from "@/lib/auth";
 import { createSandboxApi, type SandboxFile } from "../../lib/sandbox-api";
 import { useSandboxPanel } from "../../lib/sandbox-panel-context";
 import { cn } from "../../lib/utils";

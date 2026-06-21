@@ -1,6 +1,6 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { useAuth } from "@/lib/auth";
 import {
 	type AgentCommand,
 	type AgentConfigOption,

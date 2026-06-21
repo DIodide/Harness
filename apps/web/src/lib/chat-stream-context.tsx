@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { useQueryClient } from "@tanstack/react-query";
 import {
 	createContext,
@@ -12,6 +11,7 @@ import {
 	useState,
 } from "react";
 import toast from "react-hot-toast";
+import { useAuth } from "@/lib/auth";
 import {
 	type AgentPermissionRequest,
 	type AgentQuestionAction,

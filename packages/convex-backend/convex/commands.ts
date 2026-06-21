@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { getIdentity } from "./authDev";
 
 /**
  * Upsert commands for the authenticated user: insert new ones, update the
@@ -20,7 +21,7 @@ export const upsert = mutation({
 		),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const userId = identity.subject;
 
@@ -63,7 +64,7 @@ export const upsert = mutation({
 export const getByIds = query({
 	args: { ids: v.array(v.id("commands")) },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		const userId = identity?.subject;
 		const results = await Promise.all(args.ids.map((id) => ctx.db.get(id)));
 		return results.filter(

@@ -18,6 +18,10 @@ export const env = createEnv({
 		VITE_CONVEX_URL: z.string().url(),
 		VITE_CLERK_PUBLISHABLE_KEY: z.string().min(1),
 		VITE_FASTAPI_URL: z.string().url().optional(),
+		// LOCAL DEVELOPMENT ONLY: "true" bypasses Clerk entirely and signs you in
+		// as a fixed dev user. Pair with ENABLE_DEV_AUTH on the Convex deployment
+		// and the FastAPI gateway. Never set in production.
+		VITE_ENABLE_DEV_AUTH: z.enum(["true", "false"]).optional(),
 	},
 
 	/**

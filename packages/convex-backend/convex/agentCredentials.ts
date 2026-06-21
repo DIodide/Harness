@@ -5,6 +5,7 @@ import {
 	mutation,
 	query,
 } from "./_generated/server";
+import { getIdentity } from "./authDev";
 
 /**
  * Per-user credentials for external ACP agents (Codex CLI, Claude Code,
@@ -27,7 +28,7 @@ const KIND = v.union(
 /** All credentials for the current user (frontend — metadata, no secrets). */
 export const listMine = query({
 	handler: async (ctx) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 		const rows = await ctx.db
 			.query("agentCredentials")
@@ -162,7 +163,7 @@ export const listForUser = internalQuery({
 export const remove = mutation({
 	args: { credentialId: v.id("agentCredentials") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const row = await ctx.db.get(args.credentialId);
 		if (!row || row.userId !== identity.subject) {

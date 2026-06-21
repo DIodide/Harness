@@ -2,6 +2,7 @@ import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
+import { getIdentity } from "./authDev";
 import { contentFromParts } from "./messageParts";
 import { getOrCreateDefaultWorkspace } from "./workspaces";
 
@@ -92,7 +93,7 @@ async function tolerateBackfill<T>(run: () => Promise<T[]>): Promise<T[]> {
 export const list = query({
 	args: { workspaceId: v.optional(v.id("workspaces")) },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 		if (args.workspaceId) {
 			const workspace = await ctx.db.get(args.workspaceId);
@@ -149,7 +150,7 @@ export const list = query({
 export const get = query({
 	args: { id: v.id("conversations") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return null;
 		const convo = await ctx.db.get(args.id);
 		if (!convo || convo.userId !== identity.subject) return null;
@@ -166,7 +167,7 @@ export const get = query({
 export const ensureInWorkspace = mutation({
 	args: { conversationId: v.id("conversations") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const convo = await ctx.db.get(args.conversationId);
 		if (!convo || convo.userId !== identity.subject) {
@@ -202,7 +203,7 @@ export const create = mutation({
 		workspaceId: v.optional(v.id("workspaces")),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		const harness = await ctx.db.get(args.harnessId);
@@ -232,7 +233,7 @@ export const create = mutation({
 export const updateTitle = mutation({
 	args: { id: v.id("conversations"), title: v.string() },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const convo = await ctx.db.get(args.id);
 		if (!convo || convo.userId !== identity.subject) {
@@ -246,7 +247,7 @@ export const updateTitle = mutation({
 export const setPinned = mutation({
 	args: { id: v.id("conversations"), pinned: v.boolean() },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const convo = await ctx.db.get(args.id);
 		if (!convo || convo.userId !== identity.subject) {
@@ -271,7 +272,7 @@ export const moveToWorkspace = mutation({
 		workspaceId: v.optional(v.id("workspaces")),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const convo = await ctx.db.get(args.id);
 		if (!convo || convo.userId !== identity.subject) {
@@ -316,7 +317,7 @@ export const fork = mutation({
 		truncateLastPartCount: v.optional(v.number()),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		const convo = await ctx.db.get(args.conversationId);
@@ -434,7 +435,7 @@ export const editForkAndSend = mutation({
 		harnessId: v.optional(v.id("harnesses")),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		const convo = await ctx.db.get(args.conversationId);
@@ -528,7 +529,7 @@ export const editForkAndSend = mutation({
 export const remove = mutation({
 	args: { id: v.id("conversations") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const convo = await ctx.db.get(args.id);
 		if (!convo || convo.userId !== identity.subject) {
@@ -552,7 +553,7 @@ export const searchTitles = query({
 		paginationOpts: paginationOptsValidator,
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return { page: [], isDone: true, continueCursor: "" };
 		if (args.workspaceId) {
 			const workspace = await ctx.db.get(args.workspaceId);
@@ -582,7 +583,7 @@ export const searchContent = query({
 		paginationOpts: paginationOptsValidator,
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return { page: [], isDone: true, continueCursor: "" };
 		if (args.workspaceId) {
 			const workspace = await ctx.db.get(args.workspaceId);
@@ -668,7 +669,7 @@ export const searchContent = query({
 export const searchTitlesCount = query({
 	args: { query: v.string(), workspaceId: v.optional(v.id("workspaces")) },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return 0;
 		if (args.workspaceId) {
 			const workspace = await ctx.db.get(args.workspaceId);
@@ -693,7 +694,7 @@ export const searchTitlesCount = query({
 export const searchContentCount = query({
 	args: { query: v.string(), workspaceId: v.optional(v.id("workspaces")) },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return 0;
 		if (args.workspaceId) {
 			const workspace = await ctx.db.get(args.workspaceId);

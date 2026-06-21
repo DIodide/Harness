@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -15,6 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
+import { useAuth } from "@/lib/auth";
 import { env } from "../env";
 import { PRESET_MCPS, presetIdsToServerEntries } from "../lib/mcp";
 import { MODELS } from "../lib/models";

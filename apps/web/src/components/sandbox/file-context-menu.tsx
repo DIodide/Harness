@@ -1,6 +1,6 @@
-import { useAuth } from "@clerk/clerk-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useAuth } from "@/lib/auth";
 import { createSandboxApi, type SandboxFile } from "../../lib/sandbox-api";
 import { useSandboxPanel } from "../../lib/sandbox-panel-context";
 import { cn } from "../../lib/utils";

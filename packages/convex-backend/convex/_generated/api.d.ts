@@ -30,32 +30,32 @@ import type * as workspaceCredentials from "../workspaceCredentials.js";
 import type * as workspaces from "../workspaces.js";
 
 import type {
-  ApiFromModules,
-  FilterApi,
-  FunctionReference,
+	ApiFromModules,
+	FilterApi,
+	FunctionReference,
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  agentCredentials: typeof agentCredentials;
-  agentUsage: typeof agentUsage;
-  commands: typeof commands;
-  compactions: typeof compactions;
-  conversations: typeof conversations;
-  files: typeof files;
-  harnessConfigRatings: typeof harnessConfigRatings;
-  harnesses: typeof harnesses;
-  mcpOAuthTokens: typeof mcpOAuthTokens;
-  messageParts: typeof messageParts;
-  messages: typeof messages;
-  migrations: typeof migrations;
-  sandboxes: typeof sandboxes;
-  seed: typeof seed;
-  shares: typeof shares;
-  skills: typeof skills;
-  usage: typeof usage;
-  userSettings: typeof userSettings;
-  workspaceCredentials: typeof workspaceCredentials;
-  workspaces: typeof workspaces;
+	agentCredentials: typeof agentCredentials;
+	agentUsage: typeof agentUsage;
+	commands: typeof commands;
+	compactions: typeof compactions;
+	conversations: typeof conversations;
+	files: typeof files;
+	harnessConfigRatings: typeof harnessConfigRatings;
+	harnesses: typeof harnesses;
+	mcpOAuthTokens: typeof mcpOAuthTokens;
+	messageParts: typeof messageParts;
+	messages: typeof messages;
+	migrations: typeof migrations;
+	sandboxes: typeof sandboxes;
+	seed: typeof seed;
+	shares: typeof shares;
+	skills: typeof skills;
+	usage: typeof usage;
+	userSettings: typeof userSettings;
+	workspaceCredentials: typeof workspaceCredentials;
+	workspaces: typeof workspaces;
 }>;
 
 /**
@@ -67,8 +67,8 @@ declare const fullApi: ApiFromModules<{
  * ```
  */
 export declare const api: FilterApi<
-  typeof fullApi,
-  FunctionReference<any, "public">
+	typeof fullApi,
+	FunctionReference<any, "public">
 >;
 
 /**
@@ -80,8 +80,8 @@ export declare const api: FilterApi<
  * ```
  */
 export declare const internal: FilterApi<
-  typeof fullApi,
-  FunctionReference<any, "internal">
+	typeof fullApi,
+	FunctionReference<any, "internal">
 >;
 
 export declare const components: {};

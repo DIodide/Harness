@@ -9,8 +9,7 @@ function makeT() {
 	const raw = convexTest(schema, modules);
 	return {
 		raw,
-		asUser: (uid: string) =>
-			raw.withIdentity({ subject: uid, issuer: "test" }),
+		asUser: (uid: string) => raw.withIdentity({ subject: uid, issuer: "test" }),
 	};
 }
 
@@ -63,15 +62,19 @@ describe("usage.checkBudget", () => {
 });
 
 describe("usage.recordUsage", () => {
-	async function recordFrom(userId: string, conversationId: string, overrides: Partial<{
-		cost: number;
-		totalTokens: number;
-		model: string;
-		day: string;
-		week: string;
-		harnessId?: string;
-		harnessName?: string;
-	}> = {}) {
+	async function recordFrom(
+		userId: string,
+		conversationId: string,
+		overrides: Partial<{
+			cost: number;
+			totalTokens: number;
+			model: string;
+			day: string;
+			week: string;
+			harnessId?: string;
+			harnessName?: string;
+		}> = {},
+	) {
 		return {
 			userId,
 			conversationId,
@@ -111,7 +114,10 @@ describe("usage.recordUsage", () => {
 			]);
 			const daily = budgets.find((b) => b.periodType === "daily")!;
 			expect(daily.totalCostUsed).toBe(0.5);
-			expect(daily.perModelUsage[0]).toMatchObject({ model: "m", tokensUsed: 30 });
+			expect(daily.perModelUsage[0]).toMatchObject({
+				model: "m",
+				tokensUsed: 30,
+			});
 		});
 	});
 
@@ -262,10 +268,7 @@ describe("usage.adminSetLimits (internal)", () => {
 			const daily = await ctx.db
 				.query("usageBudgets")
 				.withIndex("by_user_period", (q) =>
-					q
-						.eq("userId", "u-a")
-						.eq("periodType", "daily")
-						.eq("period", today),
+					q.eq("userId", "u-a").eq("periodType", "daily").eq("period", today),
 				)
 				.unique();
 			expect(daily!.costLimit).toBe(10);

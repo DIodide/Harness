@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { getIdentity } from "./authDev";
 
 export const rate = mutation({
 	args: {
@@ -17,7 +18,7 @@ export const rate = mutation({
 		),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		return await ctx.db.insert("harnessConfigRatings", {
 			userId: identity.subject,
@@ -34,7 +35,7 @@ export const listByRating = query({
 		rating: v.union(v.literal("up"), v.literal("down")),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 		return await ctx.db
 			.query("harnessConfigRatings")
