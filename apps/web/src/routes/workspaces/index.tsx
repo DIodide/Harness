@@ -15,6 +15,7 @@ import {
 	ChevronDown,
 	Cpu,
 	GripVertical,
+	KeyRound,
 	MessageSquare,
 	PanelLeftClose,
 	PanelLeftOpen,
@@ -1861,6 +1862,17 @@ function WorkspaceSidebar({
 					<Link to="/harnesses">
 						<SlidersHorizontal size={12} />
 						Manage Harnesses
+					</Link>
+				</Button>
+				<Button
+					variant="ghost"
+					size="sm"
+					className="w-full justify-start"
+					asChild
+				>
+					<Link to="/credentials">
+						<KeyRound size={12} />
+						Manage Credentials
 					</Link>
 				</Button>
 				<Button
