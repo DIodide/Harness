@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
@@ -29,6 +28,7 @@ import React, {
 	useState,
 } from "react";
 import toast from "react-hot-toast";
+import { useAuth } from "@/lib/auth";
 import { useFileAttachments } from "../../hooks/use-file-attachments";
 import {
 	AGENT_MODES,

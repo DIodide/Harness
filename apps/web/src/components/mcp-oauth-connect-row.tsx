@@ -1,8 +1,8 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { Server, Shield } from "lucide-react";
 import { motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
+import { useAuth } from "@/lib/auth";
 import { env } from "../env";
 import type { McpServerEntry } from "../lib/mcp";
 import { RoseCurveSpinner } from "./rose-curve-spinner";

@@ -1,6 +1,7 @@
 import { v } from "convex/values";
-import { internalMutation, internalQuery, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
+import { internalMutation, internalQuery, query } from "./_generated/server";
+import { getIdentity } from "./authDev";
 
 // Single source of truth for default cost limits (USD).
 // Per-user overrides are stored in usageBudgets.costLimit via adminSetLimits.
@@ -43,10 +44,13 @@ export const checkBudget = internalQuery({
 		const weeklyCostUsed = weekly?.totalCostUsed ?? 0;
 		const weeklyCostLimit = weekly?.costLimit ?? DEFAULT_WEEKLY_COST_LIMIT;
 
-		const dailyPct = dailyCostLimit > 0 ? (dailyCostUsed / dailyCostLimit) * 100 : 0;
-		const weeklyPct = weeklyCostLimit > 0 ? (weeklyCostUsed / weeklyCostLimit) * 100 : 0;
+		const dailyPct =
+			dailyCostLimit > 0 ? (dailyCostUsed / dailyCostLimit) * 100 : 0;
+		const weeklyPct =
+			weeklyCostLimit > 0 ? (weeklyCostUsed / weeklyCostLimit) * 100 : 0;
 
-		const allowed = dailyCostUsed < dailyCostLimit && weeklyCostUsed < weeklyCostLimit;
+		const allowed =
+			dailyCostUsed < dailyCostLimit && weeklyCostUsed < weeklyCostLimit;
 
 		return {
 			allowed,
@@ -182,7 +186,8 @@ async function upsertBudget(
 			if (harnessIdx >= 0) {
 				perHarnessUsage[harnessIdx] = {
 					...perHarnessUsage[harnessIdx],
-					tokensUsed: perHarnessUsage[harnessIdx].tokensUsed + params.totalTokens,
+					tokensUsed:
+						perHarnessUsage[harnessIdx].tokensUsed + params.totalTokens,
 					costUsed: perHarnessUsage[harnessIdx].costUsed + params.cost,
 				};
 			} else {
@@ -205,7 +210,11 @@ async function upsertBudget(
 	} else {
 		// Create new budget document
 		const perModelUsage = [
-			{ model: params.model, tokensUsed: params.totalTokens, costUsed: params.cost },
+			{
+				model: params.model,
+				tokensUsed: params.totalTokens,
+				costUsed: params.cost,
+			},
 		];
 		const perHarnessUsage = params.harnessId
 			? [
@@ -239,7 +248,7 @@ async function upsertBudget(
 export const getUserUsage = query({
 	args: {},
 	handler: async (ctx) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return null;
 		const userId = identity.subject;
 
@@ -266,8 +275,14 @@ export const getUserUsage = query({
 		const dailyCostUsed = daily?.totalCostUsed ?? 0;
 		const weeklyCostUsed = weekly?.totalCostUsed ?? 0;
 
-		const dailyPct = dailyCostLimit > 0 ? Math.min((dailyCostUsed / dailyCostLimit) * 100, 100) : 0;
-		const weeklyPct = weeklyCostLimit > 0 ? Math.min((weeklyCostUsed / weeklyCostLimit) * 100, 100) : 0;
+		const dailyPct =
+			dailyCostLimit > 0
+				? Math.min((dailyCostUsed / dailyCostLimit) * 100, 100)
+				: 0;
+		const weeklyPct =
+			weeklyCostLimit > 0
+				? Math.min((weeklyCostUsed / weeklyCostLimit) * 100, 100)
+				: 0;
 
 		// Per-model percentages (relative to total usage, not limit)
 		const totalCost = daily?.totalCostUsed ?? 0;
@@ -316,7 +331,7 @@ export const getUserUsage = query({
 export const getConversationUsage = query({
 	args: { conversationId: v.id("conversations") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return null;
 
 		const convo = await ctx.db.get(args.conversationId);
@@ -366,7 +381,10 @@ export const adminSetLimits = internalMutation({
 				.unique();
 
 			if (daily) {
-				await ctx.db.patch(daily._id, { costLimit: args.dailyCostLimit, updatedAt: Date.now() });
+				await ctx.db.patch(daily._id, {
+					costLimit: args.dailyCostLimit,
+					updatedAt: Date.now(),
+				});
 			} else {
 				await ctx.db.insert("usageBudgets", {
 					userId: args.userId,
@@ -394,7 +412,10 @@ export const adminSetLimits = internalMutation({
 				.unique();
 
 			if (weekly) {
-				await ctx.db.patch(weekly._id, { costLimit: args.weeklyCostLimit, updatedAt: Date.now() });
+				await ctx.db.patch(weekly._id, {
+					costLimit: args.weeklyCostLimit,
+					updatedAt: Date.now(),
+				});
 			} else {
 				await ctx.db.insert("usageBudgets", {
 					userId: args.userId,
@@ -461,9 +482,13 @@ function formatDay(date: Date): string {
  * invisible to TypeScript queries. Test at year boundaries if modifying.
  */
 function formatWeek(date: Date): string {
-	const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+	const d = new Date(
+		Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+	);
 	d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
 	const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-	const weekNo = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+	const weekNo = Math.ceil(
+		((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7,
+	);
 	return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
 }

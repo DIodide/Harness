@@ -1,7 +1,8 @@
-import { SignIn, useAuth } from "@clerk/tanstack-react-start";
+import { SignIn } from "@clerk/tanstack-react-start";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import { useEffect } from "react";
+import { DEV_AUTH, useAuth } from "@/lib/auth";
 
 import { HarnessMark } from "../components/harness-mark";
 
@@ -32,6 +33,10 @@ function SignInPage() {
 			navigate({ to: destination, replace: true });
 		}
 	}, [isLoaded, isSignedIn, navigate, destination]);
+
+	// Dev-auth runs without a Clerk provider, so never mount <SignIn/>; the
+	// effect above redirects (dev is always signed in).
+	if (DEV_AUTH) return null;
 
 	return (
 		<div className="flex min-h-screen">

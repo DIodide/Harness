@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { getIdentity } from "./authDev";
 
 const DEFAULTS = {
 	autoSwitchHarness: true,
@@ -12,7 +13,7 @@ const DEFAULTS = {
 
 export const get = query({
 	handler: async (ctx) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return DEFAULTS;
 
 		const settings = await ctx.db
@@ -45,11 +46,7 @@ export const update = mutation({
 	args: {
 		autoSwitchHarness: v.optional(v.boolean()),
 		displayMode: v.optional(
-			v.union(
-				v.literal("zen"),
-				v.literal("standard"),
-				v.literal("developer"),
-			),
+			v.union(v.literal("zen"), v.literal("standard"), v.literal("developer")),
 		),
 		modelSelectorMode: v.optional(
 			v.union(v.literal("session"), v.literal("harness")),
@@ -63,7 +60,7 @@ export const update = mutation({
 		rewindSeams: v.optional(v.boolean()),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		const existing = await ctx.db

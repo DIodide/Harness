@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 
 _jwks_cache: dict | None = None
 
+# Fixed identity used when settings.enable_dev_auth is on (LOCAL DEV ONLY). Keep
+# in sync with the Convex DEV_USER_ID (packages/convex-backend/convex/authDev.ts).
+DEV_USER_ID = "dev-user"
+
 
 async def _get_jwks(client: httpx.AsyncClient, issuer: str) -> dict:
     """Fetch and cache Clerk's JWKS keys."""
@@ -29,6 +33,9 @@ async def verify_token(request: Request) -> dict:
 
     Returns the decoded token payload (contains 'sub' as user ID).
     """
+    if settings.enable_dev_auth:
+        return {"sub": DEV_USER_ID}
+
     auth_header = request.headers.get("authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing authorization token")
@@ -88,6 +95,8 @@ async def verify_token_optional(request: Request) -> dict | None:
     """Like verify_token but returns None instead of 401 when there's no (or an
     invalid) bearer token — for endpoints that ALSO accept anonymous callers
     authorized another way (e.g. a share token on the live-follow stream)."""
+    if settings.enable_dev_auth:
+        return {"sub": DEV_USER_ID}
     if not request.headers.get("authorization", "").startswith("Bearer "):
         return None
     try:

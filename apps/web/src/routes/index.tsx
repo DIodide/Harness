@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
 	ArrowRight,
@@ -24,6 +23,7 @@ import {
 	useTransform,
 } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "@/lib/auth";
 
 import {
 	ClaudeLogo,

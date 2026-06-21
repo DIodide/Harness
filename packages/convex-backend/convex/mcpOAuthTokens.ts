@@ -5,6 +5,7 @@ import {
 	mutation,
 	query,
 } from "./_generated/server";
+import { getIdentity } from "./authDev";
 
 /**
  * Get OAuth token status for a specific MCP server (frontend use).
@@ -13,7 +14,7 @@ import {
 export const getStatus = query({
 	args: { mcpServerUrl: v.string() },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return null;
 		const token = await ctx.db
 			.query("mcpOAuthTokens")
@@ -38,7 +39,7 @@ export const getStatus = query({
  */
 export const listStatuses = query({
 	handler: async (ctx) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 		const tokens = await ctx.db
 			.query("mcpOAuthTokens")
@@ -116,7 +117,7 @@ export const getTokens = internalQuery({
 export const deleteTokens = mutation({
 	args: { mcpServerUrl: v.string() },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const token = await ctx.db
 			.query("mcpOAuthTokens")

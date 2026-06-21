@@ -9,17 +9,18 @@ function makeT() {
 	const raw = convexTest(schema, modules);
 	return {
 		raw,
-		asUser: (uid: string) =>
-			raw.withIdentity({ subject: uid, issuer: "test" }),
+		asUser: (uid: string) => raw.withIdentity({ subject: uid, issuer: "test" }),
 	};
 }
 
-const baseHarness = (overrides: Partial<{
-	name: string;
-	model: string;
-	status: "started" | "stopped" | "draft";
-	systemPrompt?: string;
-}> = {}) => ({
+const baseHarness = (
+	overrides: Partial<{
+		name: string;
+		model: string;
+		status: "started" | "stopped" | "draft";
+		systemPrompt?: string;
+	}> = {},
+) => ({
 	name: "test",
 	model: "claude-opus-4.7",
 	status: "stopped" as const,
@@ -203,7 +204,11 @@ describe("harnesses agent/credential integrity", () => {
 			agent: "claude-code",
 			agentCredentialId: credId,
 		});
-		await a.mutation(api.harnesses.update, { id, agent: "claude-code", name: "renamed" });
+		await a.mutation(api.harnesses.update, {
+			id,
+			agent: "claude-code",
+			name: "renamed",
+		});
 		const row = await a.query(api.harnesses.get, { id });
 		expect(row?.agentCredentialId).toBe(credId);
 	});

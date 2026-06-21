@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import {
 	convexQuery,
 	useConvexAction,
@@ -29,6 +28,7 @@ import {
 import { motion } from "motion/react";
 import { type KeyboardEvent, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
+import { useAuth } from "@/lib/auth";
 import { AgentLoopPicker } from "../../components/agent-loop-picker";
 import { OAuthConnectRow } from "../../components/mcp-oauth-connect-row";
 import { PresetMcpGrid } from "../../components/preset-mcp-grid";

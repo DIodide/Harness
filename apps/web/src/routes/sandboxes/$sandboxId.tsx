@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type {
@@ -28,6 +27,7 @@ import {
 import { motion } from "motion/react";
 import { useMemo, useState } from "react";
 import toast from "react-hot-toast";
+import { useAuth } from "@/lib/auth";
 import { SandboxPanel } from "../../components/sandbox/sandbox-panel";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";

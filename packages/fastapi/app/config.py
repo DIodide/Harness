@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # Clerk JWT verification — pinned issuer prevents attacker-controlled JWKS.
     clerk_issuer: str = ""
 
+    # LOCAL DEVELOPMENT ONLY (env ENABLE_DEV_AUTH=true): skip Clerk JWT
+    # verification and treat every request as a fixed dev user. NEVER enable in
+    # production. Mirrors the Convex ENABLE_DEV_AUTH flag; both resolve to
+    # DEV_USER_ID so a locally-run stack agrees on who you are.
+    enable_dev_auth: bool = False
+
     # Redis Streams bus for live token fan-out to passive viewers (owner's other
     # tabs, sharees). OPTIONAL: when unset, turns stream only to the initiating
     # client exactly as before (no regression) — the /follow endpoint just has

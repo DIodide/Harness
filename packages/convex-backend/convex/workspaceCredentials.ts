@@ -5,6 +5,7 @@ import {
 	mutation,
 	query,
 } from "./_generated/server";
+import { getIdentity } from "./authDev";
 
 /**
  * Per-user named env-var credentials, assignable to workspaces and injected as
@@ -23,7 +24,7 @@ import {
 /** All of the current user's credentials (frontend — metadata, no secrets). */
 export const listMine = query({
 	handler: async (ctx) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 		const rows = await ctx.db
 			.query("workspaceCredentials")
@@ -120,7 +121,8 @@ export const getForWorkspace = internalQuery({
 			.query("credentialAssignments")
 			.withIndex("by_workspace", (q) => q.eq("workspaceId", args.workspaceId))
 			.collect();
-		const out: { credentialId: string; name: string; ciphertext: string }[] = [];
+		const out: { credentialId: string; name: string; ciphertext: string }[] =
+			[];
 		for (const a of assignments) {
 			if (a.userId !== args.userId) continue;
 			const cred = await ctx.db.get(a.credentialId);
@@ -139,7 +141,7 @@ export const getForWorkspace = internalQuery({
 export const listForWorkspace = query({
 	args: { workspaceId: v.id("workspaces") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 		const workspace = await ctx.db.get(args.workspaceId);
 		if (!workspace || workspace.userId !== identity.subject) return [];
@@ -165,7 +167,7 @@ export const assign = mutation({
 		workspaceId: v.id("workspaces"),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const cred = await ctx.db.get(args.credentialId);
 		if (!cred || cred.userId !== identity.subject) {
@@ -200,7 +202,7 @@ export const unassign = mutation({
 		workspaceId: v.id("workspaces"),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const existing = await ctx.db
 			.query("credentialAssignments")
@@ -221,7 +223,7 @@ export const unassign = mutation({
 export const remove = mutation({
 	args: { credentialId: v.id("workspaceCredentials") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const row = await ctx.db.get(args.credentialId);
 		if (!row || row.userId !== identity.subject) {

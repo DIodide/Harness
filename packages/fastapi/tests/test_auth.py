@@ -198,6 +198,34 @@ async def test_wrong_issuer_rejected(rsa_keypair, monkeypatch):
     assert exc.value.status_code == 401
 
 
+async def test_dev_auth_bypass_returns_fixed_user(monkeypatch):
+    """ENABLE_DEV_AUTH: no token required, returns the fixed dev user, no JWKS call."""
+    monkeypatch.setattr(auth_module.settings, "enable_dev_auth", True)
+    async with httpx.AsyncClient() as client:
+        req = _fake_request(None, client)  # no Authorization header at all
+        payload = await auth_module.verify_token(req)
+    assert payload["sub"] == auth_module.DEV_USER_ID
+
+
+async def test_dev_auth_bypass_optional_returns_fixed_user(monkeypatch):
+    monkeypatch.setattr(auth_module.settings, "enable_dev_auth", True)
+    async with httpx.AsyncClient() as client:
+        req = _fake_request(None, client)
+        payload = await auth_module.verify_token_optional(req)
+    assert payload is not None
+    assert payload["sub"] == auth_module.DEV_USER_ID
+
+
+async def test_dev_auth_off_by_default_still_enforces(monkeypatch):
+    """With the flag off (default), a missing token is still a 401 — no regression."""
+    monkeypatch.setattr(auth_module.settings, "enable_dev_auth", False)
+    async with httpx.AsyncClient() as client:
+        req = _fake_request(None, client)
+        with pytest.raises(HTTPException) as exc:
+            await auth_module.verify_token(req)
+    assert exc.value.status_code == 401
+
+
 @respx.mock
 async def test_jwks_is_cached_across_calls(rsa_keypair, monkeypatch):
     private_pem, jwk = rsa_keypair

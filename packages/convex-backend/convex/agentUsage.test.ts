@@ -30,7 +30,11 @@ function currentWeekKey(): string {
 }
 const thisWeek = currentWeekKey();
 
-async function seedCredential(raw: ReturnType<typeof makeT>["raw"], userId: string, label: string) {
+async function seedCredential(
+	raw: ReturnType<typeof makeT>["raw"],
+	userId: string,
+	label: string,
+) {
 	return await raw.mutation(internal.agentCredentials.create, {
 		userId,
 		agent: "claude-code",
@@ -40,7 +44,10 @@ async function seedCredential(raw: ReturnType<typeof makeT>["raw"], userId: stri
 	});
 }
 
-async function seedConversation(raw: ReturnType<typeof makeT>["raw"], userId: string) {
+async function seedConversation(
+	raw: ReturnType<typeof makeT>["raw"],
+	userId: string,
+) {
 	return await raw.run(async (ctx) =>
 		ctx.db.insert("conversations", {
 			title: "t",
@@ -76,7 +83,12 @@ describe("agentUsage.getMyAgentUsage", () => {
 
 		await raw.mutation(
 			internal.agentUsage.record,
-			turn({ agentCredentialId: credId, conversationId: convoId, model: "sonnet", turnKey: "s1:1" }),
+			turn({
+				agentCredentialId: credId,
+				conversationId: convoId,
+				model: "sonnet",
+				turnKey: "s1:1",
+			}),
 		);
 		await raw.mutation(
 			internal.agentUsage.record,
@@ -107,7 +119,11 @@ describe("agentUsage.getMyAgentUsage", () => {
 		const { raw, asUser } = makeT();
 		const credId = await seedCredential(raw, "u-a", "work");
 		const convoId = await seedConversation(raw, "u-a");
-		const t = turn({ agentCredentialId: credId, conversationId: convoId, turnKey: "s1:1" });
+		const t = turn({
+			agentCredentialId: credId,
+			conversationId: convoId,
+			turnKey: "s1:1",
+		});
 		await raw.mutation(internal.agentUsage.record, t);
 		await raw.mutation(internal.agentUsage.record, t); // duplicate fire
 		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
@@ -194,11 +210,21 @@ describe("agentUsage.getMyAgentUsage", () => {
 		const convoId = await seedConversation(raw, "u-a");
 		await raw.mutation(
 			internal.agentUsage.record,
-			turn({ agentCredentialId: work, conversationId: convoId, costUsd: 0.1, turnKey: "s1:1" }),
+			turn({
+				agentCredentialId: work,
+				conversationId: convoId,
+				costUsd: 0.1,
+				turnKey: "s1:1",
+			}),
 		);
 		await raw.mutation(
 			internal.agentUsage.record,
-			turn({ agentCredentialId: personal, conversationId: convoId, costUsd: 0.02, turnKey: "s2:1" }),
+			turn({
+				agentCredentialId: personal,
+				conversationId: convoId,
+				costUsd: 0.02,
+				turnKey: "s2:1",
+			}),
 		);
 
 		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
@@ -209,7 +235,9 @@ describe("agentUsage.getMyAgentUsage", () => {
 		expect(rows[1].label).toBe("personal");
 
 		// a different user sees nothing
-		expect(await asUser("u-b").query(api.agentUsage.getMyAgentUsage, {})).toEqual([]);
+		expect(
+			await asUser("u-b").query(api.agentUsage.getMyAgentUsage, {}),
+		).toEqual([]);
 	});
 
 	it("includes connected credentials with zero usage", async () => {
@@ -243,7 +271,11 @@ describe("agentUsage.getMyAgentUsage", () => {
 		// a current turn (default day=today, week=thisWeek)
 		await raw.mutation(
 			internal.agentUsage.record,
-			turn({ agentCredentialId: credId, conversationId: convoId, turnKey: "new:1" }),
+			turn({
+				agentCredentialId: credId,
+				conversationId: convoId,
+				turnKey: "new:1",
+			}),
 		);
 		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
 		expect(rows[0].turns).toBe(2);
@@ -268,7 +300,11 @@ describe("agentUsage.getMyAgentUsage", () => {
 		const convoId = await seedConversation(raw, "u-a");
 		await raw.mutation(
 			internal.agentUsage.record,
-			turn({ agentCredentialId: claude, conversationId: convoId, turnKey: "c:1" }),
+			turn({
+				agentCredentialId: claude,
+				conversationId: convoId,
+				turnKey: "c:1",
+			}),
 		);
 		await raw.mutation(
 			internal.agentUsage.record,
@@ -290,7 +326,11 @@ describe("agentUsage.getMyAgentUsage", () => {
 		const convoId = await seedConversation(raw, "u-a");
 		await raw.mutation(
 			internal.agentUsage.record,
-			turn({ agentCredentialId: credId, conversationId: convoId, turnKey: "s1:1" }),
+			turn({
+				agentCredentialId: credId,
+				conversationId: convoId,
+				turnKey: "s1:1",
+			}),
 		);
 		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
 		expect(rows[0].perModel.map((m) => m.model)).toEqual(["unknown"]);
@@ -313,7 +353,12 @@ describe("agentUsage.getMyAgentUsage", () => {
 		);
 		await raw.mutation(
 			internal.agentUsage.record,
-			turn({ agentCredentialId: credId, conversationId: convoId, model: "sonnet", turnKey: "s1:2" }),
+			turn({
+				agentCredentialId: credId,
+				conversationId: convoId,
+				model: "sonnet",
+				turnKey: "s1:2",
+			}),
 		);
 		const rows = await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {});
 		expect(rows[0].lastModel).toBe("sonnet");
@@ -361,7 +406,11 @@ describe("agentUsage.getMyAgentUsage", () => {
 		const convoId = await seedConversation(raw, "u-a");
 		await raw.mutation(
 			internal.agentUsage.record,
-			turn({ agentCredentialId: credId, conversationId: convoId, turnKey: "s1:1" }),
+			turn({
+				agentCredentialId: credId,
+				conversationId: convoId,
+				turnKey: "s1:1",
+			}),
 		);
 		expect(
 			await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {}),
@@ -370,7 +419,9 @@ describe("agentUsage.getMyAgentUsage", () => {
 			credentialId: credId,
 		});
 		// the ledger rows are gone, not just hidden
-		expect(await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {})).toEqual([]);
+		expect(
+			await asUser("u-a").query(api.agentUsage.getMyAgentUsage, {}),
+		).toEqual([]);
 		const remaining = await raw.run(async (ctx) =>
 			ctx.db.query("agentUsageLedger").collect(),
 		);

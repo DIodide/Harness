@@ -5,6 +5,7 @@ import {
 	mutation,
 	query,
 } from "./_generated/server";
+import { getIdentity } from "./authDev";
 
 // Per-user sandbox cap. Mirrored on the frontend in
 // apps/web/src/lib/sandbox.ts and in the FastAPI gateway
@@ -22,7 +23,7 @@ const sandboxLimitError = () =>
 
 export const list = query({
 	handler: async (ctx) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 		return await ctx.db
 			.query("sandboxes")
@@ -34,7 +35,7 @@ export const list = query({
 export const get = query({
 	args: { id: v.id("sandboxes") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return null;
 		const sandbox = await ctx.db.get(args.id);
 		if (!sandbox || sandbox.userId !== identity.subject) return null;
@@ -45,7 +46,7 @@ export const get = query({
 export const getByHarness = query({
 	args: { harnessId: v.id("harnesses") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return null;
 		const sandboxes = await ctx.db
 			.query("sandboxes")
@@ -82,7 +83,7 @@ export const create = mutation({
 		gitRepo: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const existing = await ctx.db
 			.query("sandboxes")
@@ -130,7 +131,7 @@ export const update = mutation({
 		lastAccessedAt: v.optional(v.number()),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const sandbox = await ctx.db.get(args.id);
 		if (!sandbox || sandbox.userId !== identity.subject) {
@@ -147,7 +148,7 @@ export const update = mutation({
 export const remove = mutation({
 	args: { id: v.id("sandboxes") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const sandbox = await ctx.db.get(args.id);
 		if (!sandbox || sandbox.userId !== identity.subject) {

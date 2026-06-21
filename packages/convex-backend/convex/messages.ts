@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { getIdentity } from "./authDev";
 import { contentFromParts } from "./messageParts";
 import {
 	authorizeConversationWrite,
@@ -10,7 +11,7 @@ import {
 export const list = query({
 	args: { conversationId: v.id("conversations") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 		const convo = await ctx.db.get(args.conversationId);
 		if (!convo || convo.userId !== identity.subject) return [];
@@ -41,7 +42,7 @@ export const send = mutation({
 		),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		if (args.content.length > MAX_MESSAGE_CONTENT_CHARS) {
 			throw new Error("Message too long");
@@ -81,7 +82,7 @@ export const remove = mutation({
 	// conversation (owners pass nothing). Authorization is the active grant.
 	args: { id: v.id("messages"), token: v.optional(v.string()) },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		const message = await ctx.db.get(args.id);
@@ -109,7 +110,7 @@ export const removeFrom = mutation({
 	// from a shared conversation (owners pass nothing).
 	args: { id: v.id("messages"), token: v.optional(v.string()) },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		const message = await ctx.db.get(args.id);
@@ -150,7 +151,7 @@ export const removeFrom = mutation({
 export const removeAfter = mutation({
 	args: { id: v.id("messages"), token: v.optional(v.string()) },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		const message = await ctx.db.get(args.id);
@@ -200,7 +201,7 @@ export const truncatePart = mutation({
 		token: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		const message = await ctx.db.get(args.id);
@@ -300,7 +301,7 @@ export const saveInterruptedMessage = mutation({
 		model: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const convo = await authorizeConversationWrite(
 			ctx,

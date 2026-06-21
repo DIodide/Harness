@@ -9,8 +9,7 @@ function makeT() {
 	const raw = convexTest(schema, modules);
 	return {
 		raw,
-		asUser: (uid: string) =>
-			raw.withIdentity({ subject: uid, issuer: "test" }),
+		asUser: (uid: string) => raw.withIdentity({ subject: uid, issuer: "test" }),
 	};
 }
 
@@ -111,7 +110,10 @@ describe("userSettings.chatConfigScope legacy fallback", () => {
 				modelSelectorMode: "session",
 			});
 		});
-		const settings = await asUser("legacy-user").query(api.userSettings.get, {});
+		const settings = await asUser("legacy-user").query(
+			api.userSettings.get,
+			{},
+		);
 		expect(settings.chatConfigScope).toBe("session");
 	});
 

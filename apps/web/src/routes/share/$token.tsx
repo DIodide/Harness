@@ -1,4 +1,3 @@
-import { useAuth, useUser } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
@@ -9,6 +8,7 @@ import { GitFork, Loader2, Lock, PanelRight, Send, Square } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { type ComponentProps, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
+import { useAuth, useUser } from "@/lib/auth";
 import { AgentPermissionCard } from "../../components/agent-permission-card";
 import { AgentQuestionCard } from "../../components/agent-question-card";
 import { countActiveAgents } from "../../components/chat/background-agents-panel";

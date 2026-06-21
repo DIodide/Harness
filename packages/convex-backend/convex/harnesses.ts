@@ -1,12 +1,16 @@
 import { v } from "convex/values";
 import { internalQuery, mutation, query } from "./_generated/server";
+import { getIdentity } from "./authDev";
 import { resolveConversationRole } from "./shares";
 
 /** Match apps/web `SYSTEM_PROMPT_MAX_LENGTH` and FastAPI `HarnessConfig.system_prompt`. */
 const SYSTEM_PROMPT_MAX_CHARS = 4000;
 
 function assertSystemPromptLength(systemPrompt: string | undefined) {
-	if (systemPrompt !== undefined && systemPrompt.length > SYSTEM_PROMPT_MAX_CHARS) {
+	if (
+		systemPrompt !== undefined &&
+		systemPrompt.length > SYSTEM_PROMPT_MAX_CHARS
+	) {
 		throw new Error(
 			`System prompt must be at most ${SYSTEM_PROMPT_MAX_CHARS} characters`,
 		);
@@ -15,14 +19,19 @@ function assertSystemPromptLength(systemPrompt: string | undefined) {
 const mcpServerValidator = v.object({
 	name: v.string(),
 	url: v.string(),
-	authType: v.union(v.literal("none"), v.literal("bearer"), v.literal("oauth"), v.literal("tiger_junction")),
+	authType: v.union(
+		v.literal("none"),
+		v.literal("bearer"),
+		v.literal("oauth"),
+		v.literal("tiger_junction"),
+	),
 	authToken: v.optional(v.string()),
 	commandIds: v.optional(v.array(v.id("commands"))),
 });
 
 export const list = query({
 	handler: async (ctx) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 		return await ctx.db
 			.query("harnesses")
@@ -34,7 +43,7 @@ export const list = query({
 export const get = query({
 	args: { id: v.id("harnesses") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return null;
 		const harness = await ctx.db.get(args.id);
 		if (!harness || harness.userId !== identity.subject) return null;
@@ -142,7 +151,7 @@ export const create = mutation({
 		),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		assertSystemPromptLength(args.systemPrompt);
 		return await ctx.db.insert("harnesses", {
@@ -159,14 +168,12 @@ export const update = mutation({
 		name: v.optional(v.string()),
 		model: v.optional(v.string()),
 		status: v.optional(
-			v.union(
-				v.literal("started"),
-				v.literal("stopped"),
-				v.literal("draft"),
-			),
+			v.union(v.literal("started"), v.literal("stopped"), v.literal("draft")),
 		),
 		mcpServers: v.optional(v.array(mcpServerValidator)),
-		skills: v.optional(v.array(v.object({ name: v.string(), description: v.string() }))),
+		skills: v.optional(
+			v.array(v.object({ name: v.string(), description: v.string() })),
+		),
 		systemPrompt: v.optional(v.string()),
 		suggestedPrompts: v.optional(v.array(v.string())),
 		agent: v.optional(v.string()),
@@ -193,7 +200,7 @@ export const update = mutation({
 		),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const harness = await ctx.db.get(args.id);
 		if (!harness || harness.userId !== identity.subject) {
@@ -223,7 +230,7 @@ export const update = mutation({
 export const duplicate = mutation({
 	args: { id: v.id("harnesses") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const harness = await ctx.db.get(args.id);
 		if (!harness || harness.userId !== identity.subject) {
@@ -253,7 +260,7 @@ export const duplicate = mutation({
 export const remove = mutation({
 	args: { id: v.id("harnesses") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		const harness = await ctx.db.get(args.id);
 		if (!harness || harness.userId !== identity.subject) {

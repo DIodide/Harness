@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { internalQuery, mutation, query } from "./_generated/server";
+import { getIdentity } from "./authDev";
 
 async function assertOwnedWorkspace(
 	ctx: MutationCtx,
@@ -33,7 +34,7 @@ function harnessSandboxToAdopt(
 
 export const list = query({
 	handler: async (ctx) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 
 		const all = await ctx.db
@@ -62,7 +63,7 @@ export const list = query({
 export const reorder = mutation({
 	args: { orderedIds: v.array(v.id("workspaces")) },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		// Defensive bound — a real account has a handful of workspaces.
 		if (args.orderedIds.length > 1000) {
@@ -102,7 +103,7 @@ export const reorder = mutation({
 export const get = query({
 	args: { id: v.id("workspaces") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return null;
 
 		const workspace = await ctx.db.get(args.id);
@@ -166,7 +167,7 @@ export async function getOrCreateDefaultWorkspace(
 export const ensureDefault = mutation({
 	args: { harnessId: v.optional(v.id("harnesses")) },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		return await getOrCreateDefaultWorkspace(
 			ctx,
@@ -184,7 +185,7 @@ export const create = mutation({
 		color: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		const [harness, sandbox] = await Promise.all([
@@ -240,7 +241,7 @@ export const update = mutation({
 		color: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		await assertOwnedWorkspace(ctx, args.id, identity.subject);
@@ -300,7 +301,7 @@ export const update = mutation({
 export const touch = mutation({
 	args: { id: v.id("workspaces") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		await assertOwnedWorkspace(ctx, args.id, identity.subject);
@@ -331,7 +332,7 @@ export const resolveSandboxInternal = internalQuery({
 export const remove = mutation({
 	args: { id: v.id("workspaces") },
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		const workspace = await assertOwnedWorkspace(

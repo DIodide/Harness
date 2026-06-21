@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalQuery, mutation, query } from "./_generated/server";
+import { getIdentity } from "./authDev";
 import { getOrCreateDefaultWorkspace } from "./workspaces";
 
 /**
@@ -54,7 +55,7 @@ async function assertOwnedConversation(
 	ctx: MutationCtx | QueryCtx,
 	conversationId: Id<"conversations">,
 ): Promise<Doc<"conversations">> {
-	const identity = await ctx.auth.getUserIdentity();
+	const identity = await getIdentity(ctx);
 	if (!identity) throw new Error("Unauthenticated");
 	const convo = await ctx.db.get(conversationId);
 	if (!convo || convo.userId !== identity.subject) {
@@ -241,7 +242,7 @@ export const sendShared = mutation({
 		),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 		if (args.content.length > MAX_MESSAGE_CONTENT_CHARS) {
 			throw new Error("Message too long");
@@ -425,7 +426,7 @@ export const listShareGrants = query({
 	handler: async (ctx, args) => {
 		// Returns [] (not throw) for non-owners so the manage panel simply
 		// shows nothing rather than erroring.
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) return [];
 		const convo = await ctx.db.get(args.conversationId);
 		if (!convo || convo.userId !== identity.subject) return [];
@@ -463,7 +464,7 @@ export const getSharedConversation = query({
 		// Reading identity here is fine — it's optional (null for anonymous),
 		// so this stays a public query. viewerIsOwner lets the UI send the
 		// owner to their own editable chat instead of the read-only view.
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		// Surface the agent loop the conversation's current harness runs on so an
 		// editor's composer picks the default-loop vs ACP-agent send path. Just
 		// the agent id (a non-secret label) — no harness internals leak.
@@ -485,8 +486,7 @@ export const getSharedConversation = query({
 				sandboxId = harness.daytonaSandboxId;
 			}
 		}
-		const viewerIsOwner =
-			identity != null && convo.userId === identity.subject;
+		const viewerIsOwner = identity != null && convo.userId === identity.subject;
 		return {
 			conversationId: convo._id,
 			title: convo.title,
@@ -572,7 +572,7 @@ export const forkSharedConversation = mutation({
 		workspaceId: v.optional(v.id("workspaces")),
 	},
 	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
+		const identity = await getIdentity(ctx);
 		if (!identity) throw new Error("Unauthenticated");
 
 		const grant = await grantForToken(ctx, args.token);
@@ -625,9 +625,7 @@ export const forkSharedConversation = mutation({
 			// to the SHARED page (they don't own the original — navigating to it in
 			// /chat would show an empty owner-gated conversation). Only public-link
 			// grants carry a token; per-user grants don't.
-			...(grant.publicToken
-				? { forkedFromShareToken: grant.publicToken }
-				: {}),
+			...(grant.publicToken ? { forkedFromShareToken: grant.publicToken } : {}),
 		});
 
 		for (const msg of messagesToCopy) {

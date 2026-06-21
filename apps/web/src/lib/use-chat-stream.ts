@@ -1,5 +1,5 @@
-import { useAuth, useUser } from "@clerk/tanstack-react-start";
 import { useCallback, useRef, useState } from "react";
+import { useAuth, useUser } from "@/lib/auth";
 import { env } from "../env";
 import {
 	type AgentMode,

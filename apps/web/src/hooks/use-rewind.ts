@@ -1,10 +1,10 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation } from "@tanstack/react-query";
 import { useCallback } from "react";
 import toast from "react-hot-toast";
+import { useAuth } from "@/lib/auth";
 import { useChatStreamContext } from "../lib/chat-stream-context";
 import { resetAgentSessionForRewind } from "../lib/rewind";
 

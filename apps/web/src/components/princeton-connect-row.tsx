@@ -2,11 +2,11 @@ import {
 	isClerkRuntimeError,
 	isReverificationCancelledError,
 } from "@clerk/clerk-react/errors";
-import { useReverification, useUser } from "@clerk/tanstack-react-start";
 import { GraduationCap, Mail } from "lucide-react";
 import { motion } from "motion/react";
 import { useCallback, useState } from "react";
 import toast from "react-hot-toast";
+import { useReverification, useUser } from "@/lib/auth";
 import type { McpServerEntry } from "../lib/mcp";
 import { getPrincetonNetid } from "../lib/mcp";
 import { RoseCurveSpinner } from "./rose-curve-spinner";
