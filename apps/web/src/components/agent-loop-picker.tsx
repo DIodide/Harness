@@ -3,7 +3,13 @@ import { AnimatePresence, motion } from "motion/react";
 import { type ComponentType, useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { KIND_OPTIONS } from "../lib/agent-kind-options";
-import type { AgentMode } from "../lib/agent-mode";
+import {
+	type AgentMode,
+	agentModelLabel,
+	CLAUDE_CODE_CONFIG_OPTIONS,
+	flattenConfigChoices,
+	isEffortConfigId,
+} from "../lib/agent-mode";
 import { MODELS } from "../lib/models";
 import {
 	type AgentCatalogEntry,
@@ -60,7 +66,10 @@ export function agentModelsFor(
 		return MODELS.map((m) => ({ value: m.value, label: m.label }));
 	}
 	const entry = catalog?.find((e) => e.id === agent);
-	return (entry?.models ?? []).map((m) => ({ value: m, label: m }));
+	return (entry?.models ?? []).map((m) => ({
+		value: m,
+		label: agentModelLabel(m),
+	}));
 }
 
 export function credentialDisplayName(cred: {
@@ -191,6 +200,10 @@ export function AgentLoopPicker({
 	onCredentialChange,
 	model,
 	onModelChange,
+	agentMode,
+	onAgentModeChange,
+	reasoningEffort,
+	onReasoningEffortChange,
 }: {
 	agent: AgentMode;
 	onAgentChange: (agent: AgentMode) => void;
@@ -198,6 +211,12 @@ export function AgentLoopPicker({
 	onCredentialChange: (credentialId: string | null) => void;
 	model: string;
 	onModelChange: (model: string) => void;
+	/** Persisted ACP defaults (Claude Code). Optional — omit on forms that
+	 *  don't surface them. */
+	agentMode?: string | null;
+	onAgentModeChange?: (mode: string) => void;
+	reasoningEffort?: string | null;
+	onReasoningEffortChange?: (effort: string) => void;
 }) {
 	const { data: catalog } = useAgentCatalog();
 	const [addingCredential, setAddingCredential] = useState(false);
@@ -206,6 +225,16 @@ export function AgentLoopPicker({
 		agent === "default" ? undefined : catalog?.find((e) => e.id === agent);
 	const credentials = entry?.credentials ?? [];
 	const models = agentModelsFor(agent, catalog);
+
+	// Mode / effort defaults are Claude Code's ACP session options; sourced from
+	// the static catalog (the live session may refine them later).
+	const showAgentConfig = agent === "claude-code";
+	const modeOption = CLAUDE_CODE_CONFIG_OPTIONS.find((o) => o.id === "mode");
+	const effortOption = CLAUDE_CODE_CONFIG_OPTIONS.find((o) =>
+		isEffortConfigId(o.id),
+	);
+	const modeChoices = modeOption ? flattenConfigChoices(modeOption) : [];
+	const effortChoices = effortOption ? flattenConfigChoices(effortOption) : [];
 
 	// Keep selections coherent when the agent changes: model must come from
 	// the agent's list, and the credential defaults to the newest stored one.
@@ -379,6 +408,58 @@ export function AgentLoopPicker({
 					</p>
 				)}
 			</div>
+
+			{showAgentConfig && onAgentModeChange && (
+				<div>
+					<label
+						htmlFor="agent-mode-select"
+						className="mb-2 block text-xs font-medium text-foreground"
+					>
+						Mode
+					</label>
+					<Select
+						value={agentMode ?? "default"}
+						onValueChange={onAgentModeChange}
+					>
+						<SelectTrigger id="agent-mode-select" className="h-9 w-full">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							{modeChoices.map((c) => (
+								<SelectItem key={c.value} value={c.value}>
+									{c.name ?? c.value}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				</div>
+			)}
+
+			{showAgentConfig && onReasoningEffortChange && (
+				<div>
+					<label
+						htmlFor="agent-effort-select"
+						className="mb-2 block text-xs font-medium text-foreground"
+					>
+						Reasoning effort
+					</label>
+					<Select
+						value={reasoningEffort ?? "high"}
+						onValueChange={onReasoningEffortChange}
+					>
+						<SelectTrigger id="agent-effort-select" className="h-9 w-full">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							{effortChoices.map((c) => (
+								<SelectItem key={c.value} value={c.value}>
+									{c.name ?? c.value}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				</div>
+			)}
 		</div>
 	);
 }

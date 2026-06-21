@@ -36,6 +36,13 @@ export default defineSchema({
 		// The stored credential this harness uses for its ACP agent (one
 		// credential per harness; credentials are reusable across harnesses).
 		agentCredentialId: v.optional(v.id("agentCredentials")),
+		// Persisted ACP session defaults (Claude Code et al), seeded into a new
+		// session and editable in the harness forms / chat bar before any session
+		// exists. The agent MODEL reuses the existing `model` field. Absent = the
+		// agent's own default. `agentMode` = the ACP "mode" config value (e.g.
+		// "default", "plan"); `reasoningEffort` = the ACP "effort" value.
+		agentMode: v.optional(v.string()),
+		reasoningEffort: v.optional(v.string()),
 		// Daytona sandbox configuration
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxId: v.optional(v.id("sandboxes")),

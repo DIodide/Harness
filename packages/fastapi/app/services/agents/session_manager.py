@@ -1539,6 +1539,7 @@ class AgentSessionManager:
             await self._reapply_config(session, prior_config)
         else:
             await self._apply_harness_model(session)
+            await self._apply_harness_config(session)
 
     @staticmethod
     def _config_value_offered(option: dict, value: str) -> bool:
@@ -1584,6 +1585,47 @@ class AgentSessionManager:
                 logger.warning(
                     "Could not re-apply %s=%r on session '%s': %s",
                     option_id, value, session.id, e,
+                )
+
+    async def _apply_harness_config(self, session: AgentSession) -> None:
+        """Best-effort: seed the harness's persisted ACP mode/effort defaults on
+        a fresh session (like _apply_harness_model). Forwarded VERBATIM (not
+        gated on the advertised choices) so a valid-but-unadvertised value such
+        as bypassPermissions still applies — the wrapper validates and any
+        rejection is caught/logged."""
+        if session.connection is None or session.acp_session_id is None:
+            return
+        desired: dict[str, str] = {}
+        mode = (session.harness.agent_mode or "").strip()
+        if mode:
+            desired["mode"] = mode
+        effort = (session.harness.reasoning_effort or "").strip()
+        if effort:
+            # The wrapper names the option either "effort" or "reasoning_effort".
+            for oid in ("effort", "reasoning_effort"):
+                if any(o.get("id") == oid for o in session.config_options):
+                    desired[oid] = effort
+                    break
+        for option_id, value in desired.items():
+            option = next(
+                (o for o in session.config_options if o.get("id") == option_id),
+                None,
+            )
+            if option and option.get("currentValue") == value:
+                continue
+            try:
+                result = await session.connection.set_config_option(
+                    session.acp_session_id, option_id, value,
+                )
+                if result.get("configOptions") is not None:
+                    session.config_options = result["configOptions"]
+                logger.info(
+                    "Applied harness %s=%r to session '%s'",
+                    option_id, value, session.id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Could not apply harness %s=%r: %s", option_id, value, e,
                 )
 
     async def _apply_harness_model(self, session: AgentSession) -> None:
