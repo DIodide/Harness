@@ -113,7 +113,11 @@ export const cloneFromCompaction = mutation({
 			userId: identity.subject,
 			lastMessageAt: Date.now(),
 			forkedFromConversationId: compaction.conversationId,
-			forkedAtMessageCount: compaction.atMessageCount ?? 0,
+			// The clone holds exactly ONE message (the seeded summary), so the
+			// "Branched from …" banner — which renders after message
+			// forkedAtMessageCount-1 in THIS conversation — must be 1, not the
+			// source-side position (which would never match a 1-message clone).
+			forkedAtMessageCount: 1,
 			seededFromCompactionId: args.compactionId,
 		});
 

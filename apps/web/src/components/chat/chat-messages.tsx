@@ -1228,6 +1228,7 @@ export function ChatMessages({
 						compactions={compactions}
 						onStartFromSummary={onStartFromSummary}
 						isStartingClone={isStartingClone}
+						isStreaming={isStreaming}
 					/>
 				)}
 
