@@ -79,7 +79,6 @@ import {
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { Input } from "../../components/ui/input"; // reuse input from components
-import { ScrollArea } from "../../components/ui/scroll-area";
 import {
 	Select,
 	SelectContent,
@@ -1708,7 +1707,12 @@ function WorkspaceSidebar({
 				</div>
 			</div>
 
-			<ScrollArea className="min-h-0 flex-1 px-2 py-2">
+			{/* Plain block-flow scroller (not Radix ScrollArea): Radix wraps content
+			    in a `display:table; min-width:100%` box that shrink-wraps to the
+			    widest title, growing past the 280px column so `w-full` rows never
+			    truncate and the hover kebab gets clipped off-screen. Block flow is
+			    bounded by the column width, so min-w-0 + truncate work. */}
+			<div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 py-2">
 				{/* BRANCH 1: Active search — show search results */}
 				{searchQuery &&
 				titleSearch.status !== "LoadingFirstPage" &&
@@ -1865,7 +1869,7 @@ function WorkspaceSidebar({
 						))}
 					</div>
 				)}
-			</ScrollArea>
+			</div>
 
 			<Separator />
 			<ManageNavFooter
