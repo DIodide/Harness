@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { accountUsageFromRateLimit, formatResetTime } from "./usage-display";
+import {
+	accountUsageFromRateLimit,
+	accountUsagesFromRateLimit,
+	formatResetTime,
+} from "./usage-display";
 
 describe("formatResetTime", () => {
 	beforeEach(() => {
@@ -116,5 +120,72 @@ describe("accountUsageFromRateLimit (SDK rate_limit_info shape)", () => {
 		});
 		expect(a?.label).toBe("Claude account");
 		expect(a?.status).toBe("rejected");
+	});
+});
+
+describe("accountUsagesFromRateLimit (multi-window buckets shape)", () => {
+	const futureSec = Math.floor(Date.now() / 1000) + 3600;
+	const pastSec = Math.floor(Date.now() / 1000) - 3600;
+
+	it("parses 5h + weekly windows, ordered, normalizing 0–1 to 0–100", () => {
+		const windows = accountUsagesFromRateLimit({
+			buckets: {
+				// out of order on purpose — should sort five_hour first
+				seven_day: {
+					utilization: 0.46,
+					status: "allowed",
+					resetsAt: futureSec,
+				},
+				five_hour: {
+					utilization: 0.14,
+					status: "allowed",
+					resetsAt: futureSec,
+				},
+				seven_day_sonnet: {
+					utilization: 0.07,
+					status: "allowed",
+					resetsAt: futureSec,
+				},
+			},
+		});
+		expect(windows.map((w) => w.label)).toEqual([
+			"Current session",
+			"Current week",
+			"Current week (Sonnet)",
+		]);
+		expect(windows[0].utilization).toBeCloseTo(14);
+		expect(windows[1].utilization).toBeCloseTo(46);
+		expect(windows[2].utilization).toBeCloseTo(7);
+	});
+
+	it("keeps a rejected window and drops one whose reset has passed", () => {
+		const windows = accountUsagesFromRateLimit({
+			buckets: {
+				five_hour: { utilization: 1, status: "rejected", resetsAt: futureSec },
+				seven_day: { utilization: 0.9, status: "allowed", resetsAt: pastSec },
+			},
+		});
+		expect(windows).toHaveLength(1);
+		expect(windows[0].label).toBe("Current session");
+		expect(windows[0].status).toBe("rejected");
+		expect(windows[0].utilization).toBeCloseTo(100);
+	});
+
+	it("falls back to the legacy flat single-window shape", () => {
+		const windows = accountUsagesFromRateLimit({
+			rateLimitType: "seven_day",
+			status: "allowed",
+			utilization: 73.7,
+			resetsAt: futureSec,
+		});
+		expect(windows).toHaveLength(1);
+		expect(windows[0].label).toBe("Current week");
+		expect(windows[0].utilization).toBeCloseTo(73.7);
+	});
+
+	it("returns [] for an empty/unknown snapshot", () => {
+		expect(accountUsagesFromRateLimit(null)).toEqual([]);
+		expect(accountUsagesFromRateLimit({})).toEqual([]);
+		expect(accountUsagesFromRateLimit({ buckets: {} })).toEqual([]);
 	});
 });
