@@ -11,7 +11,7 @@ from app.dependencies import (
     get_current_user_optional,
     get_http_client,
 )
-from app.models import ChatRequest, harness_config_from_resolved
+from app.models import ChatRequest, SkillRef, harness_config_from_resolved
 from app.services.convex import (
     query_convex,
     save_assistant_message,
@@ -483,8 +483,46 @@ async def chat_stream(
                     ),
                 }
 
-        # Build skills manifest and inject get_skill_content tool
-        skill_refs = body.harness.skills
+        # Build skills manifest and inject get_skill_content tool.
+        #
+        # Effective skill set = the harness's loose skills UNION the skills
+        # contributed by any attached skill packs. Pack skills are additive;
+        # if a pack skill collides with a loose harness skill by name, the
+        # loose harness skill wins (we seed names from body.harness.skills
+        # first and only append pack skills whose name isn't already present).
+        skill_refs: list = list(body.harness.skills)
+        seen_skill_names: set[str] = {s.name for s in skill_refs}
+
+        # Resolve attached skill packs into their constituent skills. Best
+        # effort: a failure here must NEVER break the chat turn, so we wrap
+        # the resolve and log+continue. query_convex already swallows transport
+        # errors (returns None), but we guard the whole block defensively.
+        if body.harness.skill_pack_ids:
+            try:
+                pack_ctx = await query_convex(
+                    http_client,
+                    "skillPacks:resolveForGateway",
+                    {
+                        "userId": user_id,
+                        "skillPackIds": body.harness.skill_pack_ids,
+                    },
+                )
+                for ps in (pack_ctx or {}).get("skills", []):
+                    name = ps.get("name")
+                    if not name or name in seen_skill_names:
+                        continue
+                    seen_skill_names.add(name)
+                    skill_refs.append(
+                        SkillRef(name=name, description=ps.get("description", ""))
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to resolve skill packs for harness '%s'; "
+                    "continuing without pack skills",
+                    body.harness.name,
+                    exc_info=True,
+                )
+
         allowed_skill_names: set[str] = {s.name for s in skill_refs}
         skill_manifest: list[dict] = []
         if skill_refs:

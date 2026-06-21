@@ -27,7 +27,13 @@ import {
 	X,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { type KeyboardEvent, useMemo, useRef, useState } from "react";
+import {
+	type KeyboardEvent,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import toast from "react-hot-toast";
 import { AgentLoopPicker } from "../../components/agent-loop-picker";
 import { OAuthConnectRow } from "../../components/mcp-oauth-connect-row";
@@ -35,6 +41,7 @@ import { PresetMcpGrid } from "../../components/preset-mcp-grid";
 import { PrincetonConnectRow } from "../../components/princeton-connect-row";
 import { RecommendedSkillsGrid } from "../../components/recommended-skills-grid";
 import { RoseCurveSpinner } from "../../components/rose-curve-spinner";
+import { SkillPackPicker } from "../../components/skill-pack-picker";
 import { SkillViewerDialog } from "../../components/skill-viewer-dialog";
 import { SkillsBrowser } from "../../components/skills-browser";
 import { Badge } from "../../components/ui/badge";
@@ -262,6 +269,9 @@ function HarnessEditPage() {
 	const [status, setStatus] = useState<HarnessStatus | null>(null);
 	const [mcpServers, setMcpServers] = useState<McpServerEntry[] | null>(null);
 	const [skills, setSkills] = useState<SkillEntry[] | null>(null);
+	const [selectedSkillPackIds, setSelectedSkillPackIds] = useState<
+		Id<"skillPacks">[]
+	>([]);
 	const [skillsBrowserOpen, setSkillsBrowserOpen] = useState(false);
 	const [viewingSkillId, setViewingSkillId] = useState<string | null>(null);
 	const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
@@ -287,6 +297,12 @@ function HarnessEditPage() {
 		status ?? (harness?.status as HarnessStatus | undefined) ?? "draft";
 	const currentMcpServers = mcpServers ?? harness?.mcpServers ?? [];
 	const currentSkills: SkillEntry[] = skills ?? harness?.skills ?? [];
+
+	// Seed skill-pack selection from the loaded harness doc.
+	const harnessSkillPackIds = harness?.skillPackIds;
+	useEffect(() => {
+		setSelectedSkillPackIds(harnessSkillPackIds ?? []);
+	}, [harnessSkillPackIds]);
 
 	const toggleSkill = (skill: SkillEntry) => {
 		const exists = currentSkills.some((s) => s.name === skill.name);
@@ -318,6 +334,14 @@ function HarnessEditPage() {
 
 	const currentSystemPrompt = systemPrompt ?? harness?.systemPrompt ?? "";
 
+	// Compare against the harness doc so a pack-only edit enables Save.
+	const skillPacksDirty = useMemo(() => {
+		const saved = harness?.skillPackIds ?? [];
+		if (saved.length !== selectedSkillPackIds.length) return true;
+		const savedSet = new Set(saved);
+		return selectedSkillPackIds.some((id) => !savedSet.has(id));
+	}, [harness?.skillPackIds, selectedSkillPackIds]);
+
 	const hasChanges =
 		name !== null ||
 		model !== null ||
@@ -330,7 +354,8 @@ function HarnessEditPage() {
 		skills !== null ||
 		systemPrompt !== null ||
 		sandboxEnabled !== null ||
-		selectedSandboxId !== null;
+		selectedSandboxId !== null ||
+		skillPacksDirty;
 
 	// Derived: which preset IDs are already in the server list
 	const selectedPresetMcps = useMemo(
@@ -406,6 +431,7 @@ function HarnessEditPage() {
 		if (status !== null) updates.status = status;
 		if (mcpServers !== null) updates.mcpServers = mcpServers;
 		if (skills !== null) updates.skills = skills;
+		updates.skillPackIds = selectedSkillPackIds;
 		if (systemPrompt !== null) updates.systemPrompt = systemPrompt.trim();
 		if (currentSandboxEnabled) {
 			updates.sandboxEnabled = true;
@@ -837,6 +863,16 @@ function HarnessEditPage() {
 							<Badge variant="secondary" className="text-[10px]">
 								{currentSkills.length} added
 							</Badge>
+						</div>
+
+						<div className="mb-3">
+							<h3 className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+								Skill Packs
+							</h3>
+							<SkillPackPicker
+								selectedIds={selectedSkillPackIds}
+								onChange={setSelectedSkillPackIds}
+							/>
 						</div>
 
 						<div className="mb-3">

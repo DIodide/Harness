@@ -83,6 +83,7 @@ export const resolveForCollab = internalQuery({
 			model: harness.model,
 			systemPrompt: harness.systemPrompt ?? null,
 			skills: harness.skills,
+			skillPackIds: harness.skillPackIds ?? [],
 			// "default" | "claude-code" | "codex" | ... | null
 			agent: harness.agent ?? null,
 			agentCredentialId: harness.agentCredentialId ?? null,
@@ -119,6 +120,7 @@ export const create = mutation({
 		),
 		mcpServers: v.array(mcpServerValidator),
 		skills: v.array(v.object({ name: v.string(), description: v.string() })),
+		skillPackIds: v.optional(v.array(v.id("skillPacks"))),
 		systemPrompt: v.optional(v.string()),
 		agent: v.optional(v.string()),
 		agentCredentialId: v.optional(v.id("agentCredentials")),
@@ -167,6 +169,7 @@ export const update = mutation({
 		),
 		mcpServers: v.optional(v.array(mcpServerValidator)),
 		skills: v.optional(v.array(v.object({ name: v.string(), description: v.string() }))),
+		skillPackIds: v.optional(v.array(v.id("skillPacks"))),
 		systemPrompt: v.optional(v.string()),
 		suggestedPrompts: v.optional(v.array(v.string())),
 		agent: v.optional(v.string()),
@@ -235,6 +238,7 @@ export const duplicate = mutation({
 			status: harness.status,
 			mcpServers: harness.mcpServers,
 			skills: harness.skills,
+			skillPackIds: harness.skillPackIds,
 			systemPrompt: harness.systemPrompt,
 			// The agent loop and its credential are part of what the user
 			// is duplicating — dropping them silently turned the copy into

@@ -3,6 +3,7 @@ import {
 	ArrowLeft,
 	Box,
 	KeyRound,
+	Package,
 	Share2,
 	SlidersHorizontal,
 } from "lucide-react";
@@ -21,6 +22,7 @@ import { Button } from "../ui/button";
 export const MANAGE_TABS = [
 	{ to: "/sandboxes", label: "Sandboxes", icon: Box },
 	{ to: "/harnesses", label: "Harnesses", icon: SlidersHorizontal },
+	{ to: "/skill-packs", label: "Skill Packs", icon: Package },
 	{ to: "/credentials", label: "Credentials", icon: KeyRound },
 	{ to: "/manage-sharing", label: "Sharing", icon: Share2 },
 ] as const;
@@ -31,7 +33,7 @@ function matches(pathname: string, to: string): boolean {
 }
 
 /**
- * Segmented tab control switching between the three manage screens. These are
+ * Segmented tab control switching between the manage screens. These are
  * real navigating links, so we use nav semantics + aria-current="page" rather
  * than role="tablist" (no roving-tabindex contract to honor).
  */

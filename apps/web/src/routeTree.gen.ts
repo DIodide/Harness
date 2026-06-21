@@ -16,6 +16,7 @@ import { Route as ManageSharingRouteImport } from './routes/manage-sharing'
 import { Route as AppRouteImport } from './routes/app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as WorkspacesIndexRouteImport } from './routes/workspaces/index'
+import { Route as SkillPacksIndexRouteImport } from './routes/skill-packs/index'
 import { Route as SandboxesIndexRouteImport } from './routes/sandboxes/index'
 import { Route as HarnessesIndexRouteImport } from './routes/harnesses/index'
 import { Route as CredentialsIndexRouteImport } from './routes/credentials/index'
@@ -59,6 +60,11 @@ const IndexRoute = IndexRouteImport.update({
 const WorkspacesIndexRoute = WorkspacesIndexRouteImport.update({
   id: '/workspaces/',
   path: '/workspaces/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SkillPacksIndexRoute = SkillPacksIndexRouteImport.update({
+  id: '/skill-packs/',
+  path: '/skill-packs/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SandboxesIndexRoute = SandboxesIndexRouteImport.update({
@@ -123,6 +129,7 @@ export interface FileRoutesByFullPath {
   '/credentials/': typeof CredentialsIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
   '/sandboxes/': typeof SandboxesIndexRoute
+  '/skill-packs/': typeof SkillPacksIndexRoute
   '/workspaces/': typeof WorkspacesIndexRoute
 }
 export interface FileRoutesByTo {
@@ -141,6 +148,7 @@ export interface FileRoutesByTo {
   '/credentials': typeof CredentialsIndexRoute
   '/harnesses': typeof HarnessesIndexRoute
   '/sandboxes': typeof SandboxesIndexRoute
+  '/skill-packs': typeof SkillPacksIndexRoute
   '/workspaces': typeof WorkspacesIndexRoute
 }
 export interface FileRoutesById {
@@ -160,6 +168,7 @@ export interface FileRoutesById {
   '/credentials/': typeof CredentialsIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
   '/sandboxes/': typeof SandboxesIndexRoute
+  '/skill-packs/': typeof SkillPacksIndexRoute
   '/workspaces/': typeof WorkspacesIndexRoute
 }
 export interface FileRouteTypes {
@@ -180,6 +189,7 @@ export interface FileRouteTypes {
     | '/credentials/'
     | '/harnesses/'
     | '/sandboxes/'
+    | '/skill-packs/'
     | '/workspaces/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -198,6 +208,7 @@ export interface FileRouteTypes {
     | '/credentials'
     | '/harnesses'
     | '/sandboxes'
+    | '/skill-packs'
     | '/workspaces'
   id:
     | '__root__'
@@ -216,6 +227,7 @@ export interface FileRouteTypes {
     | '/credentials/'
     | '/harnesses/'
     | '/sandboxes/'
+    | '/skill-packs/'
     | '/workspaces/'
   fileRoutesById: FileRoutesById
 }
@@ -235,6 +247,7 @@ export interface RootRouteChildren {
   CredentialsIndexRoute: typeof CredentialsIndexRoute
   HarnessesIndexRoute: typeof HarnessesIndexRoute
   SandboxesIndexRoute: typeof SandboxesIndexRoute
+  SkillPacksIndexRoute: typeof SkillPacksIndexRoute
   WorkspacesIndexRoute: typeof WorkspacesIndexRoute
 }
 
@@ -287,6 +300,13 @@ declare module '@tanstack/react-router' {
       path: '/workspaces'
       fullPath: '/workspaces/'
       preLoaderRoute: typeof WorkspacesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/skill-packs/': {
+      id: '/skill-packs/'
+      path: '/skill-packs'
+      fullPath: '/skill-packs/'
+      preLoaderRoute: typeof SkillPacksIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sandboxes/': {
@@ -371,6 +391,7 @@ const rootRouteChildren: RootRouteChildren = {
   CredentialsIndexRoute: CredentialsIndexRoute,
   HarnessesIndexRoute: HarnessesIndexRoute,
   SandboxesIndexRoute: SandboxesIndexRoute,
+  SkillPacksIndexRoute: SkillPacksIndexRoute,
   WorkspacesIndexRoute: WorkspacesIndexRoute,
 }
 export const routeTree = rootRouteImport
