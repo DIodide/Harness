@@ -16,6 +16,7 @@ subscription, not Harness's OpenRouter key.
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import re
@@ -42,6 +43,7 @@ from app.services.agents.daytona_runtime import (
 from app.services.agents.credentials import resolve_agent_credentials
 from app.services.agents.registry import SANDBOX_WORKSPACE, get_agent
 from app.services.mcp_client import UserContext
+from app.services.workspace_credentials import resolve_workspace_env
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,24 @@ PERMISSION_TIMEOUT_SECONDS = 300.0
 # BEFORE the Daytona sandbox exists (the Convex-side check fires only at
 # registration, after the compute is already spent).
 MAX_SANDBOXES_PER_USER = 5
+
+
+def _workspace_env_fingerprint(env: dict[str, str]) -> str:
+    """Stable fingerprint of a workspace env dict (names + values).
+
+    Used only to detect change between a parked runtime's spawn-time env and a
+    claiming session's — adding, removing, or rotating any credential yields a
+    different digest. Not a security boundary; never logged with values.
+    """
+    if not env:
+        return ""
+    h = hashlib.sha256()
+    for name in sorted(env):
+        h.update(name.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(env[name].encode("utf-8"))
+        h.update(b"\x00")
+    return h.hexdigest()
 
 
 class SandboxAccessError(Exception):
@@ -212,6 +232,12 @@ class AgentSession:
     # so every action RE-VERIFIES the live grant (revocation takes effect at
     # once). The owner is never in this map.
     collaborator_tokens: dict[str, str] = field(default_factory=dict)
+    # Fingerprint of the workspace credentials (env vars) the agent process was
+    # LAUNCHED with — they're baked into the sandbox at spawn. Set when creds
+    # are resolved; a parked runtime whose fingerprint differs from a claiming
+    # session's must not be adopted (the env would be stale after a credential
+    # change). "" means no workspace credentials.
+    workspace_env_version: str = ""
 
     @property
     def supports_prompt_queueing(self) -> bool:
@@ -894,6 +920,10 @@ class ParkedRuntime:
     # vars are baked in at spawn) — a session wanting different credentials
     # must never adopt this runtime.
     credential_id: str | None = None
+    # Fingerprint of the workspace env baked into the runtime at spawn. A
+    # session whose workspace credentials changed (different fingerprint) must
+    # not adopt this runtime — its env would be stale.
+    workspace_env_version: str = ""
     parked_at: float = field(default_factory=time.monotonic)
 
 
@@ -926,6 +956,40 @@ class AgentSessionManager:
         if self._http is None:
             self._http = httpx.AsyncClient(timeout=30.0)
         return self._http
+
+    async def _inject_workspace_env(
+        self, creds, harness: HarnessConfig, user_id: str,
+    ) -> str:
+        """Merge the workspace's assigned credential env into `creds.env` and
+        return a fingerprint of that env.
+
+        Agent-auth keys win over workspace credentials (defense-in-depth — the
+        reserved-name denylist already prevents collisions). The fingerprint
+        identifies the exact env baked into the sandbox at spawn so a parked
+        runtime with stale credentials is never adopted. Returns "" when the
+        harness has no workspace or no assigned credentials.
+
+        NEVER log `creds.env` or the resolved values.
+        """
+        workspace_id = getattr(harness, "workspace_id", None)
+        if not workspace_id:
+            return ""
+        try:
+            ws_env = await resolve_workspace_env(
+                self._http_client(), workspace_id, user_id,
+            )
+        except Exception:
+            # Supplementary env must never block a session from starting.
+            logger.exception(
+                "Failed to resolve workspace credentials for workspace '%s'",
+                workspace_id,
+            )
+            return ""
+        if not ws_env:
+            return ""
+        # Agent auth (creds.env) overrides workspace-supplied names.
+        creds.env = {**ws_env, **creds.env}
+        return _workspace_env_fingerprint(ws_env)
 
     def get(self, session_id: str, user_id: str) -> AgentSession:
         session = self._sessions.get(session_id)
@@ -992,13 +1056,17 @@ class AgentSessionManager:
             self._http_client(), agent_id, user_id,
             credential_id=harness.agent_credential_id,
         )
-
         session = AgentSession(
             id=uuid.uuid4().hex,
             user_id=user_id,
             agent_id=agent.id,
             harness=harness,
             conversation_id=conversation_id,
+        )
+        # Inject the workspace's assigned env-var credentials and record the
+        # fingerprint BEFORE provisioning so _claim_parked can compare it.
+        session.workspace_env_version = await self._inject_workspace_env(
+            creds, harness, user_id,
         )
         self._sessions[session.id] = session
         self._ensure_reaper()
@@ -1018,13 +1086,16 @@ class AgentSessionManager:
         key = self._runtime_key(session.user_id, session.agent_id, attach_sandbox_id)
         parked = self._parked.pop(key, None)
         if parked is not None:
-            if parked.credential_id == session.harness.agent_credential_id:
+            if (
+                parked.credential_id == session.harness.agent_credential_id
+                and parked.workspace_env_version == session.workspace_env_version
+            ):
                 return parked
-            # The runtime's agent was launched with DIFFERENT credentials
-            # (env vars are fixed at spawn) — adopting it would keep e.g. a
-            # rotated-away token alive. Destroy it and provision fresh.
+            # The runtime's agent was launched with DIFFERENT credentials or
+            # workspace env (both fixed at spawn) — adopting it would keep e.g.
+            # a rotated-away token alive. Destroy it and provision fresh.
             logger.info(
-                "Discarding parked %s runtime (sandbox=%s): credential link "
+                "Discarding parked %s runtime (sandbox=%s): credentials "
                 "changed", parked.agent_id, parked.runtime.sandbox_id,
             )
             destroy = asyncio.create_task(
@@ -1038,6 +1109,7 @@ class AgentSessionManager:
             and s.user_id == session.user_id
             and s.agent_id == session.agent_id
             and s.harness.agent_credential_id == session.harness.agent_credential_id
+            and s.workspace_env_version == session.workspace_env_version
             and s.status == "ready"
             and not s.lock.locked()
             and s.turn_guard == 0
@@ -1267,12 +1339,14 @@ class AgentSessionManager:
         )
         await self._teardown(holder, park=True)
         parked = self._parked.pop(key, None)
-        if (
-            parked is not None
-            and parked.credential_id != session.harness.agent_credential_id
+        if parked is not None and (
+            parked.credential_id != session.harness.agent_credential_id
+            or parked.workspace_env_version != session.workspace_env_version
         ):
-            # Launched with different credentials — provision fresh into the
-            # sandbox instead (the launcher replaces the shim anyway).
+            # Launched with different agent credentials OR different workspace
+            # env (both baked in at spawn) — provision fresh into the sandbox
+            # instead (the launcher replaces the shim anyway), so a rotated or
+            # revoked credential takes effect immediately. Mirrors _claim_parked.
             await self._destroy_runtime(parked.runtime, parked.agent_id)
             return None
         return parked
@@ -1353,6 +1427,12 @@ class AgentSessionManager:
         creds = await resolve_agent_credentials(
             self._http_client(), session.agent_id, session.user_id,
             credential_id=session.harness.agent_credential_id,
+        )
+        # Re-provisioning relaunches the agent process, so pick up the LATEST
+        # workspace credentials here (this is the point at which a revocation
+        # or rotation takes effect for a previously-live session).
+        session.workspace_env_version = await self._inject_workspace_env(
+            creds, session.harness, session.user_id,
         )
         owns = session.runtime.owns_sandbox
         old_sandbox_id = session.runtime.sandbox_id
@@ -2463,6 +2543,7 @@ class AgentSessionManager:
             agent_capabilities=session.agent_capabilities,
             msg_id_floor=session.msg_id_floor + 1_000_000,
             credential_id=session.harness.agent_credential_id,
+            workspace_env_version=session.workspace_env_version,
         )
         logger.info(
             "Parked %s runtime (sandbox=%s) for user '%s'",

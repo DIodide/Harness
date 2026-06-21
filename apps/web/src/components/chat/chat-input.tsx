@@ -577,6 +577,7 @@ export function ChatInput({
 			model: effectiveModel,
 			agentOverride: sessionAgent,
 			sandboxId: resolvedSandboxId,
+			workspaceId,
 		});
 
 		let convoId = conversationId;

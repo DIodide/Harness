@@ -29,6 +29,7 @@ from app.services.sandbox_tools import (
     execute_sandbox_tool,
 )
 from app.services.daytona_service import get_daytona_service
+from app.services.workspace_credentials import resolve_workspace_env
 from app.services import stream_bus
 
 router = APIRouter()
@@ -592,6 +593,20 @@ async def chat_stream(
                         exc_info=True,
                     )
 
+        # Resolve the workspace's assigned env-var credentials once per turn;
+        # injected into every sandbox tool invocation below. NEVER log the dict.
+        workspace_env: dict[str, str] = {}
+        if sandbox_id and daytona_service and body.harness.workspace_id:
+            try:
+                workspace_env = await resolve_workspace_env(
+                    http_client, body.harness.workspace_id, user_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to resolve workspace credentials for sandbox tools",
+                    exc_info=True,
+                )
+
         messages = [m.model_dump() for m in body.messages]
 
         # Prepend a system message with the skills manifest
@@ -1036,6 +1051,7 @@ async def chat_stream(
                         json.dumps(tool_info["args"])[:200],
                     )
                     _creds = git_credentials
+                    _env = workspace_env
                     result = await asyncio.get_running_loop().run_in_executor(
                         None,
                         lambda: execute_sandbox_tool(
@@ -1044,6 +1060,7 @@ async def chat_stream(
                             tool_name,
                             tool_info["args"],
                             git_credentials=_creds,
+                            env=_env,
                         ),
                     )
                     return tool_info, result

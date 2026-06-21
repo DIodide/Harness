@@ -379,13 +379,28 @@ function ChatPage() {
 	// Shared builder: queued sends, regenerate, and edit-resend must carry
 	// the same agent/credential fields as the composer path — without them
 	// the request silently reroutes to the default OpenRouter loop.
+	// The active conversation's workspace (conversations carry an optional
+	// workspaceId). Drives workspace-credential injection on EVERY send path —
+	// the composer's fresh send (via the ChatInput prop) AND queued/regenerate/
+	// edit-resend (via buildHarnessConfig) — so they stay in lockstep.
+	const activeConvoWorkspaceId = useMemo(
+		() => conversations?.find((c) => c._id === activeConvoId)?.workspaceId,
+		[conversations, activeConvoId],
+	);
+
 	const buildHarnessConfig = useCallback(() => {
 		if (!activeHarness) return null;
 		return buildHarnessStreamConfig(activeHarness, {
 			model: sessionModel,
 			sandboxId: effectiveSandboxDaytonaId,
+			workspaceId: activeConvoWorkspaceId,
 		});
-	}, [activeHarness, effectiveSandboxDaytonaId, sessionModel]);
+	}, [
+		activeHarness,
+		activeConvoWorkspaceId,
+		effectiveSandboxDaytonaId,
+		sessionModel,
+	]);
 
 	// Collect all command IDs across the active harness's MCP servers
 	const allCommandIds = useMemo(
@@ -919,6 +934,7 @@ function ChatPage() {
 
 					<ChatInput
 						conversationId={activeConvoId}
+						workspaceId={activeConvoWorkspaceId}
 						activeHarness={activeHarness}
 						agentActivityCount={agentActivityCount}
 						slashCommands={(storedCommands ?? []).filter(Boolean).map((c) => ({

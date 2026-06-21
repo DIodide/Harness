@@ -17,6 +17,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as WorkspacesIndexRouteImport } from './routes/workspaces/index'
 import { Route as SandboxesIndexRouteImport } from './routes/sandboxes/index'
 import { Route as HarnessesIndexRouteImport } from './routes/harnesses/index'
+import { Route as CredentialsIndexRouteImport } from './routes/credentials/index'
 import { Route as ChatIndexRouteImport } from './routes/chat/index'
 import { Route as ShareTokenRouteImport } from './routes/share/$token'
 import { Route as SandboxesCreate_sandboxRouteImport } from './routes/sandboxes/create_sandbox'
@@ -63,6 +64,11 @@ const HarnessesIndexRoute = HarnessesIndexRouteImport.update({
   path: '/harnesses/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CredentialsIndexRoute = CredentialsIndexRouteImport.update({
+  id: '/credentials/',
+  path: '/credentials/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ChatIndexRoute = ChatIndexRouteImport.update({
   id: '/chat/',
   path: '/chat/',
@@ -100,6 +106,7 @@ export interface FileRoutesByFullPath {
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
   '/share/$token': typeof ShareTokenRoute
   '/chat/': typeof ChatIndexRoute
+  '/credentials/': typeof CredentialsIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
   '/sandboxes/': typeof SandboxesIndexRoute
   '/workspaces/': typeof WorkspacesIndexRoute
@@ -115,6 +122,7 @@ export interface FileRoutesByTo {
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
   '/share/$token': typeof ShareTokenRoute
   '/chat': typeof ChatIndexRoute
+  '/credentials': typeof CredentialsIndexRoute
   '/harnesses': typeof HarnessesIndexRoute
   '/sandboxes': typeof SandboxesIndexRoute
   '/workspaces': typeof WorkspacesIndexRoute
@@ -131,6 +139,7 @@ export interface FileRoutesById {
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
   '/share/$token': typeof ShareTokenRoute
   '/chat/': typeof ChatIndexRoute
+  '/credentials/': typeof CredentialsIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
   '/sandboxes/': typeof SandboxesIndexRoute
   '/workspaces/': typeof WorkspacesIndexRoute
@@ -148,6 +157,7 @@ export interface FileRouteTypes {
     | '/sandboxes/create_sandbox'
     | '/share/$token'
     | '/chat/'
+    | '/credentials/'
     | '/harnesses/'
     | '/sandboxes/'
     | '/workspaces/'
@@ -163,6 +173,7 @@ export interface FileRouteTypes {
     | '/sandboxes/create_sandbox'
     | '/share/$token'
     | '/chat'
+    | '/credentials'
     | '/harnesses'
     | '/sandboxes'
     | '/workspaces'
@@ -178,6 +189,7 @@ export interface FileRouteTypes {
     | '/sandboxes/create_sandbox'
     | '/share/$token'
     | '/chat/'
+    | '/credentials/'
     | '/harnesses/'
     | '/sandboxes/'
     | '/workspaces/'
@@ -194,6 +206,7 @@ export interface RootRouteChildren {
   SandboxesCreate_sandboxRoute: typeof SandboxesCreate_sandboxRoute
   ShareTokenRoute: typeof ShareTokenRoute
   ChatIndexRoute: typeof ChatIndexRoute
+  CredentialsIndexRoute: typeof CredentialsIndexRoute
   HarnessesIndexRoute: typeof HarnessesIndexRoute
   SandboxesIndexRoute: typeof SandboxesIndexRoute
   WorkspacesIndexRoute: typeof WorkspacesIndexRoute
@@ -257,6 +270,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HarnessesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/credentials/': {
+      id: '/credentials/'
+      path: '/credentials'
+      fullPath: '/credentials/'
+      preLoaderRoute: typeof CredentialsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/chat/': {
       id: '/chat/'
       path: '/chat'
@@ -306,6 +326,7 @@ const rootRouteChildren: RootRouteChildren = {
   SandboxesCreate_sandboxRoute: SandboxesCreate_sandboxRoute,
   ShareTokenRoute: ShareTokenRoute,
   ChatIndexRoute: ChatIndexRoute,
+  CredentialsIndexRoute: CredentialsIndexRoute,
   HarnessesIndexRoute: HarnessesIndexRoute,
   SandboxesIndexRoute: SandboxesIndexRoute,
   WorkspacesIndexRoute: WorkspacesIndexRoute,
