@@ -287,6 +287,41 @@ describe("email invite → bind-later", () => {
 		expect(again.bound).toBe(0);
 	});
 
+	it("a viewer+editor pair for the same harness surfaces as editor (no shadowing), merged to one grant", async () => {
+		const { raw, asUser } = makeT();
+		const h = await seedHarness(raw, "owner");
+		// Viewer invite created FIRST, editor second — same recipient, two emails.
+		await asUser("owner").mutation(api.harnessShares.inviteHarnessByEmail, {
+			harnessId: h,
+			email: "viewer@x.com",
+			role: "viewer",
+		});
+		await asUser("owner").mutation(api.harnessShares.inviteHarnessByEmail, {
+			harnessId: h,
+			email: "editor@x.com",
+			role: "editor",
+		});
+		await raw.mutation(internal.harnessShares.bindHarnessGrantsInternal, {
+			userId: "bob",
+			verifiedEmails: ["viewer@x.com", "editor@x.com"],
+		});
+		const incoming = await asUser("bob").query(
+			api.harnessShares.listIncomingSharedHarnesses,
+			{},
+		);
+		expect(incoming.length).toBe(1); // one card per harness
+		expect(incoming[0].role).toBe("editor"); // strongest grant wins
+		// Merged: the user holds exactly one bound grant on this harness.
+		const bound = await raw.run(async (ctx) =>
+			ctx.db
+				.query("harnessShareGrants")
+				.withIndex("by_grantee", (q) => q.eq("grantedToUserId", "bob"))
+				.collect(),
+		);
+		expect(bound.length).toBe(1);
+		expect(bound[0].role).toBe("editor");
+	});
+
 	it("an unverified email never binds (only the server-verified list is honored)", async () => {
 		const { raw, asUser } = makeT();
 		const h = await seedHarness(raw, "owner");

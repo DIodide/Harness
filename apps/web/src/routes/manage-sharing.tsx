@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { ManageHeader } from "../components/manage/manage-tabs";
-import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 
@@ -181,6 +180,9 @@ type SharedHarness = {
 };
 
 function SharedHarnesses({ harnesses }: { harnesses: SharedHarness[] }) {
+	const setRole = useMutation({
+		mutationFn: useConvexMutation(api.harnessShares.setHarnessShareRole),
+	});
 	const revoke = useMutation({
 		mutationFn: useConvexMutation(api.harnessShares.revokeHarnessShareGrant),
 	});
@@ -244,9 +246,19 @@ function SharedHarnesses({ harnesses }: { harnesses: SharedHarness[] }) {
 											? "Anyone with the link"
 											: (g.label ?? "A member")}
 									</span>
-									<Badge variant="secondary" className="shrink-0 text-[10px]">
+									<button
+										type="button"
+										className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
+										title="Change role"
+										onClick={() =>
+											setRole.mutate({
+												grantId: g._id,
+												role: g.role === "editor" ? "viewer" : "editor",
+											})
+										}
+									>
 										{g.role === "editor" ? "Can edit" : "View only"}
-									</Badge>
+									</button>
 									<button
 										type="button"
 										className="shrink-0 text-muted-foreground transition-colors hover:text-destructive"

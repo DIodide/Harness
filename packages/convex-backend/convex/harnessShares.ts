@@ -204,8 +204,8 @@ export const inviteHarnessByEmail = mutation({
 		const harness = await assertOwnedHarness(ctx, args.harnessId);
 		const email = normalizeEmail(args.email);
 		if (!EMAIL_RE.test(email)) throw new Error("Enter a valid email address");
-		// Don't let an owner invite themselves.
-		// Re-use an existing active invite for this email on this harness.
+		// Re-use an existing active invite for this email on this harness (an
+		// owner self-invite is harmlessly dropped at bind time).
 		const existing = await ctx.db
 			.query("harnessShareGrants")
 			.withIndex("by_harness", (q) => q.eq("harnessId", args.harnessId))
@@ -306,7 +306,8 @@ export const revokeHarnessShareGrant = mutation({
 	},
 });
 
-/** Stop sharing entirely: delete every grant on the harness. */
+/** Stop sharing entirely: delete every grant on the harness, and clear the
+ *  lock so a later re-share doesn't silently start locked. */
 export const unshareHarness = mutation({
 	args: { harnessId: v.id("harnesses") },
 	handler: async (ctx, args) => {
@@ -316,6 +317,7 @@ export const unshareHarness = mutation({
 			.withIndex("by_harness", (q) => q.eq("harnessId", args.harnessId))
 			.collect();
 		for (const g of grants) await ctx.db.delete(g._id);
+		await ctx.db.patch(args.harnessId, { sharedLocked: undefined });
 	},
 });
 
@@ -465,9 +467,18 @@ export const listIncomingSharedHarnesses = query({
 			}
 		> = [];
 		const seen = new Set<string>();
-		for (const g of grants.filter(isActiveGrant)) {
+		// Editor-first so the single card per harness reflects the STRONGEST
+		// active grant (matches resolveHarnessRole's max-wins) — a user can hold
+		// both a viewer and an editor grant on the same harness (two invites).
+		const ranked = grants
+			.filter(isActiveGrant)
+			.sort(
+				(a, b) =>
+					(a.role === "editor" ? 0 : 1) - (b.role === "editor" ? 0 : 1),
+			);
+		for (const g of ranked) {
 			const key = g.harnessId as string;
-			if (seen.has(key)) continue; // one card per harness, best grant first
+			if (seen.has(key)) continue;
 			const harness = await ctx.db.get(g.harnessId);
 			if (!harness) continue;
 			seen.add(key);
@@ -633,6 +644,22 @@ export const bindHarnessGrantsInternal = internalMutation({
 				if (!isActiveGrant(g)) continue;
 				// Don't bind the owner's own invite to themselves.
 				if (g.ownerUserId === args.userId) {
+					await ctx.db.delete(g._id);
+					continue;
+				}
+				// Merge instead of duplicating: if this user already holds a bound
+				// grant on this harness, keep the stronger role on the existing row
+				// and drop the invite — never leave two grants for one (harness,user).
+				const existing = (
+					await ctx.db
+						.query("harnessShareGrants")
+						.withIndex("by_harness", (q) => q.eq("harnessId", g.harnessId))
+						.collect()
+				).find((x) => isActiveGrant(x) && x.grantedToUserId === args.userId);
+				if (existing) {
+					if (g.role === "editor" && existing.role !== "editor") {
+						await ctx.db.patch(existing._id, { role: "editor" });
+					}
 					await ctx.db.delete(g._id);
 					continue;
 				}

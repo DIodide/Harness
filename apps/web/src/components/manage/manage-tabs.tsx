@@ -12,7 +12,7 @@ import { Button } from "../ui/button";
 
 /**
  * The "manage" destinations, shared by the tabbed header and the sidebar
- * footer rail so they can never drift. Adding a fourth manage screen is a
+ * footer rail so they can never drift. Adding another manage screen is a
  * one-line edit here.
  *
  * `as const` is load-bearing: the typed route tree makes <Link to> strict, so
@@ -74,9 +74,9 @@ export function ManageTabs() {
 }
 
 /**
- * The full header band shared by all three manage routes (and their loading
+ * The full header band shared by every manage route (and their loading
  * skeletons). Owns the back arrow, the tab control, the count, and a slot for
- * each page's own action buttons — so the three screens can never drift.
+ * each page's own action buttons — so the manage screens can never drift.
  */
 export function ManageHeader({
 	count,

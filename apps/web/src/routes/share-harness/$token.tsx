@@ -47,9 +47,11 @@ function SharedHarnessView() {
 			});
 			return;
 		}
+		// Whatever happens, drop the resume intent so a failed clone can't
+		// silently re-fire on the next visit (the user can retry explicitly).
+		clearHarnessCloneIntent();
 		try {
 			const id = await clone.mutateAsync({ token });
-			clearHarnessCloneIntent();
 			toast.success("Cloned to your harnesses");
 			navigate({ to: "/harnesses/$harnessId", params: { harnessId: id } });
 		} catch (e) {
@@ -212,8 +214,7 @@ function SharedHarnessView() {
 							))}
 						</ul>
 						<p className="mt-1.5 text-[11px] text-muted-foreground">
-							Server URLs and credentials stay private — cloning lets you
-							connect your own.
+							Credentials stay private — cloning lets you reconnect your own.
 						</p>
 					</Section>
 				)}

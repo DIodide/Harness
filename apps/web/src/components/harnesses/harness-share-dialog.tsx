@@ -313,10 +313,24 @@ export function HarnessShareDialog({
 										<span className="min-w-0 flex-1 truncate text-foreground">
 											{g.granteeEmail ?? "Member"}
 										</span>
-										<span className="shrink-0 text-[10px] text-muted-foreground">
-											{g.granteeEmail && !g.grantedToUserId ? "Pending · " : ""}
+										{g.granteeEmail && !g.grantedToUserId && (
+											<span className="shrink-0 text-[10px] text-muted-foreground">
+												Pending
+											</span>
+										)}
+										<button
+											type="button"
+											className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
+											title="Change role"
+											onClick={() =>
+												setRole.mutate({
+													grantId: g._id,
+													role: g.role === "editor" ? "viewer" : "editor",
+												})
+											}
+										>
 											{g.role === "editor" ? "Can edit" : "View only"}
-										</span>
+										</button>
 										<button
 											type="button"
 											className="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
