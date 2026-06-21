@@ -111,7 +111,12 @@ export function ConversationRow({
 						</motion.span>
 					)}
 				</AnimatePresence>
-				<span className="truncate">{convo.title}</span>
+				{/* min-w-0 lets the flex item shrink below its content so the title
+				    actually truncates. Without it a long title keeps its full
+				    min-content width, which (inside Radix ScrollArea's
+				    min-width:100% display:table viewport) widens every row and
+				    pushes the absolutely-positioned kebab off-screen to the right. */}
+				<span className="min-w-0 flex-1 truncate">{convo.title}</span>
 			</button>
 			<ConversationKebab
 				convo={convo}
