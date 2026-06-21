@@ -35,7 +35,7 @@ export function ManageTabs() {
 	return (
 		<nav
 			aria-label="Manage"
-			className="flex items-center gap-0.5 rounded-lg bg-muted/50 p-0.5"
+			className="flex min-w-0 items-center gap-0.5 rounded-lg bg-muted p-0.5"
 		>
 			{MANAGE_TABS.map((tab) => {
 				const active = matches(pathname, tab.to);
@@ -44,15 +44,21 @@ export function ManageTabs() {
 						key={tab.to}
 						to={tab.to}
 						aria-current={active ? "page" : undefined}
+						title={tab.label}
 						className={cn(
+							// Recessed bg-muted track + raised bg-background active pill —
+							// the conventional segmented-control contrast, legible in both
+							// light and dark mode.
 							"inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
 							active
-								? "bg-muted text-foreground shadow-sm"
+								? "bg-background text-foreground shadow-sm"
 								: "text-muted-foreground hover:text-foreground",
 						)}
 					>
 						<tab.icon size={13} className={active ? undefined : "opacity-70"} />
-						{tab.label}
+						{/* Labels collapse to icons below md so the widest header
+						    (/harnesses) never pushes its actions off-screen. */}
+						<span className="hidden md:inline">{tab.label}</span>
 					</Link>
 				);
 			})}

@@ -49,7 +49,13 @@ export function ManageNavFooter({
 				);
 			})}
 
-			<Separator orientation="vertical" className="mx-1 h-4" />
+			{/* Match the variant-prefixed base class so tailwind-merge dedupes it
+			    and the divider actually insets to 16px (a plain h-4 loses to the
+			    base data-[orientation=vertical]:h-full). */}
+			<Separator
+				orientation="vertical"
+				className="mx-1 data-[orientation=vertical]:h-4"
+			/>
 
 			<Tooltip>
 				<TooltipTrigger asChild>
