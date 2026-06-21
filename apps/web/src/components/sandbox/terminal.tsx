@@ -1,4 +1,4 @@
-import { useAuth } from "@clerk/clerk-react";
+import { useAuth } from "@/lib/auth";
 import "@xterm/xterm/css/xterm.css";
 import { RotateCcw, TerminalSquare } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";

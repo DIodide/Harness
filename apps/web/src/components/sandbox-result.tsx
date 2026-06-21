@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/clerk-react";
 import {
 	AlertTriangle,
 	Check,
@@ -15,6 +14,7 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useState } from "react";
+import { useAuth } from "@/lib/auth";
 import { env } from "../env";
 import { useSandboxPanel } from "../lib/sandbox-panel-context";
 import { detectLanguage, useHighlighted } from "../lib/syntax-highlight";
