@@ -97,6 +97,7 @@ import {
 import { UsageDialog } from "../../components/usage-dialog";
 import { formatResetTime, UsageBadge } from "../../components/usage-display";
 import { WorkspaceColorPicker } from "../../components/workspace-color-picker";
+import { WorkspaceCredentialsField } from "../../components/workspace-credentials-field";
 import { useMcpHealthCheck } from "../../hooks/use-mcp-health-check";
 import { useMessageQueue } from "../../hooks/use-message-queue";
 import { usePersistInterruptedTurn } from "../../hooks/use-persist-interrupted-turn";
@@ -501,8 +502,14 @@ function ChatPage() {
 		return buildHarnessStreamConfig(activeHarness, {
 			model: sessionModel,
 			sandboxId: effectiveSandboxDaytonaId,
+			workspaceId: activeWorkspaceId,
 		});
-	}, [activeHarness, effectiveSandboxDaytonaId, sessionModel]);
+	}, [
+		activeHarness,
+		activeWorkspaceId,
+		effectiveSandboxDaytonaId,
+		sessionModel,
+	]);
 
 	const { mcpHealthStatuses, refreshHealth } = useMcpHealthCheck(activeHarness);
 
@@ -2046,6 +2053,9 @@ function WorkspaceSidebar({
 								onChange={setRenameWorkspaceColor}
 							/>
 						</div>
+						{renameWorkspace ? (
+							<WorkspaceCredentialsField workspaceId={renameWorkspace._id} />
+						) : null}
 						{confirmDeleteWorkspace && !renameWorkspaceIsDefault ? (
 							<p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
 								Deleting this workspace will also delete its conversations.

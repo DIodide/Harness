@@ -40,6 +40,11 @@ export interface HarnessStreamOptions {
 	agentOverride?: string | null;
 	/** Resolved Daytona sandbox id, or null/undefined when none applies. */
 	sandboxId?: string | null;
+	/**
+	 * Active workspace id. Sent so the backend can resolve and inject this
+	 * workspace's assigned env-var credentials into the run's sandbox.
+	 */
+	workspaceId?: string | null;
 }
 
 export function buildHarnessStreamConfig(
@@ -68,6 +73,7 @@ export function buildHarnessStreamConfig(
 			agent && agent === harness.agent ? harness.agentCredentialId : undefined,
 		sandbox_enabled: Boolean(opts.sandboxId),
 		sandbox_id: opts.sandboxId ?? undefined,
+		workspace_id: opts.workspaceId ?? undefined,
 		sandbox_config: harness.sandboxConfig
 			? {
 					persistent: harness.sandboxConfig.persistent,

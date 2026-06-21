@@ -381,11 +381,21 @@ function ChatPage() {
 	// the request silently reroutes to the default OpenRouter loop.
 	const buildHarnessConfig = useCallback(() => {
 		if (!activeHarness) return null;
+		const activeWorkspaceId = conversations?.find(
+			(c) => c._id === activeConvoId,
+		)?.workspaceId;
 		return buildHarnessStreamConfig(activeHarness, {
 			model: sessionModel,
 			sandboxId: effectiveSandboxDaytonaId,
+			workspaceId: activeWorkspaceId,
 		});
-	}, [activeHarness, effectiveSandboxDaytonaId, sessionModel]);
+	}, [
+		activeHarness,
+		activeConvoId,
+		conversations,
+		effectiveSandboxDaytonaId,
+		sessionModel,
+	]);
 
 	// Collect all command IDs across the active harness's MCP servers
 	const allCommandIds = useMemo(
