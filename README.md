@@ -20,7 +20,28 @@
 
 Harness is a thin, fast control plane over **whatever coding agent you want to drive** — Claude Code, Codex CLI, or Cursor, each in its own cloud sandbox — plus a built-in 10-model chat for when you don't want an agent at all. Your model bill stays on your account, your credentials are encrypted write-only, and every sensitive command surfaces an approval card before it runs.
 
-<p align="center"><img src="./assets/screenshots/chat-view.png" alt="Harness — a coding agent session in a workspace" width="920" /></p>
+<p align="center"><img src="./assets/screenshots/hero-chat.png" alt="Harness — a coding agent session: an MCP doc lookup, a terminal build, a file edit, a subagent, and a workflow in one chat" width="960" /></p>
+
+<div align="center">
+
+<details>
+<summary><b>More screenshots</b> — subagents &amp; workflows, MCP, harnesses, sharing</summary>
+
+<br/>
+
+<img src="./assets/screenshots/agent-workflow.png" alt="A subagent audit and a multi-phase Workflow card in the transcript" width="900" />
+
+<img src="./assets/screenshots/mcp-context7.png" alt="MCP servers on a harness — Context7 connected" width="900" />
+
+<img src="./assets/screenshots/harnesses.png" alt="Harnesses grouped by status, each with its model and MCP servers" width="900" />
+
+<img src="./assets/screenshots/harness-edit.png" alt="Editing a harness — agent loop picker, model, system prompt, MCP servers" width="900" />
+
+<img src="./assets/screenshots/share-dialog.png" alt="Sharing a chat — viewer and editor links" width="760" />
+
+</details>
+
+</div>
 
 ## Share a chat. They drive your agent. You watch live.
 
@@ -30,8 +51,6 @@ Share an agent session the way you share a Google Doc — one link, viewer or ed
 - **Editors** do something Docs can't: they type a new prompt straight into your conversation and the agent runs it on **your** harness, **your** credentials, **your** budget. The editor's browser sends only the message and the share token — your MCP secrets, sandbox, and real cost never leave the server.
 
 Collaborative agent sessions, without ever handing over the keys.
-
-<p align="center"><img src="./assets/screenshots/share-dialog.png" alt="Sharing a chat — viewer and editor links" width="760" /></p>
 
 ---
 
