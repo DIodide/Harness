@@ -322,6 +322,8 @@ function HarnessEditPage() {
 		name !== null ||
 		model !== null ||
 		agent !== null ||
+		agentMode !== null ||
+		reasoningEffort !== null ||
 		agentCredentialId !== undefined ||
 		status !== null ||
 		mcpServers !== null ||
@@ -390,8 +392,12 @@ function HarnessEditPage() {
 		if (name !== null) updates.name = name;
 		if (model !== null) updates.model = model;
 		if (agent !== null) updates.agent = agent;
-		if (agentMode !== null) updates.agentMode = agentMode;
-		if (reasoningEffort !== null) updates.reasoningEffort = reasoningEffort;
+		// Mode/effort only make sense for Claude Code — don't persist stale
+		// values onto a harness whose agent was switched away.
+		if (currentAgent === "claude-code") {
+			if (agentMode !== null) updates.agentMode = agentMode;
+			if (reasoningEffort !== null) updates.reasoningEffort = reasoningEffort;
+		}
 		// The update mutation auto-unlinks a stale credential when the agent
 		// changes without one; only send an explicit selection.
 		if (agentCredentialId !== undefined && agentCredentialId !== null) {

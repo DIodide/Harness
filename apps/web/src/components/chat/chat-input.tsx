@@ -307,10 +307,11 @@ export function ChatInput({
 	const agentModeActive = agentMode !== "default";
 	const effortOption = agentConfigOptions.find((o) => isEffortOption(o.id));
 
-	// Apply an agent config change. With a LIVE session, POST to the session
-	// (and, in harness scope, persist to the harness too). BEFORE a session
-	// exists, write to the harness — it seeds the upcoming session and is the
-	// home for these settings.
+	// Apply an agent config change. Agent mode/model/effort are HARNESS-level
+	// settings (per design — "make them part of the harness"), so a change always
+	// persists to the harness, consistently before AND after a session exists.
+	// With a live session we ALSO POST it to the session; pre-session the harness
+	// write seeds the upcoming session.
 	const applyAgentOption = useCallback(
 		(optionId: string, value: string) => {
 			if (optionsAreLive) {
@@ -318,45 +319,23 @@ export function ChatInput({
 					{ configId: optionId, value },
 					{ onError: (error) => toast.error(error.message) },
 				);
-				if (modelSelectorMode === "harness" && activeHarness) {
-					if (optionId === "model" && value !== activeHarness.model) {
-						updateHarnessAgent.mutate({ id: activeHarness._id, model: value });
-					} else if (optionId === "mode" && value !== activeHarness.agentMode) {
-						updateHarnessAgent.mutate({
-							id: activeHarness._id,
-							agentMode: value,
-						});
-					} else if (
-						isEffortOption(optionId) &&
-						value !== activeHarness.reasoningEffort
-					) {
-						updateHarnessAgent.mutate({
-							id: activeHarness._id,
-							reasoningEffort: value,
-						});
-					}
-				}
-				return;
 			}
 			if (!activeHarness) return;
-			if (optionId === "model") {
+			if (optionId === "model" && value !== activeHarness.model) {
 				updateHarnessAgent.mutate({ id: activeHarness._id, model: value });
-			} else if (optionId === "mode") {
+			} else if (optionId === "mode" && value !== activeHarness.agentMode) {
 				updateHarnessAgent.mutate({ id: activeHarness._id, agentMode: value });
-			} else if (isEffortOption(optionId)) {
+			} else if (
+				isEffortOption(optionId) &&
+				value !== activeHarness.reasoningEffort
+			) {
 				updateHarnessAgent.mutate({
 					id: activeHarness._id,
 					reasoningEffort: value,
 				});
 			}
 		},
-		[
-			optionsAreLive,
-			setAgentOption,
-			modelSelectorMode,
-			activeHarness,
-			updateHarnessAgent,
-		],
+		[optionsAreLive, setAgentOption, activeHarness, updateHarnessAgent],
 	);
 
 	const effectiveModel = sessionModel ?? activeHarness?.model;
@@ -1096,7 +1075,10 @@ export function ChatInput({
 													</DropdownMenuTrigger>
 												</TooltipTrigger>
 												<TooltipContent>
-													{option.name} — applies to this agent session
+													{option.name} —{" "}
+													{optionsAreLive
+														? "applies to this session and saves on the harness"
+														: "saved on the harness — seeds the next session"}
 												</TooltipContent>
 											</Tooltip>
 											<DropdownMenuContent

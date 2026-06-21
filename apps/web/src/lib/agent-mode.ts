@@ -358,6 +358,40 @@ export function isEffortConfigId(id: string): boolean {
 }
 
 /**
+ * Permission modes we always offer for Claude Code even though the ACP wrapper
+ * doesn't advertise them in its session config options. `bypassPermissions` is a
+ * valid Claude Agent SDK permission mode (run every tool call without asking);
+ * the wrapper accepts it via set_config_option even though it's not in the
+ * default picker. Injected into both the static fallback and live options.
+ */
+export const CLAUDE_CODE_EXTRA_MODES: AgentConfigChoice[] = [
+	{
+		value: "bypassPermissions",
+		name: "Bypass Permissions",
+		description: "Run every tool call without asking — dangerous.",
+	},
+];
+
+/**
+ * Add the always-offer extra modes to an agent's "mode" option if the wrapper's
+ * advertised list omits them. Only touches Claude Code (the extras are Claude
+ * permission modes); a no-op for other agents and when already present.
+ */
+export function augmentModeOptions(
+	agent: string,
+	options: AgentConfigOption[],
+): AgentConfigOption[] {
+	if (agent !== "claude-code") return options;
+	return options.map((opt) => {
+		if (opt.id !== "mode") return opt;
+		const present = new Set(flattenConfigChoices(opt).map((c) => c.value));
+		const extras = CLAUDE_CODE_EXTRA_MODES.filter((m) => !present.has(m.value));
+		if (extras.length === 0) return opt;
+		return { ...opt, options: [...(opt.options ?? []), ...extras] };
+	});
+}
+
+/**
  * Static fallback config options for Claude Code, used to render the Mode /
  * Model / Effort controls BEFORE any ACP session exists. These are best-effort
  * placeholders: once a real session reports its options (or a cached copy from
@@ -396,6 +430,7 @@ export const CLAUDE_CODE_CONFIG_OPTIONS: AgentConfigOption[] = [
 				name: "Don't Ask",
 				description: "Don't prompt for permissions.",
 			},
+			...CLAUDE_CODE_EXTRA_MODES,
 		],
 	},
 	{
@@ -437,7 +472,12 @@ export function cacheAgentConfigOptions(
 ): void {
 	if (typeof localStorage === "undefined" || options.length === 0) return;
 	try {
-		localStorage.setItem(CONFIG_CACHE_PREFIX + agent, JSON.stringify(options));
+		// Cache only the per-agent CHOICE SHAPE (ids/labels/descriptions), never
+		// `currentValue` — that's a per-session/per-harness selection and would
+		// otherwise leak across harnesses pre-session. The harness overlay /
+		// static default governs the selected value.
+		const shape = options.map((o) => ({ ...o, currentValue: undefined }));
+		localStorage.setItem(CONFIG_CACHE_PREFIX + agent, JSON.stringify(shape));
 	} catch {
 		// storage full / disabled — fall back to the static defaults
 	}

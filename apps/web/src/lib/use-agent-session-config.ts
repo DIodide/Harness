@@ -5,6 +5,7 @@ import {
 	type AgentCommand,
 	type AgentConfigOption,
 	type AgentMode,
+	augmentModeOptions,
 	cacheAgentConfigOptions,
 	defaultAgentConfigOptions,
 	fetchAgentSession,
@@ -115,7 +116,9 @@ export function useAgentSessionConfig(
 	);
 
 	return {
-		options: optionsAreLive ? liveOptions : fallback,
+		// Inject always-offer extra modes (e.g. bypassPermissions) the wrapper
+		// doesn't advertise, into both the live and fallback option lists.
+		options: augmentModeOptions(agent, optionsAreLive ? liveOptions : fallback),
 		commands: query.data?.commands ?? [],
 		sessionReady: Boolean(query.data?.sessionId),
 		// True only when the options come from a live ACP session (vs the
