@@ -91,10 +91,12 @@ export function CompactionPanel({
 	compactions,
 	onStartFromSummary,
 	isStartingClone,
+	isStreaming,
 }: {
 	compactions: CompactionRow[];
 	onStartFromSummary?: (compactionId: string) => void;
 	isStartingClone?: boolean;
+	isStreaming?: boolean;
 }) {
 	const [dismissed, setDismissed] = useState(false);
 	if (compactions.length === 0) return null;
@@ -106,7 +108,9 @@ export function CompactionPanel({
 			{compactions.map((c) => (
 				<CompactionBlock key={c._id} compaction={c} />
 			))}
-			{!dismissed && onStartFromSummary && (
+			{/* Hide the continue-vs-clone choice mid-turn — starting a clone would
+			    navigate away from the in-flight response. The cards still show. */}
+			{!dismissed && !isStreaming && onStartFromSummary && (
 				<div className="flex flex-col items-center gap-2 border-t border-border pt-3 text-center">
 					<p className="font-mono text-[11px] text-muted-foreground">
 						This conversation was compacted. Continue with the full history, or

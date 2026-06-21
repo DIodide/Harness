@@ -7,6 +7,7 @@ In ACP mode no OpenRouter usage/budget accounting happens — the cost is
 incurred on the user's own agent subscription/API key.
 """
 
+import asyncio
 import json
 import logging
 
@@ -49,6 +50,10 @@ from app.services.mcp_client import UserContext, resolve_princeton_netid
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Fire-and-forget compaction saves run as detached tasks; hold a strong ref so
+# the GC can't cancel them before the POST completes (cleared in the callback).
+_compaction_save_tasks: set[asyncio.Task] = set()
 
 USER_MESSAGE_MAX_LENGTH = 16000  # mirror /api/chat/stream
 
@@ -621,23 +626,30 @@ async def prompt(
                                     }
                                 break
                 elif event["event"] == "compaction":
-                    # Persist immediately (mid-turn): a compaction is a
-                    # standalone fact that must survive an interrupted turn,
-                    # unlike the assistant-message save (skipped on the SSE
-                    # disconnect path in the `finally` below).
+                    # Persist eagerly (mid-turn): a compaction is a standalone
+                    # fact that must survive an interrupted turn, unlike the
+                    # assistant-message save (skipped on the SSE disconnect path
+                    # in the `finally` below). Fire-and-forget so a slow Convex
+                    # mutation can't stall the live token/tool stream — the agent
+                    # keeps generating after /compact, so the task finishes in
+                    # the background; save_compaction swallows its own errors.
                     cd = event["data"]
-                    await save_compaction(
-                        http_client,
-                        session.conversation_id,
-                        summary=cd.get("summary") or "",
-                        trigger=cd.get("trigger") or "manual",
-                        at_message_count=len(body.history or []),
-                        pre_tokens=cd.get("pre_tokens"),
-                        post_tokens=cd.get("post_tokens"),
-                        model=f"acp:{session.agent_id}",
-                        requester_user_id=requester_sub,
-                        requester_token=requester_token,
+                    save_task = asyncio.create_task(
+                        save_compaction(
+                            http_client,
+                            session.conversation_id,
+                            summary=cd.get("summary") or "",
+                            trigger=cd.get("trigger") or "manual",
+                            at_message_count=len(body.history or []),
+                            pre_tokens=cd.get("pre_tokens"),
+                            post_tokens=cd.get("post_tokens"),
+                            model=f"acp:{session.agent_id}",
+                            requester_user_id=requester_sub,
+                            requester_token=requester_token,
+                        )
                     )
+                    _compaction_save_tasks.add(save_task)
+                    save_task.add_done_callback(_compaction_save_tasks.discard)
                 yield {"event": event["event"], "data": json.dumps(event["data"])}
         finally:
             if terminal_event is None:
