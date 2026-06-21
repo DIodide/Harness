@@ -2007,12 +2007,29 @@ class AgentSessionManager:
         event = normalize_session_update(update)
         if event is not None:
             # Capture the latest Anthropic rate-limit snapshot off ANY usage
-            # update (even one without cost), so the authoritative result-message
-            # row can carry the freshest quota state.
+            # update (even one without cost). A rate_limit_event arrives as a
+            # cost-less usage_update, and a hard-limit turn records no usage at
+            # all, so persist the snapshot directly onto the credential here
+            # (not just via the usage row) — that's when the user most needs to
+            # see the reset time.
             if event["event"] == "agent_usage":
                 rl = (update.get("_meta") or {}).get("_claude/rateLimit")
                 if rl is not None:
                     session.last_rate_limit = rl
+                    cred_id = session.harness.agent_credential_id
+                    if cred_id:
+                        from app.services.usage import record_agent_rate_limit
+
+                        rl_task = asyncio.create_task(
+                            record_agent_rate_limit(
+                                self._http_client(),
+                                user_id=session.user_id,
+                                agent_credential_id=cred_id,
+                                rate_limit=rl,
+                            )
+                        )
+                        self._usage_tasks.add(rl_task)
+                        rl_task.add_done_callback(self._usage_tasks.discard)
             # Persist per-credential agent usage on the terminal usage_update
             # (the only one carrying cost). Thin: no cache tokens, cache-excluded
             # cost — for claude-code the SDK result message upgrades this row in

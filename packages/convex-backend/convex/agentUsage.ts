@@ -214,9 +214,12 @@ export const getMyAgentUsage = query({
 				todayTokens: acc.todayTokens,
 				weekCostUsd: acc.weekCostUsd,
 				weekTokens: acc.weekTokens,
-				lastTurnAt: acc.lastTurnAt,
+				lastTurnAt: Math.max(acc.lastTurnAt, cred.lastRateLimitAt ?? 0),
 				lastModel: acc.lastModel,
-				rateLimit: acc.rateLimit,
+				// Prefer the account-level snapshot stored on the credential (lands
+				// even on a silent hard-limit turn); fall back to the per-turn
+				// ledger's last seen value for back-compat.
+				rateLimit: cred.lastRateLimit ?? acc.rateLimit,
 				perModel: [...acc.perModel.entries()]
 					.map(([model, m]) => ({ model, tokens: m.tokens, costUsd: m.costUsd }))
 					.sort((a, b) => b.costUsd - a.costUsd),

@@ -200,3 +200,25 @@ export const touch = internalMutation({
 		if (row) await ctx.db.patch(args.credentialId, { lastUsedAt: Date.now() });
 	},
 });
+
+/**
+ * Store the latest Anthropic rate-limit snapshot for a credential (FastAPI via
+ * deploy key). Decoupled from the usage ledger so it lands even on a silent
+ * hard-limit turn that records no cost/tokens — that's exactly when the user
+ * most needs to see it. Owner re-checked.
+ */
+export const recordRateLimit = internalMutation({
+	args: {
+		credentialId: v.id("agentCredentials"),
+		userId: v.string(),
+		rateLimit: v.any(),
+	},
+	handler: async (ctx, args) => {
+		const row = await ctx.db.get(args.credentialId);
+		if (!row || row.userId !== args.userId) return;
+		await ctx.db.patch(args.credentialId, {
+			lastRateLimit: args.rateLimit,
+			lastRateLimitAt: Date.now(),
+		});
+	},
+});

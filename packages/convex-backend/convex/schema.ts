@@ -283,6 +283,13 @@ export default defineSchema({
 		label: v.optional(v.string()),
 		createdAt: v.number(),
 		lastUsedAt: v.optional(v.number()),
+		// Latest Anthropic per-account rate-limit snapshot (the SDK's
+		// rate_limit_info: {rateLimitType, status, resetsAt, utilization?, …}).
+		// Account-level CURRENT state, not per-turn — updated whenever a
+		// rate_limit_event arrives (incl. a silent hard-limit turn that records no
+		// usage). Shape is upstream-defined so kept opaque.
+		lastRateLimit: v.optional(v.any()),
+		lastRateLimitAt: v.optional(v.number()),
 	})
 		.index("by_user", ["userId"])
 		.index("by_user_agent", ["userId", "agent"]),
