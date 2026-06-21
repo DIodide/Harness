@@ -21,6 +21,8 @@ import { Route as SandboxesIndexRouteImport } from './routes/sandboxes/index'
 import { Route as HarnessesIndexRouteImport } from './routes/harnesses/index'
 import { Route as CredentialsIndexRouteImport } from './routes/credentials/index'
 import { Route as ChatIndexRouteImport } from './routes/chat/index'
+import { Route as SkillPacksNewRouteImport } from './routes/skill-packs/new'
+import { Route as SkillPacksPackIdRouteImport } from './routes/skill-packs/$packId'
 import { Route as ShareTokenRouteImport } from './routes/share/$token'
 import { Route as ShareHarnessTokenRouteImport } from './routes/share-harness/$token'
 import { Route as SandboxesCreate_sandboxRouteImport } from './routes/sandboxes/create_sandbox'
@@ -87,6 +89,16 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
   path: '/chat/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SkillPacksNewRoute = SkillPacksNewRouteImport.update({
+  id: '/skill-packs/new',
+  path: '/skill-packs/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SkillPacksPackIdRoute = SkillPacksPackIdRouteImport.update({
+  id: '/skill-packs/$packId',
+  path: '/skill-packs/$packId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ShareTokenRoute = ShareTokenRouteImport.update({
   id: '/share/$token',
   path: '/share/$token',
@@ -125,6 +137,8 @@ export interface FileRoutesByFullPath {
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
   '/share-harness/$token': typeof ShareHarnessTokenRoute
   '/share/$token': typeof ShareTokenRoute
+  '/skill-packs/$packId': typeof SkillPacksPackIdRoute
+  '/skill-packs/new': typeof SkillPacksNewRoute
   '/chat/': typeof ChatIndexRoute
   '/credentials/': typeof CredentialsIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
@@ -144,6 +158,8 @@ export interface FileRoutesByTo {
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
   '/share-harness/$token': typeof ShareHarnessTokenRoute
   '/share/$token': typeof ShareTokenRoute
+  '/skill-packs/$packId': typeof SkillPacksPackIdRoute
+  '/skill-packs/new': typeof SkillPacksNewRoute
   '/chat': typeof ChatIndexRoute
   '/credentials': typeof CredentialsIndexRoute
   '/harnesses': typeof HarnessesIndexRoute
@@ -164,6 +180,8 @@ export interface FileRoutesById {
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
   '/share-harness/$token': typeof ShareHarnessTokenRoute
   '/share/$token': typeof ShareTokenRoute
+  '/skill-packs/$packId': typeof SkillPacksPackIdRoute
+  '/skill-packs/new': typeof SkillPacksNewRoute
   '/chat/': typeof ChatIndexRoute
   '/credentials/': typeof CredentialsIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
@@ -185,6 +203,8 @@ export interface FileRouteTypes {
     | '/sandboxes/create_sandbox'
     | '/share-harness/$token'
     | '/share/$token'
+    | '/skill-packs/$packId'
+    | '/skill-packs/new'
     | '/chat/'
     | '/credentials/'
     | '/harnesses/'
@@ -204,6 +224,8 @@ export interface FileRouteTypes {
     | '/sandboxes/create_sandbox'
     | '/share-harness/$token'
     | '/share/$token'
+    | '/skill-packs/$packId'
+    | '/skill-packs/new'
     | '/chat'
     | '/credentials'
     | '/harnesses'
@@ -223,6 +245,8 @@ export interface FileRouteTypes {
     | '/sandboxes/create_sandbox'
     | '/share-harness/$token'
     | '/share/$token'
+    | '/skill-packs/$packId'
+    | '/skill-packs/new'
     | '/chat/'
     | '/credentials/'
     | '/harnesses/'
@@ -243,6 +267,8 @@ export interface RootRouteChildren {
   SandboxesCreate_sandboxRoute: typeof SandboxesCreate_sandboxRoute
   ShareHarnessTokenRoute: typeof ShareHarnessTokenRoute
   ShareTokenRoute: typeof ShareTokenRoute
+  SkillPacksPackIdRoute: typeof SkillPacksPackIdRoute
+  SkillPacksNewRoute: typeof SkillPacksNewRoute
   ChatIndexRoute: typeof ChatIndexRoute
   CredentialsIndexRoute: typeof CredentialsIndexRoute
   HarnessesIndexRoute: typeof HarnessesIndexRoute
@@ -337,6 +363,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/skill-packs/new': {
+      id: '/skill-packs/new'
+      path: '/skill-packs/new'
+      fullPath: '/skill-packs/new'
+      preLoaderRoute: typeof SkillPacksNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/skill-packs/$packId': {
+      id: '/skill-packs/$packId'
+      path: '/skill-packs/$packId'
+      fullPath: '/skill-packs/$packId'
+      preLoaderRoute: typeof SkillPacksPackIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/share/$token': {
       id: '/share/$token'
       path: '/share/$token'
@@ -387,6 +427,8 @@ const rootRouteChildren: RootRouteChildren = {
   SandboxesCreate_sandboxRoute: SandboxesCreate_sandboxRoute,
   ShareHarnessTokenRoute: ShareHarnessTokenRoute,
   ShareTokenRoute: ShareTokenRoute,
+  SkillPacksPackIdRoute: SkillPacksPackIdRoute,
+  SkillPacksNewRoute: SkillPacksNewRoute,
   ChatIndexRoute: ChatIndexRoute,
   CredentialsIndexRoute: CredentialsIndexRoute,
   HarnessesIndexRoute: HarnessesIndexRoute,

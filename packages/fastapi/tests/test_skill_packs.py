@@ -26,10 +26,16 @@ def _mock_resolve(monkeypatch, value):
     monkeypatch.setattr(convex_mod, "resolve_skill_pack_context", fake)
 
 
-async def _attach(monkeypatch, agent_id, value, pack_ids=("p1",)):
+async def _attach(monkeypatch, agent_id, value, pack_ids=("p1",), fetched=None):
     mgr = AgentSessionManager()
     monkeypatch.setattr(mgr, "_http_client", lambda: None)
     _mock_resolve(monkeypatch, value)
+
+    # Mock the GitHub SKILL.md fallback so tests never hit the network.
+    async def fake_fetch(_names):
+        return fetched or {}
+
+    monkeypatch.setattr(mgr, "_fetch_uncached_skill_md", fake_fetch)
     creds = AgentCredentials()
     harness = HarnessConfig(
         model="x", name="h", agent=agent_id, harness_id="h1",
@@ -107,6 +113,50 @@ class TestAttachSkillPackContext:
         )
         # AGENTS.md for any agentic harness; CLAUDE.md + skills are Claude-only.
         assert creds.context_files == {AGENTS: f"{M}\n# Agents\n"}
+
+    async def test_uncached_skill_materialized_via_github_fallback(self, monkeypatch):
+        # A skill whose detail isn't cached is fetched from GitHub and written
+        # (fixes the silent-skip race vs. the frontend's ensureSkillDetails).
+        creds = await _attach(
+            monkeypatch, "claude-code",
+            {"agentsMd": "", "claudeMd": "",
+             "skills": [{"name": "o/r/fresh", "skillName": "fresh", "detail": ""}]},
+            fetched={"o/r/fresh": "# Fresh body"},
+        )
+        path = f"{SANDBOX_HOME}/.claude/skills/fresh/SKILL.md"
+        assert creds.context_files[path] == "# Fresh body\n"
+
+    async def test_same_skillname_different_repos_no_overwrite(self, monkeypatch):
+        # Two skills with the same trailing id from different repos must NOT
+        # collide on one dir (the second would silently overwrite the first).
+        creds = await _attach(
+            monkeypatch, "claude-code",
+            {"agentsMd": "", "claudeMd": "", "skills": [
+                {"name": "anthropics/skills/pdf", "skillName": "pdf", "detail": "A"},
+                {"name": "other/repo/pdf", "skillName": "pdf", "detail": "B"},
+            ]},
+        )
+        skill_mds = {
+            k: v for k, v in creds.context_files.items() if k.endswith("/SKILL.md")
+        }
+        assert len(skill_mds) == 2  # two distinct dirs, no overwrite
+        assert creds.context_files[f"{SANDBOX_HOME}/.claude/skills/pdf/SKILL.md"] == "A\n"
+
+    async def test_backfill_is_capped(self, monkeypatch):
+        import app.services.skill_content as sc
+
+        mgr = AgentSessionManager()
+        monkeypatch.setattr(mgr, "_http_client", lambda: None)
+        seen: list[str] = []
+
+        async def fake_md(_client, name):
+            seen.append(name)
+            return f"body-{name}"
+
+        monkeypatch.setattr(sc, "fetch_skill_md", fake_md)
+        out = await mgr._fetch_uncached_skill_md([f"o/r/s{i}" for i in range(30)])
+        assert len(seen) == 20  # capped at 20
+        assert len(out) == 20
 
 
 class TestPruneCommand:

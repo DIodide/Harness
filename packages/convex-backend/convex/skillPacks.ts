@@ -159,7 +159,8 @@ export const remove = mutation({
  * name) and the union of skills joined to their cached SKILL.md content. Only
  * packs owned by `userId` are honored (defense-in-depth — the gateway passes
  * the owner's id). Skills whose SKILL.md isn't cached yet come back with an
- * empty `detail`; the gateway skips materializing those.
+ * empty `detail`; the gateway then back-fills it from GitHub at materialize
+ * time, so a freshly-added skill still reaches the agent.
  */
 export const resolveForGateway = internalQuery({
 	args: {
