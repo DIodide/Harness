@@ -114,6 +114,10 @@ export default defineSchema({
 		// deleted (its harness/sandbox stay editable). A conversation always has
 		// a workspace home; the Default is the fallback.
 		isDefault: v.optional(v.boolean()),
+		// Manual sidebar ordering (ascending). Optional: accounts that have never
+		// reordered fall back to lastUsedAt. Set for every workspace once the user
+		// drags to reorder.
+		order: v.optional(v.number()),
 		createdAt: v.number(),
 		lastUsedAt: v.number(),
 	})

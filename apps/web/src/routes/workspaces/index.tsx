@@ -14,6 +14,7 @@ import {
 	Check,
 	ChevronDown,
 	Cpu,
+	GripVertical,
 	MessageSquare,
 	PanelLeftClose,
 	PanelLeftOpen,
@@ -28,8 +29,13 @@ import {
 	Wrench,
 	X,
 } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	AnimatePresence,
+	motion,
+	Reorder,
+	useDragControls,
+} from "motion/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { countActiveAgents } from "../../components/chat/background-agents-panel";
 import { ChatInput } from "../../components/chat/chat-input";
@@ -1007,6 +1013,161 @@ function ChatPage() {
 	);
 }
 
+/**
+ * One draggable workspace row in the sidebar. Drag is handle-initiated (the grip)
+ * via useDragControls + dragListener={false}, so the row body stays clickable for
+ * selecting the workspace.
+ */
+function WorkspaceRow({
+	workspace,
+	index,
+	isActive,
+	harnessName,
+	sandboxName,
+	isMac,
+	modifierHeld,
+	onSelect,
+	onEdit,
+	onDragStart,
+	onDragEnd,
+	onMove,
+}: {
+	workspace: {
+		_id: Id<"workspaces">;
+		name: string;
+		harnessId?: Id<"harnesses">;
+		sandboxId?: Id<"sandboxes">;
+		color?: string;
+		isDefault?: boolean;
+	};
+	index: number;
+	isActive: boolean;
+	harnessName: string;
+	sandboxName: string;
+	isMac: boolean;
+	modifierHeld: boolean;
+	onSelect: (id: Id<"workspaces">) => void;
+	onEdit: (workspace: {
+		_id: Id<"workspaces">;
+		name: string;
+		harnessId?: Id<"harnesses">;
+		sandboxId?: Id<"sandboxes">;
+		color?: string;
+	}) => void;
+	onDragStart: () => void;
+	onDragEnd: () => void;
+	onMove: (id: Id<"workspaces">, dir: -1 | 1) => void;
+}) {
+	const controls = useDragControls();
+	const colorHex = getWorkspaceColorHex(workspace.color);
+	const hasShortcut = index < 9;
+	const shortcutDigit = index + 1;
+	return (
+		<Reorder.Item
+			value={workspace._id}
+			dragListener={false}
+			dragControls={controls}
+			onDragStart={onDragStart}
+			onDragEnd={onDragEnd}
+			as="div"
+			className={cn(
+				"group relative flex items-stretch rounded-md transition-all",
+				colorHex
+					? "hover:brightness-95"
+					: isActive
+						? "bg-muted"
+						: "hover:bg-muted/50",
+				isActive && colorHex && "ring-2 ring-inset ring-foreground/40",
+			)}
+			style={colorHex ? { backgroundColor: colorHex } : undefined}
+		>
+			<button
+				type="button"
+				aria-label={`Reorder ${workspace.name} (drag, or use arrow keys)`}
+				onPointerDown={(event) => controls.start(event)}
+				onKeyDown={(event) => {
+					// Ignore auto-repeat so holding the key doesn't fire a mutation per
+					// tick; one discrete press = one move.
+					if (event.repeat) return;
+					if (event.key === "ArrowUp") {
+						event.preventDefault();
+						onMove(workspace._id, -1);
+					} else if (event.key === "ArrowDown") {
+						event.preventDefault();
+						onMove(workspace._id, 1);
+					}
+				}}
+				className={cn(
+					"flex shrink-0 cursor-grab touch-none items-center pl-1 active:cursor-grabbing",
+					colorHex
+						? "text-foreground/40 hover:text-foreground/70"
+						: "text-muted-foreground/40 hover:text-muted-foreground",
+				)}
+			>
+				<GripVertical size={12} />
+			</button>
+			<button
+				type="button"
+				onClick={() => onSelect(workspace._id)}
+				aria-keyshortcuts={
+					hasShortcut ? ariaKeyShortcut(shortcutDigit, isMac) : undefined
+				}
+				title={
+					hasShortcut
+						? `${workspace.name} — ${formatShortcut(shortcutDigit, isMac)}`
+						: workspace.name
+				}
+				className={cn(
+					"flex min-w-0 flex-1 items-start gap-2 py-2 pl-1 pr-8 text-left",
+					colorHex
+						? "text-foreground"
+						: isActive
+							? "text-foreground"
+							: "text-muted-foreground group-hover:text-foreground",
+				)}
+			>
+				<span className="min-w-0 flex-1">
+					<span className="block truncate text-xs font-medium">
+						{workspace.name}
+					</span>
+					<span
+						className={cn(
+							"block truncate text-[10px]",
+							colorHex ? "text-foreground/60" : "text-muted-foreground",
+						)}
+					>
+						{harnessName} / {sandboxName}
+					</span>
+				</span>
+			</button>
+			{modifierHeld && hasShortcut && (
+				<span
+					aria-hidden="true"
+					className="pointer-events-none absolute right-1 top-1 rounded-sm bg-background/85 px-1 py-0.5 font-mono text-[9px] leading-none text-muted-foreground ring-1 ring-border/60 backdrop-blur-sm transition-opacity group-hover:opacity-0"
+				>
+					{formatShortcut(shortcutDigit, isMac)}
+				</span>
+			)}
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button
+						variant="ghost"
+						size="icon-xs"
+						className="absolute right-1 top-1.5 opacity-0 group-hover:opacity-100"
+						onClick={(event) => {
+							event.stopPropagation();
+							onEdit(workspace);
+						}}
+					>
+						<Pencil size={10} />
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent>Edit workspace</TooltipContent>
+			</Tooltip>
+		</Reorder.Item>
+	);
+}
+
 function WorkspaceSidebar({
 	workspaces,
 	harnesses,
@@ -1088,10 +1249,92 @@ function WorkspaceSidebar({
 			setRenameWorkspaceColor(null);
 		},
 	});
+	// Local sidebar order for optimistic drag-and-drop.
+	const [orderedIds, setOrderedIds] = useState<Id<"workspaces">[]>(() =>
+		workspaces.map((w) => w._id),
+	);
+	// True while a drag gesture is in progress (between Reorder.Item onDragStart
+	// and onDragEnd) — used to gate the server resync below.
+	const isDraggingRef = useRef(false);
+
+	const reorderWorkspaces = useMutation({
+		mutationFn: useConvexMutation(api.workspaces.reorder),
+		onError: () => {
+			// Revert to the server order on a failed save.
+			setOrderedIds(workspaces.map((w) => w._id));
+			toast.error("Couldn't save the new workspace order.");
+		},
+	});
+
+	// Adopt the server order whenever idle — no active drag and no pending save —
+	// so a reorder from another tab/device is picked up, membership changes
+	// apply, and a failed save reverts. While dragging or saving, the optimistic
+	// local order is authoritative and must not be clobbered.
+	useEffect(() => {
+		if (isDraggingRef.current || reorderWorkspaces.isPending) return;
+		const serverIds = workspaces.map((w) => w._id);
+		setOrderedIds((prev) =>
+			prev.length === serverIds.length &&
+			prev.every((id, i) => id === serverIds[i])
+				? prev
+				: serverIds,
+		);
+	}, [workspaces, reorderWorkspaces.isPending]);
+
+	const orderedWorkspaces = useMemo(() => {
+		const byId = new Map(workspaces.map((w) => [w._id, w]));
+		return orderedIds
+			.map((id) => byId.get(id))
+			.filter((w): w is (typeof workspaces)[number] => w != null);
+	}, [orderedIds, workspaces]);
+	// Feed Reorder.Group exactly the ids it renders (the filtered set), so its
+	// tracked values can't disagree with the rendered items on a membership change.
+	const renderedIds = useMemo(
+		() => orderedWorkspaces.map((w) => w._id),
+		[orderedWorkspaces],
+	);
+	const renderedIdsRef = useRef(renderedIds);
+	renderedIdsRef.current = renderedIds;
+	const serverIdsRef = useRef<Id<"workspaces">[]>([]);
+	serverIdsRef.current = workspaces.map((w) => w._id);
+
+	// onReorder fires on every swap during a drag — update the live UI only.
+	const handleReorderWorkspaces = useCallback((newIds: Id<"workspaces">[]) => {
+		setOrderedIds(newIds);
+	}, []);
+	const handleDragStart = useCallback(() => {
+		isDraggingRef.current = true;
+	}, []);
+	// Persist ONCE, on drop, with the final order (not on every intermediate
+	// swap) — and skip the write entirely when the drop didn't change anything
+	// (e.g. a jittery grip click that registers as a tiny drag).
+	const handleDragEnd = useCallback(() => {
+		isDraggingRef.current = false;
+		const next = renderedIdsRef.current;
+		const server = serverIdsRef.current;
+		const unchanged =
+			next.length === server.length && next.every((id, i) => id === server[i]);
+		if (unchanged) return;
+		reorderWorkspaces.mutate({ orderedIds: next });
+	}, [reorderWorkspaces]);
+	// Keyboard reordering (grip focused): move a workspace one step and persist.
+	const moveWorkspace = useCallback(
+		(id: Id<"workspaces">, dir: -1 | 1) => {
+			const cur = renderedIdsRef.current;
+			const i = cur.indexOf(id);
+			const j = i + dir;
+			if (i < 0 || j < 0 || j >= cur.length) return;
+			const next = [...cur];
+			[next[i], next[j]] = [next[j], next[i]];
+			setOrderedIds(next);
+			reorderWorkspaces.mutate({ orderedIds: next });
+		},
+		[reorderWorkspaces],
+	);
 
 	const isMac = useIsMac();
-	useWorkspaceShortcuts(workspaces, onSelectWorkspace, isMac);
-	useWorkspaceSwitchCommands(workspaces, onSelectWorkspace, isMac);
+	useWorkspaceShortcuts(orderedWorkspaces, onSelectWorkspace, isMac);
+	useWorkspaceSwitchCommands(orderedWorkspaces, onSelectWorkspace, isMac);
 	const modifierHeld = useModifierHeld(isMac);
 
 	const handleNew = () => {
@@ -1364,99 +1607,43 @@ function WorkspaceSidebar({
 					</Tooltip>
 				</div>
 				<ScrollArea className="h-56">
-					<div className="space-y-0.5 pr-2">
-						{workspaces.length === 0 ? (
-							<p className="px-2 py-2 text-[11px] text-muted-foreground">
-								Create a workspace to start.
-							</p>
-						) : (
-							workspaces.map((workspace, index) => {
-								const harness = harnesses.find(
-									(item) => item._id === workspace.harnessId,
-								);
-								const sandbox = sandboxes.find(
-									(item) => item._id === workspace.sandboxId,
-								);
-								const colorHex = getWorkspaceColorHex(workspace.color);
-								const isActive = activeWorkspaceId === workspace._id;
-								const hasShortcut = index < 9;
-								const shortcutDigit = index + 1;
-								return (
-									<div key={workspace._id} className="group relative">
-										<button
-											type="button"
-											onClick={() => onSelectWorkspace(workspace._id)}
-											aria-keyshortcuts={
-												hasShortcut
-													? ariaKeyShortcut(shortcutDigit, isMac)
-													: undefined
-											}
-											title={
-												hasShortcut
-													? `${workspace.name} — ${formatShortcut(shortcutDigit, isMac)}`
-													: workspace.name
-											}
-											style={
-												colorHex ? { backgroundColor: colorHex } : undefined
-											}
-											className={cn(
-												"flex w-full items-start gap-2 rounded-md px-2 py-2 pr-8 text-left transition-all",
-												colorHex
-													? "text-foreground hover:brightness-95"
-													: isActive
-														? "bg-muted text-foreground"
-														: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-												isActive &&
-													colorHex &&
-													"ring-2 ring-inset ring-foreground/40",
-											)}
-										>
-											<Sparkles size={12} className="mt-0.5 shrink-0" />
-											<span className="min-w-0 flex-1">
-												<span className="block truncate text-xs font-medium">
-													{workspace.name}
-												</span>
-												<span
-													className={cn(
-														"block truncate text-[10px]",
-														colorHex
-															? "text-foreground/60"
-															: "text-muted-foreground",
-													)}
-												>
-													{harness?.name ?? "None"} / {sandbox?.name ?? "None"}
-												</span>
-											</span>
-										</button>
-										{modifierHeld && hasShortcut && (
-											<span
-												aria-hidden="true"
-												className="pointer-events-none absolute right-1 top-1 rounded-sm bg-background/85 px-1 py-0.5 font-mono text-[9px] leading-none text-muted-foreground ring-1 ring-border/60 backdrop-blur-sm transition-opacity group-hover:opacity-0"
-											>
-												{formatShortcut(shortcutDigit, isMac)}
-											</span>
-										)}
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<Button
-													variant="ghost"
-													size="icon-xs"
-													className="absolute right-1 top-1.5 opacity-0 group-hover:opacity-100"
-													onClick={(event) => {
-														event.stopPropagation();
-														startRenameWorkspace(workspace);
-													}}
-												>
-													<Pencil size={10} />
-												</Button>
-											</TooltipTrigger>
-											<TooltipContent>Edit workspace</TooltipContent>
-										</Tooltip>
-									</div>
-								);
-							})
-						)}
-					</div>
+					{workspaces.length === 0 ? (
+						<p className="px-2 py-2 text-[11px] text-muted-foreground">
+							Create a workspace to start.
+						</p>
+					) : (
+						<Reorder.Group
+							as="div"
+							axis="y"
+							values={renderedIds}
+							onReorder={handleReorderWorkspaces}
+							className="space-y-0.5 pr-2"
+						>
+							{orderedWorkspaces.map((workspace, index) => (
+								<WorkspaceRow
+									key={workspace._id}
+									workspace={workspace}
+									index={index}
+									isActive={activeWorkspaceId === workspace._id}
+									harnessName={
+										harnesses.find((h) => h._id === workspace.harnessId)
+											?.name ?? "None"
+									}
+									sandboxName={
+										sandboxes.find((s) => s._id === workspace.sandboxId)
+											?.name ?? "None"
+									}
+									isMac={isMac}
+									modifierHeld={modifierHeld}
+									onSelect={onSelectWorkspace}
+									onEdit={startRenameWorkspace}
+									onDragStart={handleDragStart}
+									onDragEnd={handleDragEnd}
+									onMove={moveWorkspace}
+								/>
+							))}
+						</Reorder.Group>
+					)}
 				</ScrollArea>
 			</div>
 

@@ -25,7 +25,9 @@ import { useCallback, useEffect, useState } from "react";
  * workspace-scoped conversations list, which the caller queries from the
  * `activeWorkspaceId` this hook returns).
  */
-export function useWorkspaceSelection<W extends { _id: Id<"workspaces"> }>({
+export function useWorkspaceSelection<
+	W extends { _id: Id<"workspaces">; lastUsedAt: number },
+>({
 	workspaces,
 	initialWorkspaceId,
 	initialConvoId,
@@ -51,10 +53,13 @@ export function useWorkspaceSelection<W extends { _id: Id<"workspaces"> }>({
 		);
 
 	// Resolve which workspace is active: keep the current one if still valid,
-	// else the URL's initialWorkspaceId, else the most-recently-used (workspaces
-	// are ordered desc by lastUsedAt). Crucially this never nulls activeConvoId —
-	// while `workspaces` is undefined/transiently-empty during the auth window, a
-	// URL-seeded conversation whose workspace hasn't loaded yet must survive.
+	// else the URL's initialWorkspaceId, else the most-recently-used. (The list's
+	// display order is now user-controlled via drag-reorder, so we pick the MRU
+	// explicitly rather than relying on list[0] — opening /workspaces fresh
+	// resumes the last context regardless of manual order.) Crucially this never
+	// nulls activeConvoId — while `workspaces` is undefined/transiently-empty
+	// during the auth window, a URL-seeded conversation whose workspace hasn't
+	// loaded yet must survive.
 	useEffect(() => {
 		if (!workspaces || workspaces.length === 0) {
 			setActiveWorkspaceId(null);
@@ -73,7 +78,10 @@ export function useWorkspaceSelection<W extends { _id: Id<"workspaces"> }>({
 			setActiveWorkspaceId(initialWorkspaceId as Id<"workspaces">);
 			return;
 		}
-		setActiveWorkspaceId(workspaces[0]._id);
+		const mostRecent = workspaces.reduce((a, b) =>
+			b.lastUsedAt > a.lastUsedAt ? b : a,
+		);
+		setActiveWorkspaceId(mostRecent._id);
 	}, [workspaces, activeWorkspaceId, initialWorkspaceId]);
 
 	const selectWorkspace = useCallback((id: Id<"workspaces">) => {
