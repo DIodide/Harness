@@ -101,7 +101,19 @@ export function SkillPackEditor({
 			);
 			setRepoInput("");
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : "Import failed");
+			// A ConvexError carries the human-readable reason on `.data`; a plain
+			// Error from Convex is the masked, generic "Server Error".
+			const data =
+				e && typeof e === "object" && "data" in e
+					? (e as { data: unknown }).data
+					: undefined;
+			toast.error(
+				typeof data === "string"
+					? data
+					: e instanceof Error
+						? e.message
+						: "Import failed",
+			);
 		} finally {
 			setImportingRepo(null);
 		}
