@@ -36,7 +36,7 @@ import {
 	Reorder,
 	useDragControls,
 } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { countActiveAgents } from "../../components/chat/background-agents-panel";
 import { ChatInput } from "../../components/chat/chat-input";
@@ -1024,9 +1024,10 @@ function ChatPage() {
 /**
  * One draggable workspace row in the sidebar. Drag is handle-initiated (the grip)
  * via useDragControls + dragListener={false}, so the row body stays clickable for
- * selecting the workspace.
+ * selecting the workspace. Memoized so a drag swap only re-renders the rows whose
+ * props (index/active) actually changed, keeping the gesture at frame rate.
  */
-function WorkspaceRow({
+const WorkspaceRow = memo(function WorkspaceRow({
 	workspace,
 	index,
 	isActive,
@@ -1077,9 +1078,21 @@ function WorkspaceRow({
 			dragControls={controls}
 			onDragStart={onDragStart}
 			onDragEnd={onDragEnd}
+			// Glue the row to the cursor (no rubber-band / momentum) and settle the
+			// sibling reshuffle + drop crisply. NB: the className uses
+			// `transition-colors`, never `transition-all` — a CSS transition on
+			// `transform` would fight motion's per-frame drag transform and make the
+			// drag visibly lag the pointer.
+			dragElastic={0}
+			dragMomentum={false}
+			transition={{ type: "spring", stiffness: 600, damping: 40, mass: 0.6 }}
+			whileDrag={{ scale: 1.02, boxShadow: "0 4px 12px rgba(0,0,0,0.18)" }}
 			as="div"
+			// select-none (not touch-none) on the row: touch-none here would
+			// suppress touch panning of the whole list; the grip handle carries
+			// touch-none so the drag gesture itself doesn't scroll-fight.
 			className={cn(
-				"group relative flex items-stretch rounded-md transition-all",
+				"group relative flex select-none items-stretch rounded-md transition-colors",
 				colorHex
 					? "hover:brightness-95"
 					: isActive
@@ -1092,6 +1105,9 @@ function WorkspaceRow({
 			<button
 				type="button"
 				aria-label={`Reorder ${workspace.name} (drag, or use arrow keys)`}
+				// No preventDefault here — it would block the grip from focusing on
+				// click, breaking click-then-arrow keyboard reordering; select-none on
+				// the row already prevents text selection during a drag.
 				onPointerDown={(event) => controls.start(event)}
 				onKeyDown={(event) => {
 					// Ignore auto-repeat so holding the key doesn't fire a mutation per
@@ -1174,7 +1190,7 @@ function WorkspaceRow({
 			</Tooltip>
 		</Reorder.Item>
 	);
-}
+});
 
 function WorkspaceSidebar({
 	workspaces,
@@ -1493,20 +1509,25 @@ function WorkspaceSidebar({
 		});
 	};
 
-	const startRenameWorkspace = (workspace: {
-		_id: Id<"workspaces">;
-		name: string;
-		harnessId?: Id<"harnesses">;
-		sandboxId?: Id<"sandboxes">;
-		color?: string;
-	}) => {
-		setRenameWorkspace(workspace);
-		setRenameWorkspaceName(workspace.name);
-		setRenameWorkspaceHarnessId(workspace.harnessId ?? null);
-		setRenameWorkspaceSandboxId(workspace.sandboxId ?? null);
-		setRenameWorkspaceColor(workspace.color ?? null);
-		setConfirmDeleteWorkspace(false);
-	};
+	// Stable so memoized WorkspaceRow rows don't re-render every time the sidebar
+	// re-renders (e.g. on every drag swap).
+	const startRenameWorkspace = useCallback(
+		(workspace: {
+			_id: Id<"workspaces">;
+			name: string;
+			harnessId?: Id<"harnesses">;
+			sandboxId?: Id<"sandboxes">;
+			color?: string;
+		}) => {
+			setRenameWorkspace(workspace);
+			setRenameWorkspaceName(workspace.name);
+			setRenameWorkspaceHarnessId(workspace.harnessId ?? null);
+			setRenameWorkspaceSandboxId(workspace.sandboxId ?? null);
+			setRenameWorkspaceColor(workspace.color ?? null);
+			setConfirmDeleteWorkspace(false);
+		},
+		[],
+	);
 
 	// Open the edit dialog when an external trigger (e.g. the empty-state
 	// "Attach a harness" CTA) requests it for a specific workspace.
@@ -1614,18 +1635,29 @@ function WorkspaceSidebar({
 						<TooltipContent>New workspace</TooltipContent>
 					</Tooltip>
 				</div>
-				<ScrollArea className="h-56">
-					{workspaces.length === 0 ? (
+				{workspaces.length === 0 ? (
+					<div className="h-56">
 						<p className="px-2 py-2 text-[11px] text-muted-foreground">
 							Create a workspace to start.
 						</p>
-					) : (
+					</div>
+				) : (
+					// A `motion.div` (not the Group) is the scroll container, marked
+					// `layoutScroll` so motion's projection subtracts scrollTop when
+					// measuring rows (no snap on a scrolled list). It also stays a
+					// scrollable *ancestor* of the Group, which is what motion's
+					// drag-to-edge auto-scroll walks up to find — making the Group
+					// itself the scroller would break auto-scroll.
+					<motion.div
+						layoutScroll
+						className="h-56 overflow-x-hidden overflow-y-auto pr-2"
+					>
 						<Reorder.Group
 							as="div"
 							axis="y"
 							values={renderedIds}
 							onReorder={handleReorderWorkspaces}
-							className="space-y-0.5 pr-2"
+							className="space-y-0.5"
 						>
 							{orderedWorkspaces.map((workspace, index) => (
 								<WorkspaceRow
@@ -1651,8 +1683,8 @@ function WorkspaceSidebar({
 								/>
 							))}
 						</Reorder.Group>
-					)}
-				</ScrollArea>
+					</motion.div>
+				)}
 			</div>
 
 			<Separator />
