@@ -85,19 +85,102 @@ export function accountUsageFromRateLimit(
 	};
 }
 
-/** The freshest credential's account-limit snapshot (rows already carry the
- *  account-level rateLimit; pick the most recently active credential). */
-function latestAccountUsage(
+// Window ordering for the bars: short rolling window first, then weekly caps.
+const WINDOW_ORDER = [
+	"five_hour",
+	"seven_day",
+	"seven_day_opus",
+	"seven_day_sonnet",
+	"overage",
+];
+
+/** Parse one window of the multi-window `buckets` snapshot (the live 5h/weekly
+ *  utilization Harness fetches from Anthropic's rate-limit headers). */
+function parseWindow(type: string, w: unknown): AccountUsage | null {
+	if (!w || typeof w !== "object") return null;
+	const o = w as Record<string, unknown>;
+	const rawStatus = typeof o.status === "string" ? o.status : "allowed";
+	const status: AccountUsage["status"] =
+		rawStatus === "rejected"
+			? "rejected"
+			: rawStatus.includes("warning")
+				? "warning"
+				: "allowed";
+	let utilization: number | undefined;
+	if (typeof o.utilization === "number" && Number.isFinite(o.utilization)) {
+		// Anthropic's unified headers report a 0–1 fraction; legacy flat
+		// snapshots used 0–100. Normalize both to a 0–100 percentage.
+		const u = o.utilization <= 1 ? o.utilization * 100 : o.utilization;
+		utilization = Math.max(0, Math.min(100, u));
+	}
+	const resetsAtMs = toResetMs(o.resetsAt);
+	// A window whose reset already passed carries a stale number — drop it.
+	if (resetsAtMs !== undefined && resetsAtMs <= Date.now()) return null;
+	if (
+		status === "allowed" &&
+		utilization === undefined &&
+		resetsAtMs === undefined
+	) {
+		return null;
+	}
+	return {
+		label: RATE_LIMIT_LABELS[type] ?? "Claude account",
+		status,
+		utilization,
+		resetsAtMs,
+	};
+}
+
+/** All renderable windows from a credential's snapshot. Handles the multi-window
+ *  `{ buckets: { five_hour, seven_day, … } }` shape (subscription usage) and the
+ *  legacy flat single-window shape. */
+export function accountUsagesFromRateLimit(rateLimit: unknown): AccountUsage[] {
+	if (!rateLimit || typeof rateLimit !== "object") return [];
+	const rl = rateLimit as Record<string, unknown>;
+	const buckets = rl.buckets;
+	if (buckets && typeof buckets === "object") {
+		return Object.entries(buckets as Record<string, unknown>)
+			.map(([type, w]) => ({ type, a: parseWindow(type, w) }))
+			.filter((x): x is { type: string; a: AccountUsage } => x.a !== null)
+			.sort((x, y) => {
+				const ix = WINDOW_ORDER.indexOf(x.type);
+				const iy = WINDOW_ORDER.indexOf(y.type);
+				return (ix < 0 ? 99 : ix) - (iy < 0 ? 99 : iy);
+			})
+			.map((x) => x.a);
+	}
+	const a = accountUsageFromRateLimit(rl);
+	return a ? [a] : [];
+}
+
+/** The freshest credential's window list (rows carry the account-level snapshot;
+ *  pick the most recently active credential that has one). */
+function latestAccountUsages(
 	rows: AgentUsageRow[] | undefined,
-): AccountUsage | null {
+): AccountUsage[] {
 	const byRecency = [...(rows ?? [])].sort(
 		(a, b) => (b.lastTurnAt ?? 0) - (a.lastTurnAt ?? 0),
 	);
 	for (const r of byRecency) {
-		const a = accountUsageFromRateLimit(r.rateLimit);
-		if (a) return a;
+		const windows = accountUsagesFromRateLimit(r.rateLimit);
+		if (windows.length) return windows;
 	}
-	return null;
+	return [];
+}
+
+/** The single most-restrictive window (a hit limit, else the highest %) — used
+ *  for the compact badge color. */
+function latestAccountUsage(
+	rows: AgentUsageRow[] | undefined,
+): AccountUsage | null {
+	const windows = latestAccountUsages(rows);
+	if (!windows.length) return null;
+	const rejected = windows.find((w) => w.status === "rejected");
+	if (rejected) return rejected;
+	return windows.reduce(
+		(m, w) => ((w.utilization ?? 0) > (m.utilization ?? 0) ? w : m),
+		windows[0],
+	);
 }
 
 /** "in 5h 12m" until a reset timestamp (ms), or undefined when past/absent. */
@@ -467,11 +550,8 @@ export function UsageDisplay() {
  */
 function AccountLimitsSection() {
 	const { data } = useQuery(convexQuery(api.agentUsage.getMyAgentUsage, {}));
-	const acct = latestAccountUsage(data as AgentUsageRow[] | undefined);
-	if (!acct) return null;
-
-	const resetsIn = resetsInLabel(acct.resetsAtMs);
-	const resetSub = resetsIn ? `Resets in ${resetsIn}` : undefined;
+	const windows = latestAccountUsages(data as AgentUsageRow[] | undefined);
+	if (windows.length === 0) return null;
 
 	return (
 		<div className="space-y-3 border-t border-white/10 pt-4">
@@ -483,25 +563,41 @@ function AccountLimitsSection() {
 					your subscription
 				</span>
 			</div>
-			{acct.status === "rejected" ? (
-				<div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-					{acct.label} limit reached
-					{resetsIn ? ` · resets in ${resetsIn}` : ""}. Agent turns are paused
-					until it resets.
-				</div>
-			) : acct.utilization !== undefined ? (
-				<ProgressBar
-					pct={acct.utilization}
-					label={acct.label}
-					sublabel={resetSub}
-				/>
-			) : (
-				<p className="text-[11px] text-foreground/50">
-					{acct.label}
-					{acct.status === "warning" ? " · approaching limit" : ""}
-					{resetsIn ? ` · resets in ${resetsIn}` : ""}
-				</p>
-			)}
+			<div className="space-y-3">
+				{windows.map((w) => {
+					const resetsIn = resetsInLabel(w.resetsAtMs);
+					const resetSub = resetsIn ? `Resets in ${resetsIn}` : undefined;
+					if (w.status === "rejected") {
+						return (
+							<div
+								key={w.label}
+								className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300"
+							>
+								{w.label} limit reached
+								{resetsIn ? ` · resets in ${resetsIn}` : ""}. Agent turns are
+								paused until it resets.
+							</div>
+						);
+					}
+					if (w.utilization !== undefined) {
+						return (
+							<ProgressBar
+								key={w.label}
+								pct={w.utilization}
+								label={w.label}
+								sublabel={resetSub}
+							/>
+						);
+					}
+					return (
+						<p key={w.label} className="text-[11px] text-foreground/50">
+							{w.label}
+							{w.status === "warning" ? " · approaching limit" : ""}
+							{resetsIn ? ` · resets in ${resetsIn}` : ""}
+						</p>
+					);
+				})}
+			</div>
 		</div>
 	);
 }

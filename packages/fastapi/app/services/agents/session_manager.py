@@ -1025,6 +1025,10 @@ class AgentSessionManager:
         # Fire-and-forget usage-recording tasks; held so they aren't GC'd
         # mid-flight, discarded on completion.
         self._usage_tasks: set[asyncio.Task] = set()
+        # Per-credential debounce for the subscription-usage ping (monotonic ts
+        # of the last fetch) — the windows move slowly, so once a minute is plenty
+        # and keeps the extra inference calls negligible.
+        self._sub_usage_fetched_at: dict[str, float] = {}
 
     @staticmethod
     def _runtime_key(
@@ -1042,6 +1046,55 @@ class AgentSessionManager:
         if self._http is None:
             self._http = httpx.AsyncClient(timeout=30.0)
         return self._http
+
+    def _maybe_fetch_subscription_usage(
+        self, session: AgentSession, cred_id: str
+    ) -> None:
+        """Kick off a debounced subscription-usage fetch for this credential."""
+        now = time.monotonic()
+        if now - self._sub_usage_fetched_at.get(cred_id, 0.0) < 60.0:
+            return
+        # Set before firing so the many agent_usage events in one turn don't all
+        # queue a fetch; a failure simply waits out the TTL before retrying.
+        self._sub_usage_fetched_at[cred_id] = now
+        task = asyncio.create_task(
+            self._fetch_subscription_usage(session.user_id, cred_id)
+        )
+        self._usage_tasks.add(task)
+        task.add_done_callback(self._usage_tasks.discard)
+
+    async def _fetch_subscription_usage(self, user_id: str, cred_id: str) -> None:
+        """Resolve the credential's OAuth token, read the live 5h + weekly
+        windows off Anthropic's rate-limit headers, and persist them onto the
+        credential. Only OAuth (subscription) credentials carry these windows;
+        api-key credentials are skipped. Best-effort."""
+        try:
+            from app.services.agents.credentials import resolve_agent_credentials
+            from app.services.usage import (
+                fetch_subscription_usage,
+                record_agent_rate_limit,
+            )
+
+            creds = await resolve_agent_credentials(
+                self._http_client(), "claude-code", user_id, cred_id
+            )
+            token = (creds.env or {}).get("CLAUDE_CODE_OAUTH_TOKEN")
+            if not token:
+                return  # api-key credential — no subscription windows to show
+            usage = await fetch_subscription_usage(self._http_client(), token)
+            if usage:
+                await record_agent_rate_limit(
+                    self._http_client(),
+                    user_id=user_id,
+                    agent_credential_id=cred_id,
+                    rate_limit=usage,
+                )
+        except Exception:
+            logger.warning(
+                "Subscription usage fetch failed for credential '%s'",
+                cred_id,
+                exc_info=True,
+            )
 
     async def _inject_workspace_env(
         self, creds, harness: HarnessConfig, user_id: str,
@@ -2165,10 +2218,10 @@ class AgentSessionManager:
             # see the reset time.
             if event["event"] == "agent_usage":
                 rl = (update.get("_meta") or {}).get("_claude/rateLimit")
+                cred_id = session.harness.agent_credential_id
                 if rl is not None:
                     changed = rl != session.last_rate_limit
                     session.last_rate_limit = rl
-                    cred_id = session.harness.agent_credential_id
                     # Only persist when the snapshot actually changed — avoids a
                     # credential-row write on every usage_update that merely
                     # repeats the same rate-limit state.
@@ -2185,6 +2238,11 @@ class AgentSessionManager:
                         )
                         self._usage_tasks.add(rl_task)
                         rl_task.add_done_callback(self._usage_tasks.discard)
+                elif cred_id:
+                    # The Claude Agent SDK doesn't surface subscription usage in
+                    # the stream (the _meta snapshot is empty), so fetch the 5h +
+                    # weekly windows ourselves — debounced per credential.
+                    self._maybe_fetch_subscription_usage(session, cred_id)
             # Persist per-credential agent usage on the terminal usage_update
             # (the only one carrying cost). Thin: no cache tokens, cache-excluded
             # cost — for claude-code the SDK result message upgrades this row in

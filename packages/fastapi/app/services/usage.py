@@ -288,3 +288,85 @@ async def record_agent_rate_limit(
         logger.exception(
             "Failed to record rate limit for credential '%s'", agent_credential_id
         )
+
+
+# Any model the OAuth subscription can call works — the unified windows are
+# account-level, not model-specific (the per-model 7d_sonnet cap aside). Bumped
+# only if Anthropic retires it; a failed ping just yields no bars (best-effort).
+SUBSCRIPTION_USAGE_PING_MODEL = "claude-sonnet-4-5-20250929"
+
+# Maps the Anthropic `anthropic-ratelimit-unified-<key>-*` header group to the
+# window name the frontend renders (RATE_LIMIT_LABELS in usage-display.tsx).
+_UNIFIED_WINDOWS = (
+    ("five_hour", "5h"),
+    ("seven_day", "7d"),
+    ("seven_day_sonnet", "7d_sonnet"),
+)
+
+
+def _parse_unified_rate_limit_headers(headers: httpx.Headers) -> dict | None:
+    """Build a multi-window snapshot from Anthropic's unified rate-limit headers.
+
+    Returns the `{"buckets": {...}}` shape the credential stores and the panel
+    renders, or None when no unified window is present (e.g. an api-key
+    credential, which has no subscription windows). Utilization is the raw 0–1
+    fraction; reset is the Unix-seconds the headers carry.
+    """
+    buckets: dict[str, dict] = {}
+    for name, key in _UNIFIED_WINDOWS:
+        util = headers.get(f"anthropic-ratelimit-unified-{key}-utilization")
+        if util is None:
+            continue
+        try:
+            window: dict = {"utilization": float(util)}
+        except ValueError:
+            continue
+        status = headers.get(f"anthropic-ratelimit-unified-{key}-status")
+        if status:
+            window["status"] = status
+        reset = headers.get(f"anthropic-ratelimit-unified-{key}-reset")
+        if reset is not None:
+            try:
+                window["resetsAt"] = int(reset)
+            except ValueError:
+                pass
+        buckets[name] = window
+    return {"buckets": buckets} if buckets else None
+
+
+async def fetch_subscription_usage(
+    http_client: httpx.AsyncClient, oauth_token: str
+) -> dict | None:
+    """Read the user's Claude subscription usage (5h + weekly windows).
+
+    The Agent SDK / ACP does NOT surface these (the `_meta._claude/rateLimit`
+    snapshot is empty), and the `/api/oauth/usage` endpoint needs a `user:profile`
+    scope agent tokens lack — but the unified rate-limit headers ride on every
+    `/v1/messages` response, which is exactly what Claude Code's own `/usage`
+    reads. So make the cheapest possible inference call and read the headers off
+    it. Best-effort: returns None on any failure rather than disrupting a turn.
+    """
+    try:
+        resp = await http_client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Authorization": f"Bearer {oauth_token}",
+                "anthropic-version": "2023-06-01",
+                "anthropic-beta": "oauth-2025-04-20",
+                "User-Agent": "claude-code/2.1.0",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": SUBSCRIPTION_USAGE_PING_MODEL,
+                "max_tokens": 1,
+                "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+                "messages": [{"role": "user", "content": "."}],
+            },
+            timeout=20.0,
+        )
+    except Exception:
+        logger.warning("Subscription usage ping failed", exc_info=True)
+        return None
+    # Read headers regardless of status: a 429 still reports the (maxed) windows,
+    # which is exactly when the user needs to see them.
+    return _parse_unified_rate_limit_headers(resp.headers)
