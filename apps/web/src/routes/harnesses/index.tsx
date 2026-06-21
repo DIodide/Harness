@@ -21,7 +21,7 @@ import {
 	Zap,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import {
 	ClaudeLogo,
@@ -63,6 +63,8 @@ import { env } from "../../env";
 import { useAgentCatalog } from "../../lib/use-agent-catalog";
 
 const FASTAPI_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
+// Bind pending email harness-shares at most once per browser session.
+const SHARES_CLAIMED_KEY = "harnessSharesClaimed";
 
 export const Route = createFileRoute("/harnesses/")({
 	beforeLoad: ({ context }) => {
@@ -106,10 +108,11 @@ function HarnessesPage() {
 		...convexQuery(api.harnessShares.listIncomingSharedHarnesses, {}),
 		enabled: isSignedIn === true,
 	});
-	const claimedRef = useRef(false);
+	// Claim ONCE per browser session (sessionStorage, not a component ref) so the
+	// relay doesn't re-fire a Clerk lookup + bind on every navigation back here.
 	useEffect(() => {
-		if (!isSignedIn || claimedRef.current) return;
-		claimedRef.current = true;
+		if (!isSignedIn || sessionStorage.getItem(SHARES_CLAIMED_KEY)) return;
+		sessionStorage.setItem(SHARES_CLAIMED_KEY, "1");
 		(async () => {
 			try {
 				const token = await getToken({ template: "convex" });
@@ -118,7 +121,10 @@ function HarnessesPage() {
 					headers: token ? { Authorization: `Bearer ${token}` } : {},
 				});
 			} catch {
-				// Best-effort: invites still bind on the next visit.
+				// Best-effort: let it retry next visit, and invites still bind then.
+				try {
+					sessionStorage.removeItem(SHARES_CLAIMED_KEY);
+				} catch {}
 			}
 		})();
 	}, [isSignedIn, getToken]);
