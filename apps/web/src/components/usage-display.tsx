@@ -1,6 +1,7 @@
 import { convexQuery } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import { useQuery } from "@tanstack/react-query";
+import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
 function ProgressBar({
@@ -345,6 +346,8 @@ export function UsageBadge({ onClick }: { onClick?: () => void }) {
 		<button
 			type="button"
 			onClick={onClick}
+			aria-haspopup="dialog"
+			aria-label={`Usage: ${Math.round(pct)}% used — open usage details`}
 			className={cn(
 				"flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors hover:bg-white/5",
 				color,
@@ -353,5 +356,26 @@ export function UsageBadge({ onClick }: { onClick?: () => void }) {
 			<span className={cn("h-1.5 w-1.5 rounded-full", dotColor)} />
 			<span>{Math.round(pct)}% used</span>
 		</button>
+	);
+}
+
+/**
+ * Usage section for the compact sidebar footer rail: a leading vertical divider
+ * plus the UsageBadge, mounted/unmounted as a single unit. Owns the usage query
+ * only as a render gate, so a null badge can never leave a dangling divider.
+ * UsageBadge is reused unchanged; React Query dedupes the shared query key so
+ * the two subscriptions resolve to one request.
+ */
+export function UsageRailSection({ onOpenUsage }: { onOpenUsage: () => void }) {
+	const { data: usage } = useQuery(convexQuery(api.usage.getUserUsage, {}));
+	if (!usage) return null;
+	return (
+		<>
+			<Separator
+				orientation="vertical"
+				className="mx-1 data-[orientation=vertical]:h-4"
+			/>
+			<UsageBadge onClick={onOpenUsage} />
+		</>
 	);
 }

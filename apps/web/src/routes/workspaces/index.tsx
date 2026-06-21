@@ -94,7 +94,7 @@ import {
 	TooltipTrigger,
 } from "../../components/ui/tooltip";
 import { UsageDialog } from "../../components/usage-dialog";
-import { formatResetTime, UsageBadge } from "../../components/usage-display";
+import { formatResetTime } from "../../components/usage-display";
 import { WorkspaceColorPicker } from "../../components/workspace-color-picker";
 import { WorkspaceCredentialsField } from "../../components/workspace-credentials-field";
 import { useMcpHealthCheck } from "../../hooks/use-mcp-health-check";
@@ -1868,11 +1868,10 @@ function WorkspaceSidebar({
 			</ScrollArea>
 
 			<Separator />
-			<div className="px-2 py-1">
-				<UsageBadge onClick={() => setUsageOpen(true)} />
-			</div>
-			<Separator />
-			<ManageNavFooter onOpenSettings={() => setSettingsOpen(true)} />
+			<ManageNavFooter
+				onOpenSettings={() => setSettingsOpen(true)}
+				onOpenUsage={() => setUsageOpen(true)}
+			/>
 
 			<Dialog open={createOpen} onOpenChange={setCreateOpen}>
 				<DialogContent className="sm:max-w-sm">
