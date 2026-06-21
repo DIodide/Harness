@@ -2015,9 +2015,13 @@ class AgentSessionManager:
             if event["event"] == "agent_usage":
                 rl = (update.get("_meta") or {}).get("_claude/rateLimit")
                 if rl is not None:
+                    changed = rl != session.last_rate_limit
                     session.last_rate_limit = rl
                     cred_id = session.harness.agent_credential_id
-                    if cred_id:
+                    # Only persist when the snapshot actually changed — avoids a
+                    # credential-row write on every usage_update that merely
+                    # repeats the same rate-limit state.
+                    if cred_id and changed:
                         from app.services.usage import record_agent_rate_limit
 
                         rl_task = asyncio.create_task(

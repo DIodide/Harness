@@ -62,6 +62,13 @@ export function accountUsageFromRateLimit(
 			? Math.max(0, Math.min(100, u))
 			: undefined;
 	const resetsAtMs = toResetMs(rl.resetsAt);
+	// The snapshot only updates on a status change, and a window that elapses
+	// passively emits no new event — so once its reset time is in the past the
+	// stored value is stale. Drop it (self-heal) rather than keep showing a
+	// "limit reached" banner for a window that already reset.
+	if (resetsAtMs !== undefined && resetsAtMs <= Date.now()) {
+		return null;
+	}
 	// Nothing actionable to show: normal, no number, no reset.
 	if (
 		status === "allowed" &&
@@ -518,7 +525,8 @@ export function UsageBadge({ onClick }: { onClick?: () => void }) {
 	// account quota % (what actually limits an agent turn), else the Harness
 	// budget.
 	const limited = acct?.status === "rejected";
-	const level = acct?.utilization ?? budgetPct;
+	// `||` not `??`: a 0% account utilization shouldn't hide a real budget %.
+	const level = acct?.utilization || budgetPct;
 	const color = limited
 		? "text-red-400"
 		: level >= 90
