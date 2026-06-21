@@ -28,7 +28,9 @@ const devUseAuth = (() => ({
 	sessionId: "dev-session",
 	orgId: null,
 	orgRole: null,
-	getToken: async () => "dev-auth",
+	// Return null, not a fake token: Convex/FastAPI bypass auth via ENABLE_DEV_AUTH,
+	// and a non-JWT token fails Convex's header parse.
+	getToken: async () => null,
 	signOut: async () => {},
 })) as unknown as typeof clerkUseAuth;
 

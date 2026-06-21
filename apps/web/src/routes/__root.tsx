@@ -28,9 +28,11 @@ const CHROMELESS_ROUTES = ["/", "/sign-in", "/onboarding"];
 
 const fetchClerkAuth = createServerFn({ method: "GET" }).handler(async () => {
 	// LOCAL DEV: skip Clerk's server auth entirely and hand back a fixed dev
-	// identity. The Convex deployment + FastAPI must also run with ENABLE_DEV_AUTH.
+	// identity with NO token — a fake token fails Convex's JWT parse. The Convex
+	// deployment + FastAPI run with ENABLE_DEV_AUTH, so unauthenticated calls
+	// still resolve to the dev user.
 	if (DEV_AUTH) {
-		return { userId: DEV_USER_ID, token: "dev-auth" };
+		return { userId: DEV_USER_ID, token: null as string | null };
 	}
 	const { userId, getToken } = await auth();
 	const token = await getToken({ template: "convex" });
