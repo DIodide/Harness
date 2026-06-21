@@ -15,16 +15,13 @@ import {
 	ChevronDown,
 	Cpu,
 	GripVertical,
-	KeyRound,
 	MessageSquare,
 	PanelLeftClose,
 	PanelLeftOpen,
 	Pencil,
 	Plus,
 	Search, // Icon for search
-	Settings,
 	Share2,
-	SlidersHorizontal,
 	Sparkles,
 	Trash2,
 	Wrench,
@@ -58,6 +55,7 @@ import { useWorkspaceSwitchCommands } from "../../components/command-palette/com
 import { HarnessAgentBadge } from "../../components/harness-agent-badge";
 import { HarnessMark } from "../../components/harness-mark";
 import { HeaderSkillsMenu } from "../../components/header-skills-menu";
+import { ManageNavFooter } from "../../components/manage/manage-nav-footer";
 import {
 	type HealthStatus,
 	McpServerStatus,
@@ -1873,50 +1871,7 @@ function WorkspaceSidebar({
 				<UsageBadge onClick={() => setUsageOpen(true)} />
 			</div>
 			<Separator />
-			<div className="space-y-0.5 p-2">
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					asChild
-				>
-					<Link to="/sandboxes">
-						<Box size={12} />
-						Manage Sandboxes
-					</Link>
-				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					asChild
-				>
-					<Link to="/harnesses">
-						<SlidersHorizontal size={12} />
-						Manage Harnesses
-					</Link>
-				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					asChild
-				>
-					<Link to="/credentials">
-						<KeyRound size={12} />
-						Manage Credentials
-					</Link>
-				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					onClick={() => setSettingsOpen(true)}
-				>
-					<Settings size={12} />
-					Settings
-				</Button>
-			</div>
+			<ManageNavFooter onOpenSettings={() => setSettingsOpen(true)} />
 
 			<Dialog open={createOpen} onOpenChange={setCreateOpen}>
 				<DialogContent className="sm:max-w-sm">

@@ -10,7 +10,6 @@ import {
 	AlertCircle,
 	AlertTriangle,
 	Archive,
-	ArrowLeft,
 	Calendar,
 	Clock,
 	Code2,
@@ -31,6 +30,7 @@ import { motion } from "motion/react";
 import type { ComponentType } from "react";
 import { useState } from "react";
 import { HarnessMark } from "../../components/harness-mark";
+import { ManageHeader } from "../../components/manage/manage-tabs";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -116,36 +116,24 @@ function SandboxesPage() {
 
 	return (
 		<div className="flex h-full flex-col overflow-auto bg-background">
-			<header className="flex items-center justify-between border-b border-border px-6 py-4">
-				<div className="flex items-center gap-4">
-					<Button variant="ghost" size="icon-xs" asChild>
-						<Link to="/chat">
-							<ArrowLeft size={14} />
-						</Link>
-					</Button>
-					<div>
-						<h1 className="text-lg font-medium tracking-tight text-foreground">
-							Your Sandboxes
-						</h1>
-						<p className="text-xs text-muted-foreground">
-							{sandboxes?.length ?? 0} total
-						</p>
-					</div>
-				</div>
-				{atSandboxLimit ? (
-					<Button size="sm" disabled title="Sandbox limit reached">
-						<Plus size={14} />
-						Create New Sandbox
-					</Button>
-				) : (
-					<Button size="sm" asChild>
-						<Link to="/sandboxes/create_sandbox">
+			<ManageHeader
+				count={sandboxes?.length ?? 0}
+				actions={
+					atSandboxLimit ? (
+						<Button size="sm" disabled title="Sandbox limit reached">
 							<Plus size={14} />
 							Create New Sandbox
-						</Link>
-					</Button>
-				)}
-			</header>
+						</Button>
+					) : (
+						<Button size="sm" asChild>
+							<Link to="/sandboxes/create_sandbox">
+								<Plus size={14} />
+								Create New Sandbox
+							</Link>
+						</Button>
+					)
+				}
+			/>
 
 			<div className="flex-1 p-6">
 				{sandboxes?.length === 0 ? (
@@ -560,10 +548,7 @@ function EmptyState() {
 function LoadingSkeleton() {
 	return (
 		<div className="flex h-full flex-col bg-background">
-			<header className="flex items-center justify-between border-b border-border px-6 py-4">
-				<Skeleton className="h-6 w-40" />
-				<Skeleton className="h-8 w-24" />
-			</header>
+			<ManageHeader actions={<Skeleton className="h-7 w-36" />} />
 			<div className="flex-1 p-6">
 				<div className="mx-auto max-w-4xl">
 					<Skeleton className="mb-4 h-4 w-20" />
