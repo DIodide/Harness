@@ -1339,12 +1339,14 @@ class AgentSessionManager:
         )
         await self._teardown(holder, park=True)
         parked = self._parked.pop(key, None)
-        if (
-            parked is not None
-            and parked.credential_id != session.harness.agent_credential_id
+        if parked is not None and (
+            parked.credential_id != session.harness.agent_credential_id
+            or parked.workspace_env_version != session.workspace_env_version
         ):
-            # Launched with different credentials — provision fresh into the
-            # sandbox instead (the launcher replaces the shim anyway).
+            # Launched with different agent credentials OR different workspace
+            # env (both baked in at spawn) — provision fresh into the sandbox
+            # instead (the launcher replaces the shim anyway), so a rotated or
+            # revoked credential takes effect immediately. Mirrors _claim_parked.
             await self._destroy_runtime(parked.runtime, parked.agent_id)
             return None
         return parked

@@ -40,10 +40,12 @@ from app.services.secrets_crypto import (
 logger = logging.getLogger(__name__)
 
 # A POSIX-ish env-var name: a letter/underscore followed by letters/digits/
-# underscores. Rejects lowercase-only? No — env names are case-sensitive, so
-# both GITHUB_TOKEN and my_var are allowed by shape; the denylist below is what
-# blocks dangerous names.
-_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# underscores. Env names are case-sensitive, so both GITHUB_TOKEN and my_var are
+# allowed by shape; the denylist below is what blocks dangerous names. No
+# anchors here on purpose — we match with .fullmatch(), which requires the WHOLE
+# string to match. (`$` would match just before a trailing "\n", so "PATH\n"
+# would pass shape and then dodge the reserved-name check.)
+_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 MAX_ENV_NAME_LENGTH = 128
 
 # Exact names that must never be user-settable (compared case-insensitively).
@@ -115,7 +117,10 @@ def validate_env_credential(name: str, value: str) -> str | None:
     Returns a human-readable error string, or None when the credential is OK.
     """
     name = name or ""
-    if not _NAME_RE.match(name):
+    # fullmatch (not match): the name must be ENTIRELY [A-Za-z_][A-Za-z0-9_]* —
+    # any stray character (newline, space, NUL, …) fails here before the
+    # reserved-name check runs, so e.g. "PATH\n" can't slip past the denylist.
+    if not _NAME_RE.fullmatch(name):
         return (
             "Name must start with a letter or underscore and contain only "
             "letters, digits, and underscores (e.g. GITHUB_TOKEN)."

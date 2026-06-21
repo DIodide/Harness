@@ -82,6 +82,26 @@ class TestValidateEnvCredential:
                      "SHIM_TOKEN", "SHIM_PORT", "AGENT_CMD"):
             assert "reserved" in validate_env_credential(name, "v"), name
 
+    def test_trailing_newline_cannot_bypass_denylist(self):
+        # Regression: Python's `$` matches before a trailing "\n", so a name
+        # like "PATH\n" used to pass the shape check and then dodge the
+        # reserved-name comparison ("PATH\n" != "PATH"). fullmatch closes this.
+        for name in (
+            "PATH\n",
+            "NODE_OPTIONS\n",
+            "ANTHROPIC_API_KEY\n",
+            "CLAUDE_CODE_OAUTH_TOKEN\n",
+            "SHIM_TOKEN\n",
+            "AGENT_CMD\n",
+            "CONVEX_DEPLOY_KEY\n",
+            "GITHUB_TOKEN\n",  # even a non-reserved name with a newline is invalid
+        ):
+            assert validate_env_credential(name, "v") is not None, name
+
+    def test_control_and_whitespace_chars_rejected(self):
+        for name in ("FOO BAR", "FOO\tBAR", "FOO\x00", " GITHUB_TOKEN", "GITHUB_TOKEN "):
+            assert validate_env_credential(name, "v") is not None, repr(name)
+
     def test_empty_value_rejected(self):
         assert "empty" in validate_env_credential("GITHUB_TOKEN", "   ")
 
