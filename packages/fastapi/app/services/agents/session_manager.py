@@ -52,7 +52,7 @@ PERMISSION_TIMEOUT_SECONDS = 300.0
 # Mirrors MAX_SANDBOXES_PER_USER in convex/sandboxes.ts — enforced here
 # BEFORE the Daytona sandbox exists (the Convex-side check fires only at
 # registration, after the compute is already spent).
-MAX_SANDBOXES_PER_USER = 5
+MAX_SANDBOXES_PER_USER = 20
 
 
 def _workspace_env_fingerprint(env: dict[str, str]) -> str:
@@ -1289,24 +1289,41 @@ class AgentSessionManager:
                     with contextlib.suppress(Exception):
                         await session.connection.close()
                     session.connection = None
+                # Reclaim an OWNED box from the failed attempt before retrying.
+                # Sandbox registration runs only AFTER conn.start()/initialize,
+                # so a transient failure there leaves a freshly-created, owned,
+                # unlinked box; the next attempt provisions a new one and
+                # overwrites session.runtime, orphaning the first. Attached
+                # (non-owned) boxes are left in place for the retry to re-attach.
+                if session.runtime is not None and session.runtime.owns_sandbox:
+                    with contextlib.suppress(Exception):
+                        await self._destroy_runtime(
+                            session.runtime, session.agent_id,
+                        )
+                    session.runtime = None
                 await asyncio.sleep(1.0 * attempt)
 
     async def _provision_once(self, session: AgentSession, creds, user_ctx) -> None:
         agent = get_agent(session.agent_id)
-        # Deeper unification: harnesses with a sandbox run the agent
-        # INSIDE that sandbox (user's real files, persistent), instead
-        # of a session-owned scratch sandbox.
-        attach_sandbox_id = (
-            session.harness.sandbox_id
-            if session.harness.sandbox_enabled and session.harness.sandbox_id
-            else None
+        # Deeper unification: harnesses with a sandbox (explicit, or the
+        # per-workspace unified one) run the agent INSIDE that sandbox — the
+        # user's real files, persistent — instead of a session-owned scratch
+        # sandbox. create_persistent means "create the workspace's unified box".
+        attach_sandbox_id, create_persistent = await self._resolve_sandbox_plan(
+            session,
         )
 
         # Warm path: adopt a parked runtime (or steal an idle session's)
-        # before paying for a cold sandbox.
+        # before paying for a cold sandbox. Skipped when we must create the
+        # workspace's unified sandbox — adopting a scratch runtime would defeat
+        # the unification on that first run.
         session.user_ctx = user_ctx  # revive-during-adopt opens with it
         adopted = False
-        claim = self._claim_parked(session, attach_sandbox_id)
+        claim = (
+            None
+            if create_persistent
+            else self._claim_parked(session, attach_sandbox_id)
+        )
         if isinstance(claim, tuple):
             victim, key = claim
             await self._teardown(victim, park=True)
@@ -1328,6 +1345,8 @@ class AgentSessionManager:
                 agent,
                 creds,
                 attach_sandbox_id,
+                None,
+                create_persistent,
             )
             conn = AcpConnection(
                 session.runtime.base_url, session.runtime.headers,
@@ -1342,19 +1361,23 @@ class AgentSessionManager:
             session.agent_capabilities = init.get("agentCapabilities") or {}
             await self._open_acp_session(session, user_ctx)
 
-        # Register in the sandboxes table so the agent's sandbox shows up
-        # in Manage Sandboxes and the existing terminal/file tooling works
-        # against it (attached harness sandboxes are already registered).
-        # Best-effort: a cap or Convex hiccup must not block the session.
-        if not adopted and session.runtime.owns_sandbox:
-            # Fire-and-forget: registration is bookkeeping, not part of
-            # the user's cold-start wait. Adopted runtimes are already
-            # registered from their first provisioning.
-            asyncio.create_task(
-                self._register_sandbox_record(
-                    session.user_id, session.runtime.sandbox_id, agent.name,
+        # Register the agent's sandbox so it appears in Manage Sandboxes and the
+        # terminal/file tooling works against it. The per-workspace unified
+        # sandbox is linked to its harness + workspace (AWAITED so a Convex
+        # failure can demote it to session-owned and never orphan the box); a
+        # plain scratch sandbox is bookkeeping only (fire-and-forget).
+        if not adopted:
+            if create_persistent:
+                # Just created the workspace's unified box (owned-by-default, so
+                # any failure reclaims it). Link it and, on success, flip it to
+                # persistent. Handles a lost race / Convex failure internally.
+                await self._register_workspace_sandbox(session, agent)
+            elif session.runtime.owns_sandbox:
+                asyncio.create_task(
+                    self._register_sandbox_record(
+                        session.user_id, session.runtime.sandbox_id, agent.name,
+                    )
                 )
-            )
 
         session.status = "ready"
         logger.info(
@@ -1430,6 +1453,90 @@ class AgentSessionManager:
                 "delete a sandbox in Manage Sandboxes before starting "
                 "another agent session."
             )
+
+    async def _resolve_sandbox_plan(
+        self, session: AgentSession,
+    ) -> tuple[str | None, bool]:
+        """Decide which sandbox this ACP session runs in.
+
+        Returns ``(attach_sandbox_id, create_persistent)``:
+          - an explicit harness sandbox, or a workspace's already-linked
+            sandbox, is attached → ``(daytona_id, False)``;
+          - an agent harness in a workspace that has NO sandbox yet creates a
+            persistent one to unify on → ``(None, True)`` (registered + linked
+            back, so later sessions take the attach path above);
+          - anything else (e.g. no workspace) keeps a session-owned scratch
+            sandbox → ``(None, False)``.
+        """
+        harness = session.harness
+        # 1. An explicit harness sandbox wins (ownership verified in create()).
+        if harness.sandbox_enabled and harness.sandbox_id:
+            return harness.sandbox_id, False
+        # 2. Per-workspace unification only applies inside a workspace.
+        workspace_id = getattr(harness, "workspace_id", None)
+        if not workspace_id:
+            return None, False
+        from app.services.convex import (
+            resolve_workspace_sandbox,
+            verify_sandbox_owner,
+        )
+
+        ws = await resolve_workspace_sandbox(self._http_client(), workspace_id)
+        daytona_id = (ws or {}).get("daytonaSandboxId")
+        if daytona_id and await verify_sandbox_owner(daytona_id, session.user_id):
+            # Workspace already has a box — attach the agent to it.
+            return daytona_id, False
+        # No workspace sandbox yet (or a stale/foreign link) — create one and
+        # link it back so it becomes the workspace's unified sandbox.
+        return None, True
+
+    async def _register_workspace_sandbox(
+        self, session: AgentSession, agent,
+    ) -> None:
+        """Link the freshly-created unified box to its harness + workspace, then
+        flip it to persistent.
+
+        The box is OWNED-by-default (reclaimed on teardown); it survives ONLY
+        once Convex confirms the link. So a Convex failure, OR a None result —
+        which means a sibling session won the race to create the workspace's box
+        — leaves it owned, and teardown reclaims the duplicate. No orphan."""
+        from app.services.convex import create_sandbox_record
+
+        harness = session.harness
+        name = (
+            f"{agent.name} · {harness.name}"
+            if harness.name
+            else f"{agent.name} · agent session"
+        )
+        try:
+            doc_id = await create_sandbox_record(
+                self._http_client(),
+                session.user_id,
+                harness.harness_id,
+                session.runtime.sandbox_id,
+                name,
+                "python",
+                False,
+                {"cpu": 2, "memoryGB": 4, "diskGB": 10},
+                workspace_id=getattr(harness, "workspace_id", None),
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not link unified sandbox '%s' (reclaiming on teardown): "
+                "%s", session.runtime.sandbox_id, e,
+            )
+            return  # owns_sandbox stays True → teardown reclaims it
+        if doc_id is None:
+            logger.info(
+                "Lost the race to create the workspace sandbox; reclaiming "
+                "duplicate box '%s' on teardown", session.runtime.sandbox_id,
+            )
+            return  # owns_sandbox stays True → teardown reclaims it
+        session.runtime.owns_sandbox = False  # linked → persist past teardown
+        logger.info(
+            "Linked unified workspace sandbox '%s' (%s) to harness '%s'",
+            session.runtime.sandbox_id, name, harness.harness_id,
+        )
 
     async def _register_sandbox_record(
         self, user_id: str, sandbox_id: str, agent_name: str,

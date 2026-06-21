@@ -112,6 +112,7 @@ def harness_config_from_resolved(resolved: dict) -> "HarnessConfig":
         sandbox_enabled=resolved.get("sandboxEnabled", False),
         sandbox_id=resolved.get("sandboxId"),
         sandbox_config=sandbox_config,
+        workspace_id=resolved.get("workspaceId"),
     )
 
 

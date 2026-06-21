@@ -100,6 +100,10 @@ export const resolveForCollab = internalQuery({
 			// (verify_sandbox_owner looks it up via getOwnerByDaytonaId).
 			sandboxId: harness.daytonaSandboxId ?? null,
 			sandboxConfig: harness.sandboxConfig ?? null,
+			// The conversation's workspace, so a collaborator's run unifies on the
+			// same per-workspace sandbox as the owner (owner runs send it from the
+			// client; the collab path has no client harness, so resolve it here).
+			workspaceId: convo.workspaceId ?? null,
 		};
 	},
 });
