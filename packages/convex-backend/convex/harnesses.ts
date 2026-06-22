@@ -263,6 +263,15 @@ export const remove = mutation({
 		if (!harness || harness.userId !== identity.subject) {
 			throw new Error("Not found");
 		}
+		// Cascade-delete share grants so deleting a shared harness doesn't leave
+		// orphaned harnessShareGrants rows: once the harness is gone the owner can
+		// never revoke them (revoke re-asserts ownership via the now-missing
+		// harness) and a stale public token would keep resolving to a dangling id.
+		const grants = await ctx.db
+			.query("harnessShareGrants")
+			.withIndex("by_harness", (q) => q.eq("harnessId", args.id))
+			.collect();
+		for (const g of grants) await ctx.db.delete(g._id);
 		await ctx.db.delete(args.id);
 	},
 });

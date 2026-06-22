@@ -175,7 +175,6 @@ function SharedHarnessEditDialog({
 		edit.mutate(
 			{
 				harnessId: share.harnessId as Id<"harnesses">,
-				grantId: share.grantId as Id<"harnessShareGrants">,
 				patch: { name: name.trim(), model: model.trim(), systemPrompt },
 			},
 			{
@@ -221,7 +220,10 @@ function SharedHarnessEditDialog({
 					<Button variant="outline" onClick={() => onOpenChange(false)}>
 						Cancel
 					</Button>
-					<Button onClick={save} disabled={edit.isPending}>
+					<Button
+						onClick={save}
+						disabled={edit.isPending || !name.trim() || !model.trim()}
+					>
 						Save
 					</Button>
 				</DialogFooter>
