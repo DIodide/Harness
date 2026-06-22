@@ -54,6 +54,7 @@ describe("accountUsageFromRateLimit (SDK rate_limit_info shape)", () => {
 			isUsingOverage: false,
 		});
 		expect(a).toEqual({
+			id: "five_hour",
 			label: "Current session",
 			status: "rejected",
 			utilization: undefined,
@@ -187,5 +188,27 @@ describe("accountUsagesFromRateLimit (multi-window buckets shape)", () => {
 		expect(accountUsagesFromRateLimit(null)).toEqual([]);
 		expect(accountUsagesFromRateLimit({})).toEqual([]);
 		expect(accountUsagesFromRateLimit({ buckets: {} })).toEqual([]);
+	});
+
+	it("gives unmapped windows distinct ids (stable keys) despite a shared label", () => {
+		const windows = accountUsagesFromRateLimit({
+			buckets: {
+				seven_day_haiku: {
+					utilization: 0.1,
+					status: "allowed",
+					resetsAt: futureSec,
+				},
+				seven_day_max: {
+					utilization: 0.2,
+					status: "allowed",
+					resetsAt: futureSec,
+				},
+			},
+		});
+		expect(windows).toHaveLength(2);
+		// both fall back to the generic label …
+		expect(windows.every((w) => w.label === "Claude account")).toBe(true);
+		// … but carry distinct ids, so React keys don't collide.
+		expect(new Set(windows.map((w) => w.id)).size).toBe(2);
 	});
 });
