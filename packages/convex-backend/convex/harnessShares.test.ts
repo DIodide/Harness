@@ -263,6 +263,57 @@ describe("editSharedHarness — lock + role gating", () => {
 		expect(row?.mcpServers[0].authToken).toBe("sk-SUPER-SECRET");
 		expect(row?.agentCredentialId).toBeDefined();
 	});
+
+	it("never blanks the owner's name/model with an empty/whitespace value", async () => {
+		const { raw, asUser } = makeT();
+		const h = await seedHarness(raw, "owner");
+		await shareToUser(raw, asUser, h, "bob", "editor");
+		// An editor clears Name and Model then saves: empty values must be IGNORED
+		// (not written), so the owner's core fields survive.
+		await asUser("bob").mutation(api.harnessShares.editSharedHarness, {
+			harnessId: h,
+			patch: { name: "   ", model: "" },
+		});
+		const row = await raw.run(async (ctx) => ctx.db.get(h));
+		expect(row?.name).toBe("Owner Harness");
+		expect(row?.model).toBe("claude-opus-4-8");
+	});
+});
+
+describe("harnesses.remove — cascades share-grant cleanup", () => {
+	it("deletes the harness's grants so none are orphaned", async () => {
+		const { raw, asUser } = makeT();
+		const h = await seedHarness(raw, "owner");
+		await asUser("owner").mutation(api.harnessShares.ensureHarnessPublicLink, {
+			harnessId: h,
+			role: "viewer",
+			token: TOKEN,
+		});
+		await asUser("owner").mutation(api.harnessShares.inviteHarnessByEmail, {
+			harnessId: h,
+			email: "bob@x.com",
+			role: "editor",
+		});
+		const before = await raw.run(async (ctx) =>
+			ctx.db
+				.query("harnessShareGrants")
+				.withIndex("by_harness", (q) => q.eq("harnessId", h))
+				.collect(),
+		);
+		expect(before.length).toBe(2);
+		await asUser("owner").mutation(api.harnesses.remove, { id: h });
+		const after = await raw.run(async (ctx) =>
+			ctx.db
+				.query("harnessShareGrants")
+				.withIndex("by_harness", (q) => q.eq("harnessId", h))
+				.collect(),
+		);
+		expect(after.length).toBe(0);
+		// The public token no longer resolves to anything.
+		expect(
+			await raw.query(api.harnessShares.getSharedHarness, { token: TOKEN }),
+		).toBeNull();
+	});
 });
 
 describe("email invite → bind-later", () => {

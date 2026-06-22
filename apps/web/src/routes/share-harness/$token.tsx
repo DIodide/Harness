@@ -37,6 +37,10 @@ function SharedHarnessView() {
 	const clone = useMutation({
 		mutationFn: useConvexMutation(api.harnessShares.cloneSharedHarness),
 	});
+	// The manual Clone button and the auto-resume effect can both call
+	// requestClone before clone.isPending propagates, creating two "Copy of X"
+	// harnesses. A ref short-circuits the second concurrent call.
+	const cloneInFlight = useRef(false);
 
 	const requestClone = async () => {
 		if (!isSignedIn) {
@@ -47,6 +51,8 @@ function SharedHarnessView() {
 			});
 			return;
 		}
+		if (cloneInFlight.current) return;
+		cloneInFlight.current = true;
 		// Whatever happens, drop the resume intent so a failed clone can't
 		// silently re-fire on the next visit (the user can retry explicitly).
 		clearHarnessCloneIntent();
@@ -56,6 +62,8 @@ function SharedHarnessView() {
 			navigate({ to: "/harnesses/$harnessId", params: { harnessId: id } });
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : "Couldn't clone");
+			// Only release on failure — success navigates away (unmount).
+			cloneInFlight.current = false;
 		}
 	};
 
@@ -64,6 +72,9 @@ function SharedHarnessView() {
 	useEffect(() => {
 		if (harness?.viewerIsOwner && !ownerRedirected.current) {
 			ownerRedirected.current = true;
+			// The owner can't clone their own harness — drop any pending resume
+			// intent so it doesn't linger in sessionStorage for its TTL.
+			clearHarnessCloneIntent();
 			navigate({
 				to: "/harnesses/$harnessId",
 				params: { harnessId: harness.harnessId as Id<"harnesses"> },

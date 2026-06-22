@@ -114,8 +114,16 @@ function HarnessesPage() {
 	// soft {ok:false} from a transient Clerk/Convex failure) so a real failure
 	// retries next visit instead of being suppressed for the whole session.
 	useEffect(() => {
-		if (!isSignedIn || sessionStorage.getItem(SHARES_CLAIMED_KEY)) return;
-		sessionStorage.setItem(SHARES_CLAIMED_KEY, "1");
+		if (!isSignedIn) return;
+		// Guard the synchronous storage access too: a sandboxed/partitioned
+		// context (Safari private mode, embedded iframe) throws on access, and an
+		// unguarded throw here would escape the effect and break the page.
+		try {
+			if (sessionStorage.getItem(SHARES_CLAIMED_KEY)) return;
+			sessionStorage.setItem(SHARES_CLAIMED_KEY, "1");
+		} catch {
+			return;
+		}
 		const unclaim = () => {
 			try {
 				sessionStorage.removeItem(SHARES_CLAIMED_KEY);
@@ -208,7 +216,10 @@ function HarnessesPage() {
 				<div className="mx-auto max-w-4xl space-y-8">
 					<SharedHarnessesSection items={incomingShares ?? []} />
 					{(harnesses?.length ?? 0) === 0 &&
-					(incomingShares?.length ?? 0) === 0 ? (
+					(incomingShares?.length ?? 0) === 0 &&
+					// Don't flash EmptyState while the shares query is still in flight
+					// for a signed-in user (harnesses.list often resolves first).
+					!(isSignedIn === true && incomingShares === undefined) ? (
 						<EmptyState />
 					) : (
 						<>

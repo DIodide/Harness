@@ -130,10 +130,14 @@ function publicHarnessProjection(harness: Doc<"harnesses">) {
 		suggestedPrompts: harness.suggestedPrompts ?? null,
 		sandboxEnabled: harness.sandboxEnabled === true,
 		// NAME + authType + a "needs auth" flag ONLY — never the url or authToken.
+		// `hasAuth` is derived from authType, not Boolean(authToken): oauth and
+		// tiger_junction servers DO require auth but keep their secret off the
+		// harness row (mcpOAuthTokens / server-side settings), so authToken is
+		// undefined for them — checking the token would wrongly show "no auth".
 		mcpServers: harness.mcpServers.map((m) => ({
 			name: m.name,
 			authType: m.authType,
-			hasAuth: Boolean(m.authToken),
+			hasAuth: m.authType !== "none",
 		})),
 		locked: harness.sharedLocked === true,
 	};
@@ -404,7 +408,13 @@ export const listMySharedHarnesses = query({
 				createdAt: g.createdAt,
 			});
 		}
-		return [...byHarness.values()];
+		// Newest-shared first, matching listMySharedConversations on the same
+		// Manage Sharing page (the two sections sat in different orders before).
+		return [...byHarness.values()].sort(
+			(a, b) =>
+				Math.max(...b.recipients.map((r) => r.createdAt)) -
+				Math.max(...a.recipients.map((r) => r.createdAt)),
+		);
 	},
 });
 
@@ -573,7 +583,6 @@ export const cloneSharedHarness = mutation({
 export const editSharedHarness = mutation({
 	args: {
 		harnessId: v.id("harnesses"),
-		grantId: v.optional(v.id("harnessShareGrants")),
 		token: v.optional(v.string()),
 		patch: v.object({
 			name: v.optional(v.string()),
@@ -610,8 +619,17 @@ export const editSharedHarness = mutation({
 		assertSystemPromptLength(args.patch.systemPrompt);
 		const patch: Record<string, unknown> = {};
 		const p = args.patch;
-		if (p.name !== undefined) patch.name = p.name.slice(0, 200);
-		if (p.model !== undefined) patch.model = p.model;
+		// Skip empty/whitespace name or model: a less-trusted editor must never be
+		// able to BLANK a core field on the owner's harness (the dialog also
+		// disables Save when either is empty). Non-empty name is length-bounded.
+		if (p.name !== undefined) {
+			const name = p.name.trim().slice(0, 200);
+			if (name) patch.name = name;
+		}
+		if (p.model !== undefined) {
+			const model = p.model.trim();
+			if (model) patch.model = model;
+		}
 		if (p.systemPrompt !== undefined) patch.systemPrompt = p.systemPrompt;
 		if (p.suggestedPrompts !== undefined) {
 			patch.suggestedPrompts = p.suggestedPrompts;
