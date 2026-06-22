@@ -1057,13 +1057,20 @@ class AgentSessionManager:
         # Set before firing so the many agent_usage events in one turn don't all
         # queue a fetch; a failure simply waits out the TTL before retrying.
         self._sub_usage_fetched_at[cred_id] = now
-        task = asyncio.create_task(
-            self._fetch_subscription_usage(session.user_id, cred_id)
-        )
+        # Bound the map on a long-lived process: entries older than the TTL are
+        # dead weight (the debounce only consults the last `now`).
+        if len(self._sub_usage_fetched_at) > 256:
+            cutoff = now - 60.0
+            self._sub_usage_fetched_at = {
+                k: v for k, v in self._sub_usage_fetched_at.items() if v >= cutoff
+            }
+        task = asyncio.create_task(self._fetch_subscription_usage(session, cred_id))
         self._usage_tasks.add(task)
         task.add_done_callback(self._usage_tasks.discard)
 
-    async def _fetch_subscription_usage(self, user_id: str, cred_id: str) -> None:
+    async def _fetch_subscription_usage(
+        self, session: AgentSession, cred_id: str
+    ) -> None:
         """Resolve the credential's OAuth token, read the live 5h + weekly
         windows off Anthropic's rate-limit headers, and persist them onto the
         credential. Only OAuth (subscription) credentials carry these windows;
@@ -1076,16 +1083,19 @@ class AgentSessionManager:
             )
 
             creds = await resolve_agent_credentials(
-                self._http_client(), "claude-code", user_id, cred_id
+                self._http_client(), "claude-code", session.user_id, cred_id
             )
             token = (creds.env or {}).get("CLAUDE_CODE_OAUTH_TOKEN")
             if not token:
                 return  # api-key credential — no subscription windows to show
             usage = await fetch_subscription_usage(self._http_client(), token)
-            if usage:
+            # Skip the write when unchanged — the windows move slowly, so a long
+            # session would otherwise re-persist the same blob every minute.
+            if usage and usage != session.last_rate_limit:
+                session.last_rate_limit = usage
                 await record_agent_rate_limit(
                     self._http_client(),
-                    user_id=user_id,
+                    user_id=session.user_id,
                     agent_credential_id=cred_id,
                     rate_limit=usage,
                 )
@@ -2219,7 +2229,11 @@ class AgentSessionManager:
             if event["event"] == "agent_usage":
                 rl = (update.get("_meta") or {}).get("_claude/rateLimit")
                 cred_id = session.harness.agent_credential_id
-                if rl is not None:
+                # `if rl:` (not `is not None`): an empty `{}` snapshot carries no
+                # data, so treat it like an absent one — don't persist it (which
+                # would clobber a good prior snapshot) and let the fetch fall
+                # through below.
+                if rl:
                     changed = rl != session.last_rate_limit
                     session.last_rate_limit = rl
                     # Only persist when the snapshot actually changed — avoids a
@@ -2238,10 +2252,13 @@ class AgentSessionManager:
                         )
                         self._usage_tasks.add(rl_task)
                         rl_task.add_done_callback(self._usage_tasks.discard)
-                elif cred_id:
+                elif cred_id and session.agent_id == "claude-code":
                     # The Claude Agent SDK doesn't surface subscription usage in
                     # the stream (the _meta snapshot is empty), so fetch the 5h +
-                    # weekly windows ourselves — debounced per credential.
+                    # weekly windows ourselves — debounced per credential. Scoped
+                    # to claude-code: only its OAuth creds have these windows, and
+                    # _fetch_subscription_usage resolves the cred as claude-code,
+                    # which would raise (logged) for a codex/cursor credential.
                     self._maybe_fetch_subscription_usage(session, cred_id)
             # Persist per-credential agent usage on the terminal usage_update
             # (the only one carrying cost). Thin: no cache tokens, cache-excluded
