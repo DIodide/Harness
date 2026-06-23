@@ -10,3 +10,4 @@ sse-starlette>=2.0.0
 PyJWT>=2.8.0
 cryptography>=42.0.0
 daytona-sdk>=0.1.0
+redis>=5.0.0

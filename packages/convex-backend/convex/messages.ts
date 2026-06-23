@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { contentFromParts } from "./messageParts";
 import {
 	authorizeConversationWrite,
 	MAX_MESSAGE_CONTENT_CHARS,
@@ -136,6 +137,115 @@ export const removeFrom = mutation({
 });
 
 /**
+ * Rewind a thread TO a message: delete every message strictly AFTER it,
+ * keeping the target itself. Unlike `removeFrom` (inclusive, used by
+ * regenerate), this is exclusive — rewinding to a user message keeps that
+ * message so the thread ends there. Same authorization as `removeFrom`
+ * (owner, or an editor-grant collaborator via `token`).
+ *
+ * Deletes by POSITION in the canonical (by_conversation) order rather than a
+ * `_creationTime` comparison, so same-millisecond siblings (e.g. messages
+ * copied in one transaction) are handled correctly.
+ */
+export const removeAfter = mutation({
+	args: { id: v.id("messages"), token: v.optional(v.string()) },
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+
+		const message = await ctx.db.get(args.id);
+		if (!message) throw new Error("Not found");
+
+		await authorizeConversationWrite(
+			ctx,
+			identity.subject,
+			message.conversationId,
+			args.token,
+		);
+
+		const inConvo = await ctx.db
+			.query("messages")
+			.withIndex("by_conversation", (q) =>
+				q.eq("conversationId", message.conversationId),
+			)
+			.collect();
+		const targetIdx = inConvo.findIndex((m) => m._id === args.id);
+		for (let i = targetIdx + 1; i < inConvo.length; i++) {
+			await ctx.db.delete(inConvo[i]._id);
+		}
+	},
+});
+
+/**
+ * Rewind into the MIDDLE of an assistant message: keep the first
+ * `keepPartCount` flat `parts[]` of one assistant message, drop the rest, and
+ * delete every message after it. A generalization of `removeAfter` that also
+ * rewrites the boundary message in place.
+ *
+ * `keepPartCount` is a FLAT index into `parts[]` (not the organized render
+ * tree) and must keep the message non-empty and actually shrink it
+ * (1 <= keepPartCount < parts.length); the frontend computes it so a kept
+ * tool-call keeps all its nested subagent children. `content` is recomputed
+ * from the kept text parts so the agent transcript reseeds from the truncated
+ * text on its next turn. Legacy `reasoning`/`toolCalls` (only used by the
+ * no-parts fallback render) are cleared so nothing stale survives.
+ *
+ * Patch + delete run in one transaction, so the boundary message and the tail
+ * can never half-commit. Same authorization as `removeAfter`.
+ */
+export const truncatePart = mutation({
+	args: {
+		id: v.id("messages"),
+		keepPartCount: v.number(),
+		token: v.optional(v.string()),
+	},
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error("Unauthenticated");
+
+		const message = await ctx.db.get(args.id);
+		if (!message) throw new Error("Not found");
+		if (message.role !== "assistant")
+			throw new Error("Can only truncate an assistant message");
+		const parts = message.parts;
+		if (!parts || parts.length === 0)
+			throw new Error("Message has no parts to truncate");
+
+		const keep = Math.floor(args.keepPartCount);
+		if (keep < 1 || keep >= parts.length)
+			throw new Error("keepPartCount out of range");
+
+		await authorizeConversationWrite(
+			ctx,
+			identity.subject,
+			message.conversationId,
+			args.token,
+		);
+
+		const trimmedParts = parts.slice(0, keep);
+		await ctx.db.patch(args.id, {
+			content: contentFromParts(trimmedParts),
+			parts: trimmedParts,
+			reasoning: undefined,
+			toolCalls: undefined,
+		});
+
+		// Delete every message AFTER the boundary, by position (same canonical
+		// order as removeAfter — robust to same-millisecond siblings).
+		const inConvo = await ctx.db
+			.query("messages")
+			.withIndex("by_conversation", (q) =>
+				q.eq("conversationId", message.conversationId),
+			)
+			.collect();
+		const targetIdx = inConvo.findIndex((m) => m._id === args.id);
+		for (let i = targetIdx + 1; i < inConvo.length; i++) {
+			await ctx.db.delete(inConvo[i]._id);
+		}
+	},
+});
+
+/**
  * Frontend-callable mutation to save a partial assistant message when the user
  * interrupts a streaming response. Authorized to the owner OR an editor-grant
  * collaborator (who pass the share `token`). The assistant message is always
@@ -204,7 +314,18 @@ export const saveInterruptedMessage = mutation({
 			workspaceId: convo.workspaceId,
 			userId: convo.userId,
 			role: "assistant",
-			content: args.content,
+			// Enforce the invariant content == contentFromParts(parts) here too,
+			// rather than trusting the client-supplied content — the one
+			// frontend-callable persistence path. The streaming client already
+			// keeps state.content in lockstep with its text parts, so for a
+			// well-behaved caller this recompute equals what it sent (the
+			// `convexHasMessage` handshake, which compares lastMsg.content to the
+			// client's pendingDoneContent, still matches). Falls back to the raw
+			// content only when no parts were captured.
+			content:
+				args.parts && args.parts.length > 0
+					? contentFromParts(args.parts)
+					: args.content,
 			interrupted: true,
 			...(args.reasoning ? { reasoning: args.reasoning } : {}),
 			...(args.toolCalls && args.toolCalls.length > 0

@@ -7,6 +7,7 @@ const DEFAULTS = {
 	modelSelectorMode: "session" as const,
 	chatConfigScope: "harness" as const,
 	workspacesMode: "workspaces" as const,
+	rewindSeams: true,
 } as const;
 
 export const get = query({
@@ -34,7 +35,8 @@ export const get = query({
 			chatConfigScope:
 				settings.chatConfigScope ??
 				(settings.modelSelectorMode === "session" ? "session" : "harness"),
-			workspacesMode: settings.workspacesMode ?? "workspaces"
+			workspacesMode: settings.workspacesMode ?? "workspaces",
+			rewindSeams: settings.rewindSeams ?? true,
 		};
 	},
 });
@@ -58,6 +60,7 @@ export const update = mutation({
 		workspacesMode: v.optional(
 			v.union(v.literal("basic"), v.literal("workspaces")),
 		),
+		rewindSeams: v.optional(v.boolean()),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();

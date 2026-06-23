@@ -199,13 +199,19 @@ async def record_agent_usage(
     currency: str,
     turn_key: str,
     rate_limit: object | None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cache_read_tokens: int | None = None,
+    cache_creation_tokens: int | None = None,
+    authoritative: bool = False,
 ) -> None:
     """Record one ACP agent turn's usage, per credential.
 
     Unlike `record_usage` (OpenRouter spend Harness pays for + caps), agent
     cost bills to the user's OWN agent account — this is informational only and
-    never gates a turn. Idempotent on `turn_key` server-side. Fire-and-forget:
-    logs errors, never raises.
+    never gates a turn. Idempotent on `turn_key` server-side, except an
+    `authoritative` row (SDK result message: real total_cost_usd + cache tokens)
+    upgrades an earlier thin one. Fire-and-forget: logs errors, never raises.
     """
     if not settings.convex_url or not settings.convex_deploy_key:
         return
@@ -229,6 +235,16 @@ async def record_agent_usage(
         args["contextSize"] = context_size
     if rate_limit is not None:
         args["rateLimit"] = rate_limit
+    if input_tokens is not None:
+        args["inputTokens"] = input_tokens
+    if output_tokens is not None:
+        args["outputTokens"] = output_tokens
+    if cache_read_tokens is not None:
+        args["cacheReadTokens"] = cache_read_tokens
+    if cache_creation_tokens is not None:
+        args["cacheCreationTokens"] = cache_creation_tokens
+    if authoritative:
+        args["authoritative"] = True
 
     # Imported here to avoid a module-load cycle (convex imports settings too).
     from app.services.convex import run_convex_mutation
@@ -239,3 +255,132 @@ async def record_agent_usage(
         logger.exception(
             "Failed to record agent usage for credential '%s'", agent_credential_id
         )
+
+
+async def record_agent_rate_limit(
+    http_client: httpx.AsyncClient,
+    *,
+    user_id: str,
+    agent_credential_id: str,
+    rate_limit: object,
+) -> None:
+    """Persist the latest Anthropic rate-limit snapshot onto the credential.
+
+    Decoupled from `record_agent_usage` so it lands even when the rate_limit
+    event carries no cost/tokens — including a silent hard-limit turn, which is
+    exactly when the user needs to see the reset time. Fire-and-forget.
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        return
+    from app.services.convex import run_convex_mutation
+
+    try:
+        await run_convex_mutation(
+            http_client,
+            "agentCredentials:recordRateLimit",
+            {
+                "credentialId": agent_credential_id,
+                "userId": user_id,
+                "rateLimit": rate_limit,
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Failed to record rate limit for credential '%s'", agent_credential_id
+        )
+
+
+# Any model the OAuth subscription can call works — the unified windows are
+# account-level, not model-specific (the per-model 7d_sonnet cap aside). Bumped
+# only if Anthropic retires it; a failed ping just yields no bars (best-effort).
+SUBSCRIPTION_USAGE_PING_MODEL = "claude-sonnet-4-5-20250929"
+
+# Maps the Anthropic `anthropic-ratelimit-unified-<key>-*` header group to the
+# window name the frontend renders (RATE_LIMIT_LABELS in usage-display.tsx).
+_UNIFIED_WINDOWS = (
+    ("five_hour", "5h"),
+    ("seven_day", "7d"),
+    ("seven_day_sonnet", "7d_sonnet"),
+)
+
+
+def _parse_unified_rate_limit_headers(headers: httpx.Headers) -> dict | None:
+    """Build a multi-window snapshot from Anthropic's unified rate-limit headers.
+
+    Returns the `{"buckets": {...}}` shape the credential stores and the panel
+    renders, or None when no unified window is present (e.g. an api-key
+    credential, which has no subscription windows). Utilization is the raw 0–1
+    fraction; reset is the Unix-seconds the headers carry.
+    """
+    buckets: dict[str, dict] = {}
+    for name, key in _UNIFIED_WINDOWS:
+        util = headers.get(f"anthropic-ratelimit-unified-{key}-utilization")
+        if util is None:
+            continue
+        try:
+            window: dict = {"utilization": float(util)}
+        except ValueError:
+            continue
+        status = headers.get(f"anthropic-ratelimit-unified-{key}-status")
+        if status:
+            window["status"] = status
+        reset = headers.get(f"anthropic-ratelimit-unified-{key}-reset")
+        if reset is not None:
+            try:
+                window["resetsAt"] = int(reset)
+            except ValueError:
+                # Most windows carry Unix seconds, but accept an RFC 3339
+                # timestamp too (normalize to epoch seconds) so a format
+                # variance doesn't silently drop the reset — losing it would
+                # strip the panel's countdown AND defeat the stale-window
+                # self-heal (which drops a window only once resetsAt passes).
+                try:
+                    dt = datetime.fromisoformat(reset.replace("Z", "+00:00"))
+                    # An offset-less timestamp parses NAIVE; .timestamp() would
+                    # then read it in the server's LOCAL tz, skewing resetsAt by
+                    # the UTC offset. Anthropic emits UTC, so assume UTC.
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    window["resetsAt"] = int(dt.timestamp())
+                except (ValueError, TypeError):
+                    pass
+        buckets[name] = window
+    return {"buckets": buckets} if buckets else None
+
+
+async def fetch_subscription_usage(
+    http_client: httpx.AsyncClient, oauth_token: str
+) -> dict | None:
+    """Read the user's Claude subscription usage (5h + weekly windows).
+
+    The Agent SDK / ACP does NOT surface these (the `_meta._claude/rateLimit`
+    snapshot is empty), and the `/api/oauth/usage` endpoint needs a `user:profile`
+    scope agent tokens lack — but the unified rate-limit headers ride on every
+    `/v1/messages` response, which is exactly what Claude Code's own `/usage`
+    reads. So make the cheapest possible inference call and read the headers off
+    it. Best-effort: returns None on any failure rather than disrupting a turn.
+    """
+    try:
+        resp = await http_client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Authorization": f"Bearer {oauth_token}",
+                "anthropic-version": "2023-06-01",
+                "anthropic-beta": "oauth-2025-04-20",
+                "User-Agent": "claude-code/2.1.0",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": SUBSCRIPTION_USAGE_PING_MODEL,
+                "max_tokens": 1,
+                "system": "You are Claude Code, Anthropic's official CLI for Claude.",
+                "messages": [{"role": "user", "content": "."}],
+            },
+            timeout=20.0,
+        )
+    except Exception:
+        logger.warning("Subscription usage ping failed", exc_info=True)
+        return None
+    # Read headers regardless of status: a 429 still reports the (maxed) windows,
+    # which is exactly when the user needs to see them.
+    return _parse_unified_rate_limit_headers(resp.headers)

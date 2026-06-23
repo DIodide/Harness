@@ -3,11 +3,15 @@ import json
 import logging
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 from app.config import settings
-from app.dependencies import get_current_user, get_http_client
-from app.models import ChatRequest, harness_config_from_resolved
+from app.dependencies import (
+    get_current_user,
+    get_current_user_optional,
+    get_http_client,
+)
+from app.models import ChatRequest, SkillRef, harness_config_from_resolved
 from app.services.convex import (
     query_convex,
     save_assistant_message,
@@ -15,6 +19,7 @@ from app.services.convex import (
     resolve_collab_harness,
     verify_conversation_access,
 )
+from app.services.skill_content import fetch_skill_md
 from app.services.mcp_client import UserContext, call_tool, resolve_princeton_netid, list_tools
 from app.services.mcp_oauth import get_valid_token, GITHUB_STANDALONE_URL
 from app.services.openrouter import stream_chat, get_max_tokens
@@ -25,6 +30,8 @@ from app.services.sandbox_tools import (
     execute_sandbox_tool,
 )
 from app.services.daytona_service import get_daytona_service
+from app.services.workspace_credentials import resolve_workspace_env
+from app.services import stream_bus
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -41,6 +48,23 @@ MAX_TOOL_ITERATIONS = 120
 # we bail out after a few rather than burning $30+ per chat in a pathological
 # loop. Reset whenever the model produces tool calls or finishes normally.
 MAX_CONSECUTIVE_TRUNCATIONS = 20
+
+
+def content_from_parts(parts: list[dict] | None) -> str:
+    """Faithful flat `content` = concatenation of all text parts.
+
+    Mirrors the TS `contentFromParts` (convex/messageParts.ts) and the ACP
+    gateway's `content = "".join(text_parts)` (session_manager.py): text parts
+    only, joined with no separator. reasoning/tool_call parts contribute nothing.
+
+    This is the canonical value for an assistant message's persisted `content`,
+    enforcing the invariant `content == content_from_parts(parts)` on every
+    persistence path so the rendered parts[] and the model's transcript agree.
+    """
+    if not parts:
+        return ""
+    return "".join(p.get("content", "") for p in parts if p.get("type") == "text")
+
 
 SKILL_TOOL_NAME = "get_skill_content"
 
@@ -108,167 +132,16 @@ def _build_skills_system_block(skills: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def _resolve_github_repo(
-    http_client: httpx.AsyncClient,
-    source: str,
-) -> str | None:
-    """Resolve canonical owner/repo via GitHub API (handles org renames/redirects)."""
-    try:
-        resp = await http_client.get(
-            f"https://api.github.com/repos/{source}",
-            headers={"Accept": "application/vnd.github.v3+json"},
-            timeout=10.0,
-            follow_redirects=True,
-        )
-        if resp.status_code == 200:
-            return resp.json().get("full_name")
-    except Exception:
-        pass
-    return None
-
-
-async def _search_skills_sh(
-    http_client: httpx.AsyncClient,
-    skill_id: str,
-) -> str | None:
-    """Query skills.sh search API to find the correct source for a skill ID."""
-    try:
-        from urllib.parse import quote
-        resp = await http_client.get(
-            f"https://skills.sh/api/search?q={quote(skill_id, safe='')}&limit=20",
-            timeout=10.0,
-        )
-        if resp.status_code != 200:
-            return None
-        skills = resp.json().get("skills", [])
-        normalized = skill_id.replace(":", "-").lower()
-        for s in skills:
-            if s.get("skillId") == skill_id:
-                return s.get("source")
-        for s in skills:
-            if s.get("skillId", "").replace(":", "-").lower() == normalized:
-                return s.get("source")
-    except Exception:
-        pass
-    return None
-
-
-async def _fetch_skill_md_from_repo(
-    http_client: httpx.AsyncClient,
-    source: str,
-    skill_id: str,
-) -> str | None:
-    """Try to fetch SKILL.md from a specific repo, trying main & master branches."""
-    gh_raw = "https://raw.githubusercontent.com"
-    gh_api = "https://api.github.com"
-    gh_headers = {"Accept": "application/vnd.github.v3+json"}
-    bases = ["skills", ".agents/skills", ".claude/skills"]
-    branches = ["main", "master"]
-    normalized_id = skill_id.replace(":", "-").lower()
-    ids_to_try = [skill_id] + ([normalized_id] if normalized_id != skill_id else [])
-
-    # 1. Direct paths (both branches)
-    for branch in branches:
-        for sid in ids_to_try:
-            for base in bases:
-                try:
-                    resp = await http_client.get(
-                        f"{gh_raw}/{source}/{branch}/{base}/{sid}/SKILL.md",
-                        timeout=10.0,
-                    )
-                    if resp.status_code == 200:
-                        return resp.text
-                except Exception:
-                    continue
-
-        # 2. Repo-root SKILL.md
-        try:
-            resp = await http_client.get(
-                f"{gh_raw}/{source}/{branch}/SKILL.md", timeout=10.0
-            )
-            if resp.status_code == 200:
-                return resp.text
-        except Exception:
-            pass
-
-    # 3. Full repo tree search
-    for branch in branches:
-        try:
-            resp = await http_client.get(
-                f"{gh_api}/repos/{source}/git/trees/{branch}?recursive=1",
-                headers=gh_headers,
-                timeout=10.0,
-                follow_redirects=True,
-            )
-            if resp.status_code != 200:
-                continue
-
-            tree = resp.json().get("tree", [])
-            skill_files = [
-                e["path"]
-                for e in tree
-                if e.get("type") == "blob" and e["path"].endswith("/SKILL.md")
-            ]
-            if not skill_files:
-                continue
-
-            def _dir_name(p: str) -> str:
-                segs = p.split("/")
-                return segs[-2] if len(segs) >= 2 else ""
-
-            match = next(
-                (p for p in skill_files if _dir_name(p) in (skill_id, normalized_id)),
-                None,
-            ) or next(
-                (
-                    p for p in skill_files
-                    if (
-                        normalized_id in _dir_name(p).lower()
-                        or _dir_name(p).lower() in normalized_id
-                    )
-                ),
-                None,
-            )
-
-            if match:
-                md_resp = await http_client.get(
-                    f"{gh_raw}/{source}/{branch}/{match}", timeout=10.0
-                )
-                if md_resp.status_code == 200:
-                    return md_resp.text
-
-            root_md = next(
-                (p for p in skill_files if p.count("/") <= 1), None
-            )
-            if root_md:
-                md_resp = await http_client.get(
-                    f"{gh_raw}/{source}/{branch}/{root_md}", timeout=10.0
-                )
-                if md_resp.status_code == 200:
-                    return md_resp.text
-        except Exception:
-            pass
-
-    return None
-
-
 async def _handle_get_skill_content(
     http_client: httpx.AsyncClient,
     skill_name: str,
     allowed_skills: set[str],
 ) -> str:
-    """Fetch a skill's markdown detail from Convex, falling back to GitHub.
-
-    Resolution strategy:
-    1. Check Convex cache.
-    2. Try GitHub with original source (main & master branches, direct + tree).
-    3. Resolve repo via GitHub API (handles org renames like inferen-sh → inference-sh).
-    4. Query skills.sh search API to discover the correct source.
-    """
+    """Fetch a skill's markdown: the Convex cache first, then GitHub via the
+    shared resolver (the same resolution the ACP gateway uses)."""
     if skill_name not in allowed_skills:
         return f"Error: Skill '{skill_name}' is not in the user's harness."
 
-    # Try Convex first (where ensureSkillDetails stores them)
     result = await query_convex(
         http_client, "skills:getByName", {"name": skill_name}
     )
@@ -276,48 +149,9 @@ async def _handle_get_skill_content(
         return result["detail"]
 
     try:
-        parts = skill_name.split("/")
-        skill_id = parts[-1] if parts else skill_name
-        source = "/".join(parts[:-1]) if len(parts) > 1 else ""
-
-        if not source:
-            return f"Could not retrieve content for skill '{skill_name}'."
-
-        sources_tried: set[str] = set()
-
-        # Attempt 1: original source
-        sources_tried.add(source)
-        content = await _fetch_skill_md_from_repo(http_client, source, skill_id)
+        content = await fetch_skill_md(http_client, skill_name)
         if content:
             return content
-
-        # Attempt 2: resolve via GitHub API (handles org renames)
-        resolved = await _resolve_github_repo(http_client, source)
-        if resolved and resolved not in sources_tried:
-            sources_tried.add(resolved)
-            logger.info("Skill '%s': GitHub resolved '%s' → '%s'", skill_name, source, resolved)
-            content = await _fetch_skill_md_from_repo(http_client, resolved, skill_id)
-            if content:
-                return content
-
-        # Attempt 3: ask skills.sh for the correct source
-        sh_source = await _search_skills_sh(http_client, skill_id)
-        if sh_source and sh_source not in sources_tried:
-            sources_tried.add(sh_source)
-            logger.info("Skill '%s': skills.sh resolved source → '%s'", skill_name, sh_source)
-            content = await _fetch_skill_md_from_repo(http_client, sh_source, skill_id)
-            if content:
-                return content
-
-            # The skills.sh source might also need GitHub resolution
-            sh_resolved = await _resolve_github_repo(http_client, sh_source)
-            if sh_resolved and sh_resolved not in sources_tried:
-                sources_tried.add(sh_resolved)
-                content = await _fetch_skill_md_from_repo(http_client, sh_resolved, skill_id)
-                if content:
-                    return content
-
-        logger.warning("Skill '%s': exhausted all sources %s", skill_name, sources_tried)
     except Exception:
         logger.exception("Failed to fetch skill detail for '%s'", skill_name)
 
@@ -460,8 +294,46 @@ async def chat_stream(
                     ),
                 }
 
-        # Build skills manifest and inject get_skill_content tool
-        skill_refs = body.harness.skills
+        # Build skills manifest and inject get_skill_content tool.
+        #
+        # Effective skill set = the harness's loose skills UNION the skills
+        # contributed by any attached skill packs. Pack skills are additive;
+        # if a pack skill collides with a loose harness skill by name, the
+        # loose harness skill wins (we seed names from body.harness.skills
+        # first and only append pack skills whose name isn't already present).
+        skill_refs: list = list(body.harness.skills)
+        seen_skill_names: set[str] = {s.name for s in skill_refs}
+
+        # Resolve attached skill packs into their constituent skills. Best
+        # effort: a failure here must NEVER break the chat turn, so we wrap
+        # the resolve and log+continue. query_convex already swallows transport
+        # errors (returns None), but we guard the whole block defensively.
+        if body.harness.skill_pack_ids:
+            try:
+                pack_ctx = await query_convex(
+                    http_client,
+                    "skillPacks:resolveForGateway",
+                    {
+                        "userId": user_id,
+                        "skillPackIds": body.harness.skill_pack_ids,
+                    },
+                )
+                for ps in (pack_ctx or {}).get("skills", []):
+                    name = ps.get("name")
+                    if not name or name in seen_skill_names:
+                        continue
+                    seen_skill_names.add(name)
+                    skill_refs.append(
+                        SkillRef(name=name, description=ps.get("description", ""))
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to resolve skill packs for harness '%s'; "
+                    "continuing without pack skills",
+                    body.harness.name,
+                    exc_info=True,
+                )
+
         allowed_skill_names: set[str] = {s.name for s in skill_refs}
         skill_manifest: list[dict] = []
         if skill_refs:
@@ -532,8 +404,12 @@ async def chat_stream(
 
         # Resolve GitHub OAuth credentials for sandbox git operations.
         # Check standalone GitHub token first, then fall back to MCP token.
+        # NEVER on a collaborator turn: the agent runs in the OWNER's sandbox, so
+        # injecting the owner's GitHub token (into ~/.git-credentials and the tool
+        # env) would hand it to a collaborator who can read it back with a sandbox
+        # command (`cat ~/.git-credentials`). The owner's secrets stay server-side.
         git_credentials: dict | None = None
-        if sandbox_id and daytona_service:
+        if sandbox_id and daytona_service and not is_collab:
             gh_token = await get_valid_token(
                 http_client, user_id, GITHUB_STANDALONE_URL,
             )
@@ -569,6 +445,24 @@ async def chat_stream(
                         "Failed to configure git credentials in sandbox",
                         exc_info=True,
                     )
+
+        # Resolve the workspace's assigned env-var credentials once per turn;
+        # injected into every sandbox tool invocation below. NEVER log the dict.
+        # Skipped on a collaborator turn: these are the OWNER's decrypted secrets
+        # (user_id is the owner here), and a collaborator driving a sandbox tool
+        # could echo them straight back to their browser — secrets must not leave
+        # the server for a collaborator.
+        workspace_env: dict[str, str] = {}
+        if sandbox_id and daytona_service and body.harness.workspace_id and not is_collab:
+            try:
+                workspace_env = await resolve_workspace_env(
+                    http_client, body.harness.workspace_id, user_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to resolve workspace credentials for sandbox tools",
+                    exc_info=True,
+                )
 
         messages = [m.model_dump() for m in body.messages]
 
@@ -902,11 +796,18 @@ async def chat_stream(
                     if cost is not None:
                         usage_for_convex["cost"] = cost
 
+                # Faithful flat content == join of ALL iterations' text parts.
+                # By here line ~847 has appended the final iteration's text, so
+                # all_parts is complete. Use the SAME value for the persisted
+                # content and the done event below so they cannot drift (the
+                # convexHasMessage handshake compares them — see done_data).
+                faithful_content = content_from_parts(all_parts)
+
                 # Save to Convex first, then notify client
                 await save_assistant_message(
                     http_client,
                     body.conversation_id,
-                    collected_content,
+                    faithful_content,
                     reasoning=all_reasoning or None,
                     tool_calls=all_tool_calls_history or None,
                     parts=all_parts or None,
@@ -928,7 +829,12 @@ async def chat_stream(
                         usage_data=collected_usage,
                     )
 
-                done_data: dict = {"content": collected_content}
+                # MUST equal the persisted content: the frontend's
+                # convexHasMessage check compares lastMsg.content (the join
+                # we just saved) against pendingDoneContent (this value). If
+                # they diverge, the streaming bubble never clears for a
+                # multi-iteration turn (chat-stream-context.tsx / chat-messages.tsx).
+                done_data: dict = {"content": faithful_content}
                 if usage_for_convex:
                     done_data["usage"] = usage_for_convex
                 if collected_model:
@@ -1002,6 +908,7 @@ async def chat_stream(
                         json.dumps(tool_info["args"])[:200],
                     )
                     _creds = git_credentials
+                    _env = workspace_env
                     result = await asyncio.get_running_loop().run_in_executor(
                         None,
                         lambda: execute_sandbox_tool(
@@ -1010,6 +917,7 @@ async def chat_stream(
                             tool_name,
                             tool_info["args"],
                             git_credentials=_creds,
+                            env=_env,
                         ),
                     )
                     return tool_info, result
@@ -1130,7 +1038,46 @@ async def chat_stream(
             "data": json.dumps({"message": "Max tool call iterations reached"}),
         }
 
-    return EventSourceResponse(event_generator())
+    # Tee every display event into the Redis bus so passive viewers (the owner's
+    # other tabs, a sharee, a late joiner) see the same tokens render live.
+    return EventSourceResponse(
+        stream_bus.tee(event_generator(), body.conversation_id)
+    )
+
+
+@router.get("/follow")
+async def follow_stream(
+    conversation_id: str = Query(...),
+    token: str | None = Query(default=None),
+    user: dict | None = Depends(get_current_user_optional),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+):
+    """Read-only live token feed for a PASSIVE viewer of a conversation.
+
+    Authorized exactly like a shared read: the owner (JWT) or an active grant
+    (editor/viewer) for the share `token` — including an anonymous viewer with a
+    valid token. Replays the current turn then tails the conversation's Redis
+    stream. Emits nothing (and idles) when Redis is unconfigured.
+    """
+    # A fully anonymous caller must present a share token — never fall through to
+    # an identity-less access check (defense against a misconfigured/empty-Convex
+    # backend whose access oracle would otherwise dev-fallback to "owner").
+    if user is None and not token:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    user_id = (user or {}).get("sub") or ""
+    access = await verify_conversation_access(
+        http_client, conversation_id, user_id, token
+    )
+    if access not in ("owner", "editor", "viewer"):
+        raise HTTPException(
+            status_code=403, detail="Not authorized for this conversation"
+        )
+
+    async def gen():
+        async for ev in stream_bus.follow(conversation_id):
+            yield {"event": ev["event"], "data": ev["data"]}
+
+    return EventSourceResponse(gen())
 
 
 async def _save_interrupted(
@@ -1145,7 +1092,27 @@ async def _save_interrupted(
     collected_model: str | None,
     reason: str,
 ) -> None:
-    """Persist partial assistant state when the stream ends before a normal finish."""
+    """Persist partial assistant state when the stream ends before a normal finish.
+
+    Self-reconciling: callers pass the in-flight `content` (this iteration's
+    streamed-but-maybe-not-yet-parted text) plus `parts`. We append `content` as
+    a trailing text part IFF it isn't already the last text part, then derive the
+    persisted content from the reconciled parts via content_from_parts(). This
+    guarantees `content == content_from_parts(parts)` with no text lost or
+    duplicated at every interrupted call site:
+      * mid-stream exceptions (line ~847 hadn't run): in-flight text is appended.
+      * consecutive-truncation abort (after ~847): identical last part -> skipped.
+      * max-iterations (content==""): nothing appended -> content == join(parts).
+    """
+    reconciled = list(parts or [])
+    if content and not (
+        reconciled
+        and reconciled[-1].get("type") == "text"
+        and reconciled[-1].get("content") == content
+    ):
+        reconciled.append({"type": "text", "content": content})
+    faithful = content_from_parts(reconciled)
+
     usage_for_convex: dict | None = None
     if collected_usage:
         usage_for_convex = {
@@ -1161,10 +1128,10 @@ async def _save_interrupted(
         await save_assistant_message(
             http_client,
             body.conversation_id,
-            content,
+            faithful,
             reasoning=reasoning or None,
             tool_calls=tool_calls_history or None,
-            parts=parts or None,
+            parts=reconciled or None,
             usage=usage_for_convex,
             model=collected_model,
             interrupted=True,

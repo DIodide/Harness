@@ -88,7 +88,9 @@ function RootComponent() {
 	// /share/<token> is a standalone, anonymous-friendly viewer with its own
 	// chrome — render it outside the app shell.
 	const isChromeless =
-		CHROMELESS_ROUTES.includes(pathname) || pathname.startsWith("/share/");
+		CHROMELESS_ROUTES.includes(pathname) ||
+		pathname.startsWith("/share/") ||
+		pathname.startsWith("/share-harness/");
 
 	return (
 		<ClerkProvider

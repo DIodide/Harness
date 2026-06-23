@@ -20,10 +20,7 @@ import {
 	PanelLeftOpen,
 	Plus,
 	Search, // Icon for search
-	Settings,
 	Share2,
-	SlidersHorizontal,
-	Trash2,
 	X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -40,18 +37,19 @@ import {
 	McpFailureBanner,
 	SandboxPanelToggle,
 } from "../../components/chat/chat-misc";
+import { ConversationRow } from "../../components/chat/conversation-row";
 import { SettingsDialog } from "../../components/chat/settings-dialog";
 import { ShareDialog } from "../../components/chat/share-dialog";
 import { useChatPaletteCommands } from "../../components/command-palette/commands/chat-commands";
 import { HarnessAgentBadge } from "../../components/harness-agent-badge";
 import { HarnessMark } from "../../components/harness-mark";
 import { HeaderSkillsMenu } from "../../components/header-skills-menu";
+import { ManageNavFooter } from "../../components/manage/manage-nav-footer";
 import {
 	type HealthStatus,
 	McpServerStatus,
 } from "../../components/mcp-server-status";
 import type { DisplayMode } from "../../components/message-actions";
-import { RoseCurveSpinner } from "../../components/rose-curve-spinner";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -62,7 +60,6 @@ import {
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { Input } from "../../components/ui/input"; // reuse input from components
-import { ScrollArea } from "../../components/ui/scroll-area";
 import { Separator } from "../../components/ui/separator";
 import {
 	Tooltip,
@@ -70,8 +67,12 @@ import {
 	TooltipTrigger,
 } from "../../components/ui/tooltip";
 import { UsageDialog } from "../../components/usage-dialog";
-import { formatResetTime, UsageBadge } from "../../components/usage-display";
+import { formatResetTime } from "../../components/usage-display";
 import { env } from "../../env";
+import { useMcpHealthCheck } from "../../hooks/use-mcp-health-check";
+import { useMessageQueue } from "../../hooks/use-message-queue";
+import { usePersistInterruptedTurn } from "../../hooks/use-persist-interrupted-turn";
+import { useRewind } from "../../hooks/use-rewind";
 import {
 	EMPTY_STREAM_STATE,
 	useChatStreamContext,
@@ -89,7 +90,7 @@ import {
 } from "../../lib/sandbox-panel-context";
 import type { SkillEntry } from "../../lib/skills";
 import type { BudgetExceededInfo } from "../../lib/use-chat-stream";
-import { toPersistableParts } from "../../lib/use-chat-stream";
+import { useFollowStream } from "../../lib/use-follow-stream";
 import { cn } from "../../lib/utils";
 
 export const Route = createFileRoute("/chat/")({
@@ -137,6 +138,7 @@ function ChatPage() {
 		convexQuery(api.conversations.list, {}),
 	);
 	const { data: sandboxes } = useQuery(convexQuery(api.sandboxes.list, {}));
+	const { data: workspaces } = useQuery(convexQuery(api.workspaces.list, {}));
 	const { data: userSettings } = useQuery(
 		convexQuery(api.userSettings.get, {}),
 	);
@@ -162,8 +164,7 @@ function ChatPage() {
 	// Streaming state lives in the global provider so an in-flight stream
 	// survives navigation away from /chat (e.g. to /harnesses) and back.
 	const chatStream = useChatStreamContext();
-	const { streamStates, streamStatesRef, clearStreamState, setStreamState } =
-		chatStream;
+	const { streamStates, streamStatesRef, clearStreamState } = chatStream;
 
 	// MCP server failures reported during stream start
 	type McpFailure = {
@@ -174,11 +175,6 @@ function ChatPage() {
 	};
 	const [mcpFailures, setMcpFailures] = useState<McpFailure[]>([]);
 	const mcpFailureIdRef = useRef(0);
-
-	// MCP server health check statuses (keyed by server URL)
-	const [mcpHealthStatuses, setMcpHealthStatuses] = useState<
-		Record<string, HealthStatus>
-	>({});
 
 	// Bump to force a slash-command refetch (after OAuth, harness edit, etc.)
 	const [commandRefreshKey, setCommandRefreshKey] = useState(0);
@@ -198,49 +194,23 @@ function ChatPage() {
 			activeConvoId ? { conversationId: activeConvoId } : "skip",
 		),
 	);
+	// Context-compaction records for the active conversation (observability +
+	// the clone-from-summary choice).
+	const { data: activeCompactions } = useQuery(
+		convexQuery(
+			api.compactions.listByConversation,
+			activeConvoId ? { conversationId: activeConvoId } : "skip",
+		),
+	);
 	const activeMessagesRef = useRef(activeMessages);
 	useEffect(() => {
 		activeMessagesRef.current = activeMessages;
 	}, [activeMessages]);
 
-	// Message queue state
-	type QueueItem = { id: number; content: string };
-	const [messageQueue, setMessageQueue] = useState<QueueItem[]>([]);
-	const messageQueueRef = useRef<QueueItem[]>([]);
-	const queueIdCounter = useRef(0);
-	const pendingQueueSendRef = useRef<{
-		convoId: string;
-		content: string;
-	} | null>(null);
-
-	const enqueueMessage = useCallback((content: string) => {
-		const item: QueueItem = { id: ++queueIdCounter.current, content };
-		messageQueueRef.current = [...messageQueueRef.current, item];
-		setMessageQueue([...messageQueueRef.current]);
-	}, []);
-
-	const dequeueMessage = useCallback((id: number) => {
-		// Key by stable id, not array index: the queue can auto-shift between
-		// render and click, which would otherwise remove the wrong item.
-		messageQueueRef.current = messageQueueRef.current.filter(
-			(it) => it.id !== id,
-		);
-		setMessageQueue([...messageQueueRef.current]);
-	}, []);
-
-	const shiftQueue = useCallback(() => {
-		const [next, ...rest] = messageQueueRef.current;
-		messageQueueRef.current = rest;
-		setMessageQueue(rest);
-		return next?.content;
-	}, []);
-
-	// Clear queue and MCP failures on conversation switch
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally resets queue when active conversation changes
+	// Clear MCP failure banners on conversation switch (the message queue clears
+	// its own state — see useMessageQueue).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally resets on active conversation change
 	useEffect(() => {
-		messageQueueRef.current = [];
-		setMessageQueue([]);
-		pendingQueueSendRef.current = null;
 		setMcpFailures([]);
 	}, [activeConvoId]);
 
@@ -251,84 +221,17 @@ function ChatPage() {
 		mutationFn: useConvexMutation(api.commands.upsert),
 	});
 
-	// Save interrupted assistant message from frontend
-	const saveInterruptedMsg = useMutation({
-		mutationFn: useConvexMutation(api.messages.saveInterruptedMessage),
-	});
-
 	// Save user message (used for queue processing)
 	const sendMessageFromQueue = useMutation({
 		mutationFn: useConvexMutation(api.messages.send),
 	});
 
-	// Persist a turn that ended without a clean "done" — a user Stop (onAbort)
-	// OR an agent connection drop that surfaces as onError — so the
-	// streamed-so-far content isn't lost. No-op if onDone already saved it.
-	const persistInterruptedTurn = (convoId: string) => {
-		const state = streamStatesRef.current[convoId];
-		if (state?.pendingDoneContent != null) return; // onDone already saved
-		if (
-			!state ||
-			(!state.content && !state.reasoning && state.toolCalls.length === 0)
-		) {
-			clearStreamState(convoId);
-			return;
-		}
-		// Keep only completed tool calls (those with a result).
-		const completedToolCalls = state.toolCalls.filter(
-			(tc) => tc.result,
-		) as Array<{
-			tool: string;
-			arguments: Record<string, unknown>;
-			call_id: string;
-			result: string;
-		}>;
-		const cleanedParts = state.parts.filter(
-			(p) => p.type !== "tool_call" || p.result,
-		);
-		const partialContent = state.content ?? "";
-		// model only arrives in "done"; fall back to session then harness model.
-		const model = state.model ?? sessionModel ?? activeHarness?.model ?? null;
-		saveInterruptedMsg.mutate(
-			{
-				conversationId: convoId as Id<"conversations">,
-				content: partialContent,
-				...(state.reasoning ? { reasoning: state.reasoning } : {}),
-				...(completedToolCalls.length > 0
-					? { toolCalls: completedToolCalls }
-					: {}),
-				...(cleanedParts.length > 0
-					? { parts: toPersistableParts(cleanedParts) }
-					: {}),
-				...(state.usage ? { usage: state.usage } : {}),
-				...(model ? { model } : {}),
-			},
-			{
-				// If the write fails, clear the bubble so it doesn't wedge (it
-				// otherwise only clears on a matching persisted row).
-				onError: () => {
-					clearStreamState(convoId);
-					toast.error("Couldn't save the interrupted response.");
-				},
-			},
-		);
-		// Keep the bubble until Convex syncs the interrupted message (set
-		// pendingDoneContent so convexHasMessage can match).
-		setStreamState(convoId, () => ({
-			...state,
-			toolCalls: completedToolCalls,
-			parts: cleanedParts,
-			pendingDoneContent: partialContent,
-			model,
-		}));
-	};
-
-	const drainQueueAfterTurn = (convoId: string) => {
-		if (!pendingQueueSendRef.current && messageQueueRef.current.length > 0) {
-			const next = shiftQueue();
-			if (next) pendingQueueSendRef.current = { convoId, content: next };
-		}
-	};
+	// Persist a turn that ended without a clean "done" (Stop / connection drop)
+	// so the streamed-so-far content isn't lost. The model only arrives in
+	// "done", so supply the fallback (session → harness) the hook should use.
+	const { persistInterruptedTurn } = usePersistInterruptedTurn(
+		() => sessionModel ?? activeHarness?.model ?? null,
+	);
 
 	useChatStreamSideEffects({
 		onMcpError: (_convoId, event) => {
@@ -429,21 +332,6 @@ function ChatPage() {
 		prevStreamingRef.current = new Set(curr);
 	}, [chatStream.streamingConvoIds]);
 
-	const handleStreamSynced = useCallback(
-		(convoId: string) => {
-			clearStreamState(convoId);
-
-			// Process next queued message now that Convex has synced
-			if (messageQueueRef.current.length > 0) {
-				const next = shiftQueue();
-				if (next) {
-					pendingQueueSendRef.current = { convoId, content: next };
-				}
-			}
-		},
-		[clearStreamState, shiftQueue],
-	);
-
 	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
 	const selectedSandbox =
 		activeSandboxSelection !== "harness" && activeSandboxSelection !== "none"
@@ -489,13 +377,28 @@ function ChatPage() {
 	// Shared builder: queued sends, regenerate, and edit-resend must carry
 	// the same agent/credential fields as the composer path — without them
 	// the request silently reroutes to the default OpenRouter loop.
+	// The active conversation's workspace (conversations carry an optional
+	// workspaceId). Drives workspace-credential injection on EVERY send path —
+	// the composer's fresh send (via the ChatInput prop) AND queued/regenerate/
+	// edit-resend (via buildHarnessConfig) — so they stay in lockstep.
+	const activeConvoWorkspaceId = useMemo(
+		() => conversations?.find((c) => c._id === activeConvoId)?.workspaceId,
+		[conversations, activeConvoId],
+	);
+
 	const buildHarnessConfig = useCallback(() => {
 		if (!activeHarness) return null;
 		return buildHarnessStreamConfig(activeHarness, {
 			model: sessionModel,
 			sandboxId: effectiveSandboxDaytonaId,
+			workspaceId: activeConvoWorkspaceId,
 		});
-	}, [activeHarness, effectiveSandboxDaytonaId, sessionModel]);
+	}, [
+		activeHarness,
+		activeConvoWorkspaceId,
+		effectiveSandboxDaytonaId,
+		sessionModel,
+	]);
 
 	// Collect all command IDs across the active harness's MCP servers
 	const allCommandIds = useMemo(
@@ -509,109 +412,7 @@ function ChatPage() {
 		),
 	);
 
-	// Health-check MCP servers when harness changes, or on-demand via refreshHealth.
-	const healthCheckRunRef = useRef<{ cancel: () => void } | null>(null);
-	const runHealthCheck = useCallback(
-		(
-			servers: Array<{
-				name: string;
-				url: string;
-				authType: McpAuthType;
-				authToken?: string;
-			}>,
-		) => {
-			healthCheckRunRef.current?.cancel();
-
-			if (servers.length === 0) {
-				setMcpHealthStatuses({});
-				return;
-			}
-
-			// Mark unknown URLs as checking; preserve already-known statuses so
-			// previously-healthy servers don't flash to "Checking…" during a
-			// refresh triggered by adding/removing a server.
-			setMcpHealthStatuses((prev) => {
-				const next: Record<string, HealthStatus> = {};
-				for (const s of servers) {
-					next[s.url] = prev[s.url] ?? "checking";
-				}
-				return next;
-			});
-
-			let cancelled = false;
-			const run = async () => {
-				try {
-					const token = await getToken();
-					const res = await fetch(`${FASTAPI_URL}/api/mcp/health/check`, {
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							...(token ? { Authorization: `Bearer ${token}` } : {}),
-						},
-						body: JSON.stringify({
-							mcp_servers: servers.map((s) => ({
-								name: s.name,
-								url: s.url,
-								auth_type: s.authType,
-								...(s.authToken ? { auth_token: s.authToken } : {}),
-							})),
-							force: true,
-						}),
-					});
-					if (cancelled) return;
-					if (!res.ok) {
-						const fallback: Record<string, HealthStatus> = {};
-						for (const s of servers) fallback[s.url] = "unreachable";
-						setMcpHealthStatuses(fallback);
-						return;
-					}
-					const data = await res.json();
-					if (cancelled) return;
-					const statuses: Record<string, HealthStatus> = {};
-					for (const server of data.servers) {
-						if (server.status === "ok") statuses[server.url] = "reachable";
-						else if (server.status === "auth_required")
-							statuses[server.url] = "auth_required";
-						else statuses[server.url] = "unreachable";
-					}
-					setMcpHealthStatuses(statuses);
-				} catch {
-					if (cancelled) return;
-					const fallback: Record<string, HealthStatus> = {};
-					for (const s of servers) fallback[s.url] = "unreachable";
-					setMcpHealthStatuses(fallback);
-				}
-			};
-
-			run();
-			healthCheckRunRef.current = {
-				cancel: () => {
-					cancelled = true;
-				},
-			};
-		},
-		[getToken],
-	);
-
-	const refreshHealth = useCallback(() => {
-		if (activeHarness) runHealthCheck(activeHarness.mcpServers);
-	}, [activeHarness, runHealthCheck]);
-
-	// Re-run when the harness or its set of MCP server URLs changes. The URL
-	// key catches inline adds/removes from the header tooltip without making
-	// every harness-doc edit (name, model, etc.) trigger a health re-check.
-	const mcpUrlKey = activeHarness?.mcpServers.map((s) => s.url).join("|") ?? "";
-	// biome-ignore lint/correctness/useExhaustiveDependencies: deps are id + url-set; runHealthCheck is stable
-	useEffect(() => {
-		if (!activeHarness) {
-			setMcpHealthStatuses({});
-			return;
-		}
-		runHealthCheck(activeHarness.mcpServers);
-		return () => {
-			healthCheckRunRef.current?.cancel();
-		};
-	}, [activeHarness?._id, mcpUrlKey]);
+	const { mcpHealthStatuses, refreshHealth } = useMcpHealthCheck(activeHarness);
 
 	// Sync slash commands: fetch from MCP servers, upsert into commands table,
 	// and store the resulting IDs on the harness's mcpServers.
@@ -714,44 +515,22 @@ function ChatPage() {
 		[activeHarness, chatStream, sendMessageFromQueue, buildHarnessConfig],
 	);
 
-	const handleSendNow = useCallback(
-		(id: number) => {
-			if (!activeConvoId) return;
-			// Key by stable id, not array index (the queue can auto-shift).
-			const item = messageQueueRef.current.find((it) => it.id === id);
-			if (!item) return;
-			messageQueueRef.current = messageQueueRef.current.filter(
-				(it) => it.id !== id,
-			);
-			setMessageQueue([...messageQueueRef.current]);
-			// If a turn is in flight, interrupt and let the effect flush after it
-			// ends; otherwise there's no controller to cancel (no-op) so send the
-			// message directly rather than dropping it.
-			if (chatStream.streamingConvoIds.has(activeConvoId)) {
-				pendingQueueSendRef.current = {
-					convoId: activeConvoId,
-					content: item.content,
-				};
-				chatStream.cancel(activeConvoId);
-			} else {
-				void sendQueuedMessage(activeConvoId, item.content);
-			}
+	const {
+		messageQueue,
+		enqueueMessage,
+		dequeueMessage,
+		handleSendNow,
+		drainQueueAfterTurn,
+		processQueuedAfterSync,
+	} = useMessageQueue({ activeConvoId, activeHarness, sendQueuedMessage });
+
+	const handleStreamSynced = useCallback(
+		(convoId: string) => {
+			clearStreamState(convoId);
+			processQueuedAfterSync(convoId);
 		},
-		[activeConvoId, chatStream, sendQueuedMessage],
+		[clearStreamState, processQueuedAfterSync],
 	);
-
-	// Process pending queued messages after stream ends
-	useEffect(() => {
-		const pending = pendingQueueSendRef.current;
-		if (!pending || !activeHarness) return;
-
-		const convoId = pending.convoId;
-		// Wait until the conversation is no longer streaming
-		if (chatStream.streamingConvoIds.has(convoId)) return;
-
-		pendingQueueSendRef.current = null;
-		void sendQueuedMessage(convoId, pending.content);
-	}, [chatStream.streamingConvoIds, activeHarness, sendQueuedMessage]);
 
 	const handleSelectConversation = useCallback(
 		(convoId: Id<"conversations"> | null) => {
@@ -773,6 +552,34 @@ function ChatPage() {
 			}
 		},
 		[userSettings, conversations, harnesses],
+	);
+
+	// "New session from summary": clone a fresh conversation seeded with a
+	// compaction summary, then open it.
+	const [isStartingClone, setIsStartingClone] = useState(false);
+	const cloneFromCompaction = useMutation({
+		mutationFn: useConvexMutation(api.compactions.cloneFromCompaction),
+	});
+	const handleStartFromSummary = useCallback(
+		async (compactionId: string) => {
+			setIsStartingClone(true);
+			try {
+				const newId = await cloneFromCompaction.mutateAsync({
+					compactionId: compactionId as Id<"compactions">,
+					harnessId: activeHarnessId ?? undefined,
+				});
+				handleSelectConversation(newId as Id<"conversations">);
+			} catch (error) {
+				toast.error(
+					error instanceof Error
+						? error.message
+						: "Could not start session from summary",
+				);
+			} finally {
+				setIsStartingClone(false);
+			}
+		},
+		[cloneFromCompaction, activeHarnessId, handleSelectConversation],
 	);
 
 	// Open a deep-linked conversation once (e.g. a chat just forked from a
@@ -845,21 +652,10 @@ function ChatPage() {
 		],
 	);
 
-	const forkConversation = useMutation({
-		mutationFn: useConvexMutation(api.conversations.fork),
-	});
-
-	const handleFork = useCallback(
-		async (messageId: Id<"messages">) => {
-			if (!activeConvoId) return;
-			const newConvoId = await forkConversation.mutateAsync({
-				conversationId: activeConvoId,
-				upToMessageId: messageId,
-			});
-			handleSelectConversation(newConvoId);
-		},
-		[activeConvoId, forkConversation, handleSelectConversation],
-	);
+	// Fork-at-message ("Fork" on an assistant message + "Rewind & fork" on a
+	// user message) and in-place rewind, shared with the /workspaces route.
+	const { handleRewind, forkAtMessage, handleRewindToPart, forkAtPart } =
+		useRewind(activeConvoId, handleSelectConversation);
 
 	const editForkAndSend = useMutation({
 		mutationFn: useConvexMutation(api.conversations.editForkAndSend),
@@ -945,18 +741,34 @@ function ChatPage() {
 		onToggleSidebar: () => setSidebarOpen((v) => !v),
 	});
 
+	// Hooks must run unconditionally — keep these ABOVE the early return.
+	const isLocalActiveStreaming = activeConvoId
+		? chatStream.streamingConvoIds.has(activeConvoId)
+		: false;
+	// When THIS tab isn't driving the active conversation's turn (a sharee or
+	// another of the owner's tabs is), follow the live token feed so it streams
+	// down here too. Disabled while we're the initiator (token-perfect local
+	// stream renders instead — never both).
+	const { followState: ownerFollow, clearFollow: clearOwnerFollow } =
+		useFollowStream({
+			conversationId: activeConvoId ?? null,
+			enabled: !!activeConvoId && !isLocalActiveStreaming,
+		});
+
 	if (harnessesLoading || !harnesses || harnesses.length === 0) {
 		return <ChatSkeleton />;
 	}
 	const activeConversation = conversations?.find(
 		(c) => c._id === activeConvoId,
 	);
-	const activeStreamState = activeConvoId
+	const localActiveStreamState = activeConvoId
 		? (streamStates[activeConvoId] ?? EMPTY_STREAM_STATE)
 		: EMPTY_STREAM_STATE;
-	const isActiveConvoStreaming = activeConvoId
-		? chatStream.streamingConvoIds.has(activeConvoId)
-		: false;
+	// Prefer the follow feed when present; else local — which covers our own
+	// turn AND the post-done pendingDone window before the persisted row syncs
+	// (so the just-finished bubble never flickers away).
+	const activeStreamState = ownerFollow ?? localActiveStreamState;
+	const isActiveConvoStreaming = isLocalActiveStreaming || ownerFollow != null;
 	const agentActivityCount = countActiveAgents(
 		activeStreamState.parts,
 		isActiveConvoStreaming,
@@ -983,6 +795,7 @@ function ChatPage() {
 									(c) =>
 										!(c as Record<string, unknown>).editParentConversationId,
 								)}
+								workspaces={workspaces ?? []}
 								activeConvoId={activeConvoId}
 								onSelect={handleSelectConversation}
 								onSelectMessage={handleSelectMessage}
@@ -1062,12 +875,25 @@ function ChatPage() {
 							agentStatus={activeStreamState.agentStatus}
 							streamPlan={activeStreamState.plan}
 							agentUsage={activeStreamState.agentUsage}
-							onStreamSynced={handleStreamSynced}
+							onStreamSynced={(cid) => {
+								// Run BOTH: by sync time the local stream has already
+								// dropped from streamingConvoIds, so a flag can't tell which
+								// source finished. handleStreamSynced clears any local state
+								// + drains the queue; clearOwnerFollow clears the follow
+								// bubble. Each is a no-op for the other's case.
+								handleStreamSynced(cid);
+								clearOwnerFollow();
+							}}
 							displayMode={
 								(userSettings?.displayMode as DisplayMode) ?? "standard"
 							}
 							onRegenerate={handleRegenerate}
-							onFork={handleFork}
+							onFork={forkAtMessage}
+							onRewind={handleRewind}
+							onRewindFork={forkAtMessage}
+							onRewindToPart={handleRewindToPart}
+							onForkToPart={forkAtPart}
+							seamsEnabled={userSettings?.rewindSeams ?? true}
 							onStartEditPrompt={handleStartEditPrompt}
 							onCancelEditPrompt={handleCancelEditPrompt}
 							onSaveEditPrompt={handleSaveEditPrompt}
@@ -1093,6 +919,9 @@ function ChatPage() {
 							isStreaming={isActiveConvoStreaming}
 							scrollToMessageId={scrollToMessageId}
 							onClearScrollTarget={() => setScrollToMessageId(null)}
+							compactions={activeCompactions ?? []}
+							onStartFromSummary={handleStartFromSummary}
+							isStartingClone={isStartingClone}
 						/>
 					) : (
 						<EmptyChat
@@ -1103,6 +932,7 @@ function ChatPage() {
 
 					<ChatInput
 						conversationId={activeConvoId}
+						workspaceId={activeConvoWorkspaceId}
 						activeHarness={activeHarness}
 						agentActivityCount={agentActivityCount}
 						slashCommands={(storedCommands ?? []).filter(Boolean).map((c) => ({
@@ -1163,6 +993,7 @@ function ChatPage() {
 
 function ChatSidebar({
 	conversations,
+	workspaces,
 	activeConvoId,
 	onSelect,
 	onSelectMessage, // called when user clicks a content match
@@ -1176,6 +1007,14 @@ function ChatSidebar({
 		title: string;
 		lastMessageAt: number;
 		lastHarnessId?: Id<"harnesses">;
+		workspaceId?: Id<"workspaces">;
+		pinnedAt?: number;
+	}>;
+	workspaces: Array<{
+		_id: Id<"workspaces">;
+		name: string;
+		color?: string;
+		isDefault?: boolean;
 	}>;
 	activeConvoId: Id<"conversations"> | null;
 	onSelect: (id: Id<"conversations"> | null) => void;
@@ -1188,13 +1027,6 @@ function ChatSidebar({
 	streamingConvoIds: Set<string>;
 	doneConvoIds: Set<string>;
 }) {
-	const removeConvo = useMutation({
-		mutationFn: useConvexMutation(api.conversations.remove),
-		onSuccess: () => {
-			if (activeConvoId) onSelect(null);
-		},
-	});
-
 	const handleNew = () => {
 		if (!harnessId) return;
 		onSelect(null);
@@ -1238,10 +1070,34 @@ function ChatSidebar({
 		),
 	});
 
-	const grouped = groupByDate(conversations);
+	// Pinned chats render in a dedicated top section; the rest group by date.
+	const pinned = conversations.filter((c) => c.pinnedAt != null);
+	const grouped = groupByDate(conversations.filter((c) => c.pinnedAt == null));
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [usageOpen, setUsageOpen] = useState(false);
+	// One lifted ShareDialog for the whole list — the kebab's "Can edit…" opens it.
+	const [shareTarget, setShareTarget] = useState<Id<"conversations"> | null>(
+		null,
+	);
+
+	const renderRow = (convo: (typeof conversations)[number]) => (
+		<ConversationRow
+			key={convo._id}
+			convo={convo}
+			workspaces={workspaces}
+			active={activeConvoId === convo._id}
+			streaming={streamingConvoIds.has(convo._id)}
+			done={doneConvoIds.has(convo._id)}
+			tintEnabled
+			onSelect={(id) => onSelect(id)}
+			onForked={(id) => onSelect(id)}
+			onRequestShare={(id) => setShareTarget(id)}
+			onDeleted={() => {
+				if (activeConvoId === convo._id) onSelect(null);
+			}}
+		/>
+	);
 
 	return (
 		<div className="flex h-full w-[280px] flex-col bg-background">
@@ -1294,7 +1150,12 @@ function ChatSidebar({
 				</div>
 			</div>
 
-			<ScrollArea className="min-h-0 flex-1 px-2 py-2">
+			{/* Plain block-flow scroller (not Radix ScrollArea): Radix wraps content
+			    in a `display:table; min-width:100%` box that shrink-wraps to the
+			    widest title, growing past the 280px column so `w-full` rows never
+			    truncate and the hover kebab gets clipped off-screen. Block flow is
+			    bounded by the column width, so min-w-0 + truncate work. */}
+			<div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 py-2">
 				{/* BRANCH 1: Active search — show search results */}
 				{searchQuery &&
 				titleSearch.status !== "LoadingFirstPage" &&
@@ -1346,7 +1207,7 @@ function ChatSidebar({
 										)}
 									>
 										<MessageSquare size={12} className="shrink-0" />
-										<span className="truncate">
+										<span className="min-w-0 flex-1 truncate">
 											<HighlightText text={convo.title} query={searchQuery} />
 										</span>
 									</button>
@@ -1433,126 +1294,43 @@ function ChatSidebar({
 					</p>
 				) : (
 					<div className="space-y-4">
+						{pinned.length > 0 && (
+							<div>
+								<p className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+									Pinned
+								</p>
+								{pinned.map((convo) => renderRow(convo))}
+							</div>
+						)}
 						{grouped.map((group) => (
 							<div key={group.label}>
 								<p className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
 									{group.label}
 								</p>
-								{group.items.map((convo) => (
-									<div key={convo._id} className="group relative">
-										<button
-											type="button"
-											onClick={() => onSelect(convo._id)}
-											className={cn(
-												"flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs transition-colors",
-												activeConvoId === convo._id
-													? "bg-muted text-foreground"
-													: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-											)}
-										>
-											<AnimatePresence mode="wait">
-												{streamingConvoIds.has(convo._id) ? (
-													<motion.span
-														key="spinner"
-														initial={{ opacity: 0, scale: 0.5 }}
-														animate={{ opacity: 1, scale: 1 }}
-														exit={{ opacity: 0, scale: 0.5 }}
-														transition={{ duration: 0.15 }}
-														className="flex shrink-0"
-													>
-														<RoseCurveSpinner
-															size={12}
-															className="text-muted-foreground"
-														/>
-													</motion.span>
-												) : doneConvoIds.has(convo._id) ? (
-													<motion.span
-														key="check"
-														initial={{ opacity: 0, scale: 0.5 }}
-														animate={{ opacity: 1, scale: 1 }}
-														exit={{ opacity: 0, scale: 0.5 }}
-														transition={{ duration: 0.15 }}
-														className="flex shrink-0"
-													>
-														<Check size={12} className="text-emerald-500" />
-													</motion.span>
-												) : (
-													<motion.span
-														key="icon"
-														initial={{ opacity: 0, scale: 0.5 }}
-														animate={{ opacity: 1, scale: 1 }}
-														exit={{ opacity: 0, scale: 0.5 }}
-														transition={{ duration: 0.15 }}
-														className="flex shrink-0"
-													>
-														<MessageSquare size={12} />
-													</motion.span>
-												)}
-											</AnimatePresence>
-											<span className="truncate">{convo.title}</span>
-										</button>
-										<Button
-											variant="ghost"
-											size="icon-xs"
-											className="absolute right-1 top-1 opacity-0 group-hover:opacity-100"
-											onClick={(e) => {
-												e.stopPropagation();
-												removeConvo.mutate({
-													id: convo._id,
-												});
-											}}
-										>
-											<Trash2 size={10} />
-										</Button>
-									</div>
-								))}
+								{group.items.map((convo) => renderRow(convo))}
 							</div>
 						))}
 					</div>
 				)}
-			</ScrollArea>
+			</div>
 
 			<Separator />
-			<div className="px-2 py-1">
-				<UsageBadge onClick={() => setUsageOpen(true)} />
-			</div>
-			<Separator />
-			<div className="space-y-0.5 p-2">
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					asChild
-				>
-					<Link to="/sandboxes">
-						<Box size={12} />
-						Manage Sandboxes
-					</Link>
-				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					asChild
-				>
-					<Link to="/harnesses">
-						<SlidersHorizontal size={12} />
-						Manage Harnesses
-					</Link>
-				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					onClick={() => setSettingsOpen(true)}
-				>
-					<Settings size={12} />
-					Settings
-				</Button>
-			</div>
+			<ManageNavFooter
+				onOpenSettings={() => setSettingsOpen(true)}
+				onOpenUsage={() => setUsageOpen(true)}
+			/>
 
 			<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 			<UsageDialog open={usageOpen} onOpenChange={setUsageOpen} />
+			{shareTarget && (
+				<ShareDialog
+					conversationId={shareTarget}
+					open={shareTarget !== null}
+					onOpenChange={(o) => {
+						if (!o) setShareTarget(null);
+					}}
+				/>
+			)}
 		</div>
 	);
 }

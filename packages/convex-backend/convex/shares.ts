@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalQuery, mutation, query } from "./_generated/server";
+import { getOrCreateDefaultWorkspace } from "./workspaces";
 
 /**
  * Conversation sharing.
@@ -25,9 +26,13 @@ import { internalQuery, mutation, query } from "./_generated/server";
 
 // A client-generated 256-bit token (base64url of 32 bytes ≈ 43 chars). We
 // require a healthy minimum so a caller can't pass a guessable short string.
-const MIN_TOKEN_LENGTH = 32;
+export const MIN_TOKEN_LENGTH = 32;
 
-function isActiveGrant(grant: Doc<"shareGrants">): boolean {
+// Generic over shareGrants AND harnessShareGrants (same active semantics):
+// active = not revoked and not expired.
+export function isActiveGrant<
+	T extends { revokedAt?: number; expiresAt?: number },
+>(grant: T): boolean {
 	if (grant.revokedAt) return false;
 	if (grant.expiresAt && grant.expiresAt <= Date.now()) return false;
 	return true;
@@ -186,7 +191,7 @@ export const MAX_MESSAGE_CONTENT_CHARS = 16000;
 // arbitrary host would be a tracking-pixel beacon. Restrict to the hosts our
 // auth provider actually serves avatars from (Clerk proxies OAuth avatars
 // through img.clerk.com). A disallowed/garbage URL just falls back to initials.
-const ALLOWED_AVATAR_HOSTS = new Set([
+export const ALLOWED_AVATAR_HOSTS = new Set([
 	"img.clerk.com",
 	"images.clerk.dev",
 	"www.gravatar.com",
@@ -195,12 +200,12 @@ const ALLOWED_AVATAR_HOSTS = new Set([
 // A client-supplied author/owner snapshot is untrusted, so clamp the name and
 // accept only an https avatar URL on a known host. Name + avatar ONLY — never
 // email (locked product decision).
-function clampAuthorName(name?: string): string | undefined {
+export function clampAuthorName(name?: string): string | undefined {
 	if (!name) return undefined;
 	const trimmed = name.trim().slice(0, 80);
 	return trimmed || undefined;
 }
-function clampAuthorImageUrl(url?: string): string | undefined {
+export function clampAuthorImageUrl(url?: string): string | undefined {
 	if (!url || url.length > 2048) return undefined;
 	let parsed: URL;
 	try {
@@ -445,6 +450,75 @@ export const listShareGrants = query({
 	},
 });
 
+/**
+ * Every conversation the current user has shared, grouped by conversation —
+ * powers the Manage Sharing page. Uses the `by_owner` index (added to an
+ * existing populated table); reads tolerate the backfill window.
+ */
+export const listMySharedConversations = query({
+	args: {},
+	handler: async (ctx) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return [];
+		let grants: Doc<"shareGrants">[];
+		try {
+			grants = await ctx.db
+				.query("shareGrants")
+				.withIndex("by_owner", (q) => q.eq("ownerUserId", identity.subject))
+				.collect();
+		} catch (e) {
+			// Index still backfilling on a fresh deploy → empty rather than throw.
+			if (e instanceof Error && e.message.includes("backfilling")) return [];
+			throw e;
+		}
+		const active = grants.filter(isActiveGrant);
+		const byConvo = new Map<
+			string,
+			{
+				conversationId: Id<"conversations">;
+				title: string;
+				grants: {
+					_id: Id<"shareGrants">;
+					role: "viewer" | "editor";
+					publicToken: string | null;
+					grantedToUserId: string | null;
+					createdAt: number;
+					lastAccessedAt: number | null;
+				}[];
+			}
+		>();
+		for (const g of active) {
+			const key = g.conversationId as string;
+			let entry = byConvo.get(key);
+			if (!entry) {
+				// Title needs the conversation; skip a grant whose conversation was
+				// deleted out from under it (stale grant).
+				const convo = await ctx.db.get(g.conversationId);
+				if (!convo || convo.userId !== identity.subject) continue;
+				entry = {
+					conversationId: g.conversationId,
+					title: convo.title,
+					grants: [],
+				};
+				byConvo.set(key, entry);
+			}
+			entry.grants.push({
+				_id: g._id,
+				role: g.role,
+				publicToken: g.publicToken ?? null,
+				grantedToUserId: g.grantedToUserId ?? null,
+				createdAt: g.createdAt,
+				lastAccessedAt: g.lastAccessedAt ?? null,
+			});
+		}
+		return [...byConvo.values()].sort(
+			(a, b) =>
+				Math.max(...b.grants.map((g) => g.createdAt)) -
+				Math.max(...a.grants.map((g) => g.createdAt)),
+		);
+	},
+});
+
 // ── Public: anonymous / shared viewing (NO identity gate) ───────────────
 
 /**
@@ -484,11 +558,13 @@ export const getSharedConversation = query({
 				sandboxId = harness.daytonaSandboxId;
 			}
 		}
+		const viewerIsOwner =
+			identity != null && convo.userId === identity.subject;
 		return {
 			conversationId: convo._id,
 			title: convo.title,
 			role: grant.role,
-			viewerIsOwner: identity != null && convo.userId === identity.subject,
+			viewerIsOwner,
 			// Author attribution (name + avatar only — never email).
 			ownerName: grant.ownerName ?? null,
 			ownerImageUrl: grant.ownerImageUrl ?? null,
@@ -497,6 +573,10 @@ export const getSharedConversation = query({
 			// Owner's Daytona sandbox id for the read-only file panel (signed-in
 			// editor only; null otherwise).
 			sandboxId,
+			// The conversation's workspace — only for the OWNER (their own convo),
+			// so the share page can route them to it in workspaces mode. null when
+			// the legacy convo has no workspace yet (the page adopts it into Default).
+			workspaceId: viewerIsOwner ? (convo.workspaceId ?? null) : null,
 		};
 	},
 });
@@ -560,6 +640,9 @@ export const forkSharedConversation = mutation({
 		token: v.string(),
 		upToMessageId: v.optional(v.id("messages")),
 		harnessId: v.optional(v.id("harnesses")),
+		// Which of the FORKER's workspaces to fork into (the sharee picks). When
+		// omitted, lands in their Default workspace so the fork always has a home.
+		workspaceId: v.optional(v.id("workspaces")),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -575,6 +658,18 @@ export const forkSharedConversation = mutation({
 			if (!harness || harness.userId !== identity.subject) {
 				throw new Error("Harness not found");
 			}
+		}
+
+		// Resolve the target workspace: the forker's chosen one (must be theirs),
+		// else their Default. The copy always lands in a workspace they own.
+		let workspaceId = args.workspaceId;
+		if (workspaceId) {
+			const workspace = await ctx.db.get(workspaceId);
+			if (!workspace || workspace.userId !== identity.subject) {
+				throw new Error("Workspace not found");
+			}
+		} else {
+			workspaceId = await getOrCreateDefaultWorkspace(ctx, identity.subject);
 		}
 
 		const allMessages = await ctx.db
@@ -595,6 +690,7 @@ export const forkSharedConversation = mutation({
 			title: source.title,
 			lastHarnessId: args.harnessId,
 			userId: identity.subject,
+			workspaceId,
 			lastMessageAt: Date.now(),
 			forkedFromConversationId: grant.conversationId,
 			forkedAtMessageCount: messagesToCopy.length,
@@ -609,19 +705,21 @@ export const forkSharedConversation = mutation({
 
 		for (const msg of messagesToCopy) {
 			// Drop the source owner's per-message token/cost accounting (`usage`)
-			// and workspace placement; re-stamp ownership to the forker so the
-			// copy is consistently theirs (the search index filters on userId).
+			// and workspace placement; re-stamp ownership + workspace to the forker
+			// so the copy is consistently theirs (search index filters on
+			// userId/workspaceId).
 			const {
 				_id,
 				_creationTime,
 				conversationId,
-				workspaceId,
+				workspaceId: _srcWorkspaceId,
 				usage,
 				...rest
 			} = msg;
 			await ctx.db.insert("messages", {
 				...rest,
 				userId: identity.subject,
+				workspaceId,
 				conversationId: newConvoId,
 			});
 		}

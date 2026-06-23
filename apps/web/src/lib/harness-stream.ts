@@ -22,9 +22,12 @@ export interface HarnessDocLike {
 		authToken?: string;
 	}>;
 	skills?: Array<{ name: string; description: string }>;
+	skillPackIds?: string[];
 	systemPrompt?: string;
 	agent?: string;
 	agentCredentialId?: string;
+	agentMode?: string;
+	reasoningEffort?: string;
 	sandboxConfig?: {
 		persistent: boolean;
 		autoStart: boolean;
@@ -40,6 +43,11 @@ export interface HarnessStreamOptions {
 	agentOverride?: string | null;
 	/** Resolved Daytona sandbox id, or null/undefined when none applies. */
 	sandboxId?: string | null;
+	/**
+	 * Active workspace id. Sent so the backend can resolve and inject this
+	 * workspace's assigned env-var credentials into the run's sandbox.
+	 */
+	workspaceId?: string | null;
 }
 
 export function buildHarnessStreamConfig(
@@ -57,10 +65,18 @@ export function buildHarnessStreamConfig(
 			auth_token: s.authToken,
 		})),
 		skills: harness.skills ?? [],
+		// Skill packs the backend resolves into the skill manifest (default loop)
+		// and into AGENTS.md / CLAUDE.md / ~/.claude/skills (agentic harnesses).
+		skill_pack_ids: harness.skillPackIds ?? [],
 		name: harness.name,
 		harness_id: harness._id,
 		system_prompt: harness.systemPrompt ?? undefined,
 		agent,
+		// Persisted ACP session defaults — seed the new session's mode/effort
+		// (the model rides the existing `model` field above). The gateway only
+		// applies a value the wrapper actually offers.
+		agent_mode: harness.agentMode ?? undefined,
+		reasoning_effort: harness.reasoningEffort ?? undefined,
 		// Only the harness's own credential may ride along — under a
 		// session-scope agent override the backend falls back to the user's
 		// newest credential for that agent instead.
@@ -68,6 +84,7 @@ export function buildHarnessStreamConfig(
 			agent && agent === harness.agent ? harness.agentCredentialId : undefined,
 		sandbox_enabled: Boolean(opts.sandboxId),
 		sandbox_id: opts.sandboxId ?? undefined,
+		workspace_id: opts.workspaceId ?? undefined,
 		sandbox_config: harness.sandboxConfig
 			? {
 					persistent: harness.sandboxConfig.persistent,

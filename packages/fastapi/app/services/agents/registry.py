@@ -27,21 +27,34 @@ CODEX_ACP_URL = (
 SANDBOX_HOME = "/home/daytona"
 SANDBOX_WORKSPACE = f"{SANDBOX_HOME}/workspace"
 
+# Marks skill-pack context that Harness writes (AGENTS.md / CLAUDE.md first
+# line; a `.harness-managed` file in each managed ~/.claude/skills/<slug> dir).
+# Lets a re-provision prune ONLY Harness-managed context — so removing a skill
+# or detaching a pack actually clears it from a persistent sandbox — while
+# leaving any user-authored files untouched.
+HARNESS_MANAGED_MARKER = "<!-- harness-managed: skill pack context -->"
+HARNESS_MANAGED_SKILL_FILE = ".harness-managed"
+
 
 @dataclass
 class AgentCredentials:
     """Materialized credentials for one agent run.
 
-    files: absolute path inside the sandbox → file content (replaced).
+    files: absolute path inside the sandbox → file content (replaced, chmod
+        600 — for secrets like ~/.codex/auth.json).
     json_merge_files: absolute path → top-level JSON keys merged into the
         existing file (ours win per key, other keys preserved) — for config
         files the user may also maintain, e.g. ~/.claude/settings.json in
         an attached persistent sandbox.
+    context_files: absolute path → content for NON-secret context written
+        world-readable (skill-pack AGENTS.md / CLAUDE.md, materialized
+        ~/.claude/skills/<name>/SKILL.md). Replaced on each provision.
     env:   extra environment variables for the agent process.
     """
 
     files: dict[str, str] = field(default_factory=dict)
     json_merge_files: dict[str, dict] = field(default_factory=dict)
+    context_files: dict[str, str] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
 
 
@@ -78,11 +91,19 @@ AGENT_REGISTRY: dict[str, AgentDefinition] = {
         # PATH lookup: npm global bin location depends on the node install
         # (/usr/bin with nodesource, /usr/local/bin with the official image).
         command=["claude-agent-acp"],
-        env={},
+        # IS_SANDBOX=1 unlocks the "bypassPermissions" mode. claude-agent-acp
+        # computes ALLOW_BYPASS = !IS_ROOT || !!process.env.IS_SANDBOX and only
+        # advertises/accepts bypassPermissions when it's true. Our Daytona
+        # sandboxes run the wrapper as ROOT, so without this flag the wrapper
+        # drops bypassPermissions from availableModes and set_config_option(
+        # mode, bypassPermissions) throws "Mode … not available" → JSON-RPC
+        # -32603. We ARE in an isolated, ephemeral, per-user sandbox, so the
+        # flag is accurate; it only ENABLES the option (default mode unchanged).
+        env={"IS_SANDBOX": "1"},
         port_offset=1,
         # Mirrors settings.claude_available_models (written to the
         # sandbox's ~/.claude/settings.json availableModels).
-        models=("claude-fable-5", "opus", "sonnet", "haiku"),
+        models=("claude-fable-5", "opus", "opus[1m]", "sonnet", "haiku"),
     ),
     "cursor": AgentDefinition(
         id="cursor",

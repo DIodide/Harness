@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/tanstack-react-start";
 import { convexQuery, useConvexMutation } from "@convex-dev/react-query";
 import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
@@ -15,22 +14,26 @@ import {
 	Check,
 	ChevronDown,
 	Cpu,
+	GripVertical,
 	MessageSquare,
 	PanelLeftClose,
 	PanelLeftOpen,
 	Pencil,
 	Plus,
 	Search, // Icon for search
-	Settings,
 	Share2,
-	SlidersHorizontal,
 	Sparkles,
 	Trash2,
 	Wrench,
 	X,
 } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+	AnimatePresence,
+	motion,
+	Reorder,
+	useDragControls,
+} from "motion/react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { countActiveAgents } from "../../components/chat/background-agents-panel";
 import { ChatInput } from "../../components/chat/chat-input";
@@ -43,6 +46,7 @@ import {
 	McpFailureBanner,
 	SandboxPanelToggle,
 } from "../../components/chat/chat-misc";
+import { ConversationRow } from "../../components/chat/conversation-row";
 import { SettingsDialog } from "../../components/chat/settings-dialog";
 import { ShareDialog } from "../../components/chat/share-dialog";
 import { useChatPaletteCommands } from "../../components/command-palette/commands/chat-commands";
@@ -51,6 +55,7 @@ import { useWorkspaceSwitchCommands } from "../../components/command-palette/com
 import { HarnessAgentBadge } from "../../components/harness-agent-badge";
 import { HarnessMark } from "../../components/harness-mark";
 import { HeaderSkillsMenu } from "../../components/header-skills-menu";
+import { ManageNavFooter } from "../../components/manage/manage-nav-footer";
 import {
 	type HealthStatus,
 	McpServerStatus,
@@ -74,7 +79,6 @@ import {
 	DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { Input } from "../../components/ui/input"; // reuse input from components
-import { ScrollArea } from "../../components/ui/scroll-area";
 import {
 	Select,
 	SelectContent,
@@ -89,9 +93,15 @@ import {
 	TooltipTrigger,
 } from "../../components/ui/tooltip";
 import { UsageDialog } from "../../components/usage-dialog";
-import { formatResetTime, UsageBadge } from "../../components/usage-display";
+import { formatResetTime } from "../../components/usage-display";
 import { WorkspaceColorPicker } from "../../components/workspace-color-picker";
-import { env } from "../../env";
+import { WorkspaceCredentialsField } from "../../components/workspace-credentials-field";
+import { useMcpHealthCheck } from "../../hooks/use-mcp-health-check";
+import { useMessageQueue } from "../../hooks/use-message-queue";
+import { usePersistInterruptedTurn } from "../../hooks/use-persist-interrupted-turn";
+import { useRecentChatRestore } from "../../hooks/use-recent-chat-restore";
+import { useRewind } from "../../hooks/use-rewind";
+import { useWorkspaceSelection } from "../../hooks/use-workspace-selection";
 import {
 	useModifierHeld,
 	useWorkspaceShortcuts,
@@ -113,16 +123,19 @@ import {
 } from "../../lib/sandbox-panel-context";
 import type { SkillEntry } from "../../lib/skills";
 import type { BudgetExceededInfo } from "../../lib/use-chat-stream";
-import { toPersistableParts } from "../../lib/use-chat-stream";
+import { useFollowStream } from "../../lib/use-follow-stream";
 import { cn } from "../../lib/utils";
 import { getWorkspaceColorHex } from "../../lib/workspace-colors";
 
 export const Route = createFileRoute("/workspaces/")({
 	validateSearch: (
 		search: Record<string, unknown>,
-	): { harnessId?: string; workspaceId?: string } => ({
+	): { harnessId?: string; workspaceId?: string; convoId?: string } => ({
 		harnessId: (search.harnessId as string) ?? undefined,
 		workspaceId: (search.workspaceId as string) ?? undefined,
+		// Deep-link a specific conversation (e.g. the owner opening their own
+		// share link) — opens it in its workspace.
+		convoId: (search.convoId as string) ?? undefined,
 	}),
 	beforeLoad: async ({ context }) => {
 		if (!context.userId) {
@@ -145,18 +158,16 @@ export const Route = createFileRoute("/workspaces/")({
 	component: ChatPage,
 });
 
-const FASTAPI_URL = env.VITE_FASTAPI_URL ?? "http://localhost:8000";
-
 type SandboxSelection = "harness" | "none" | Id<"sandboxes">;
 const NONE_OPTION = "__none__";
 
-const LAST_CHAT_RESTORE_WINDOW_MS = 8 * 60 * 60 * 1000;
-
 function ChatPage() {
 	const navigate = useNavigate();
-	const { getToken } = useAuth();
-	const { harnessId: initialHarnessId, workspaceId: initialWorkspaceId } =
-		Route.useSearch();
+	const {
+		harnessId: initialHarnessId,
+		workspaceId: initialWorkspaceId,
+		convoId: initialConvoId,
+	} = Route.useSearch();
 
 	const { data: harnesses, isLoading: harnessesLoading } = useQuery(
 		convexQuery(api.harnesses.list, {}),
@@ -177,10 +188,13 @@ function ChatPage() {
 		// auth-loading window too, and calling ensureDefault then throws
 		// "Unauthenticated" — which, with the fire-once ref, would wedge the
 		// page forever. Reset the ref on failure so a transient error can retry.
+		// Fire when there's no flagged Default yet — covers brand-new accounts AND
+		// existing accounts predating the isDefault flag (backfill). ensureDefault
+		// is idempotent; once it runs, list refreshes with the flag and this stops.
 		if (
 			convexAuthReady &&
 			workspaces &&
-			workspaces.length === 0 &&
+			!workspaces.some((w) => w.isDefault) &&
 			!ensuredDefaultRef.current
 		) {
 			ensuredDefaultRef.current = true;
@@ -201,21 +215,36 @@ function ChatPage() {
 
 	const [activeHarnessId, setActiveHarnessId] =
 		useState<Id<"harnesses"> | null>(null);
-	const [activeWorkspaceId, setActiveWorkspaceId] =
-		useState<Id<"workspaces"> | null>(null);
 	const [activeSandboxSelection, setActiveSandboxSelection] =
 		useState<SandboxSelection>("harness");
-	const [activeConvoId, setActiveConvoId] =
-		useState<Id<"conversations"> | null>(null);
+	// Workspace + conversation selection, with explicit precedence (URL deep-link
+	// > explicit selection > most-recent-chat restore) owned in one place.
+	const {
+		activeWorkspaceId,
+		activeConvoId,
+		activeWorkspace,
+		setActiveConvoId,
+		selectWorkspace,
+	} = useWorkspaceSelection({ workspaces, initialWorkspaceId, initialConvoId });
 	const { data: conversations } = useQuery(
 		convexQuery(
 			api.conversations.list,
 			activeWorkspaceId ? { workspaceId: activeWorkspaceId } : "skip",
 		),
 	);
-
-	const prevWorkspaceIdRef = useRef<Id<"workspaces"> | null>(null);
-	const pendingRestoreWorkspaceIdRef = useRef<Id<"workspaces"> | null>(null);
+	// Re-open the workspace's most-recent chat when nothing is open. cancelRestore
+	// lets an explicit "New chat" stop an armed-but-unapplied restore so a
+	// just-dismissed chat never silently reopens.
+	const { cancelRestore } = useRecentChatRestore({
+		activeWorkspaceId,
+		conversations,
+		activeConvoId,
+		onRestore: setActiveConvoId,
+	});
+	const startNewChat = useCallback(() => {
+		setActiveConvoId(null);
+		cancelRestore();
+	}, [setActiveConvoId, cancelRestore]);
 	// Session-only model override — does not persist to the harness
 	const [sessionModel, setSessionModel] = useState<string | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -234,8 +263,7 @@ function ChatPage() {
 	// Streaming state lives in the global provider so an in-flight stream
 	// survives navigation away from /workspaces (e.g. to /harnesses) and back.
 	const chatStream = useChatStreamContext();
-	const { streamStates, streamStatesRef, clearStreamState, setStreamState } =
-		chatStream;
+	const { streamStates, streamStatesRef, clearStreamState } = chatStream;
 
 	// MCP server failures reported during stream start
 	type McpFailure = {
@@ -246,11 +274,6 @@ function ChatPage() {
 	};
 	const [mcpFailures, setMcpFailures] = useState<McpFailure[]>([]);
 	const mcpFailureIdRef = useRef(0);
-
-	// MCP server health check statuses (keyed by server URL)
-	const [mcpHealthStatuses, setMcpHealthStatuses] = useState<
-		Record<string, HealthStatus>
-	>({});
 
 	// Track conversations that just finished streaming (show green checkmark briefly)
 	const [doneConvoIds, setDoneConvoIds] = useState<Set<string>>(new Set());
@@ -263,49 +286,23 @@ function ChatPage() {
 			activeConvoId ? { conversationId: activeConvoId } : "skip",
 		),
 	);
+	// Context-compaction records for the active conversation (observability +
+	// the clone-from-summary choice).
+	const { data: activeCompactions } = useQuery(
+		convexQuery(
+			api.compactions.listByConversation,
+			activeConvoId ? { conversationId: activeConvoId } : "skip",
+		),
+	);
 	const activeMessagesRef = useRef(activeMessages);
 	useEffect(() => {
 		activeMessagesRef.current = activeMessages;
 	}, [activeMessages]);
 
-	// Message queue state
-	type QueueItem = { id: number; content: string };
-	const [messageQueue, setMessageQueue] = useState<QueueItem[]>([]);
-	const messageQueueRef = useRef<QueueItem[]>([]);
-	const queueIdCounter = useRef(0);
-	const pendingQueueSendRef = useRef<{
-		convoId: string;
-		content: string;
-	} | null>(null);
-
-	const enqueueMessage = useCallback((content: string) => {
-		const item: QueueItem = { id: ++queueIdCounter.current, content };
-		messageQueueRef.current = [...messageQueueRef.current, item];
-		setMessageQueue([...messageQueueRef.current]);
-	}, []);
-
-	const dequeueMessage = useCallback((id: number) => {
-		// Key by stable id, not array index (the queue can auto-shift between
-		// render and click, which would otherwise remove the wrong item).
-		messageQueueRef.current = messageQueueRef.current.filter(
-			(it) => it.id !== id,
-		);
-		setMessageQueue([...messageQueueRef.current]);
-	}, []);
-
-	const shiftQueue = useCallback(() => {
-		const [next, ...rest] = messageQueueRef.current;
-		messageQueueRef.current = rest;
-		setMessageQueue(rest);
-		return next?.content;
-	}, []);
-
-	// Clear queue and MCP failures on conversation switch
-	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally resets queue when active conversation changes
+	// Clear MCP failure banners on conversation switch (the message queue clears
+	// its own state — see useMessageQueue).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally resets on active conversation change
 	useEffect(() => {
-		messageQueueRef.current = [];
-		setMessageQueue([]);
-		pendingQueueSendRef.current = null;
 		setMcpFailures([]);
 	}, [activeConvoId]);
 
@@ -313,79 +310,17 @@ function ChatPage() {
 		mutationFn: useConvexMutation(api.harnesses.update),
 	});
 
-	// Save interrupted assistant message from frontend
-	const saveInterruptedMsg = useMutation({
-		mutationFn: useConvexMutation(api.messages.saveInterruptedMessage),
-	});
-
 	// Save user message (used for queue processing)
 	const sendMessageFromQueue = useMutation({
 		mutationFn: useConvexMutation(api.messages.send),
 	});
 
-	// Persist a turn that ended without a clean "done" — a user Stop (onAbort)
-	// OR an agent connection drop that surfaces as onError — so the
-	// streamed-so-far content isn't lost. No-op if onDone already saved it.
-	const persistInterruptedTurn = (convoId: string) => {
-		const state = streamStatesRef.current[convoId];
-		if (state?.pendingDoneContent != null) return; // onDone already saved
-		if (
-			!state ||
-			(!state.content && !state.reasoning && state.toolCalls.length === 0)
-		) {
-			clearStreamState(convoId);
-			return;
-		}
-		const completedToolCalls = state.toolCalls.filter(
-			(tc) => tc.result,
-		) as Array<{
-			tool: string;
-			arguments: Record<string, unknown>;
-			call_id: string;
-			result: string;
-		}>;
-		const cleanedParts = state.parts.filter(
-			(p) => p.type !== "tool_call" || p.result,
-		);
-		const partialContent = state.content ?? "";
-		const model = state.model ?? sessionModel ?? activeHarness?.model ?? null;
-		saveInterruptedMsg.mutate(
-			{
-				conversationId: convoId as Id<"conversations">,
-				content: partialContent,
-				...(state.reasoning ? { reasoning: state.reasoning } : {}),
-				...(completedToolCalls.length > 0
-					? { toolCalls: completedToolCalls }
-					: {}),
-				...(cleanedParts.length > 0
-					? { parts: toPersistableParts(cleanedParts) }
-					: {}),
-				...(state.usage ? { usage: state.usage } : {}),
-				...(model ? { model } : {}),
-			},
-			{
-				// If the write fails, clear the bubble so it doesn't wedge.
-				onError: () => {
-					clearStreamState(convoId);
-					toast.error("Couldn't save the interrupted response.");
-				},
-			},
-		);
-		setStreamState(convoId, () => ({
-			...state,
-			toolCalls: completedToolCalls,
-			parts: cleanedParts,
-			pendingDoneContent: partialContent,
-			model,
-		}));
-	};
-
-	const drainQueueAfterTurn = (convoId: string) => {
-		if (!pendingQueueSendRef.current && messageQueueRef.current.length > 0) {
-			const next = shiftQueue();
-			if (next) pendingQueueSendRef.current = { convoId, content: next };
-		}
-	};
+	// Persist a turn that ended without a clean "done" (Stop / connection drop)
+	// so the streamed-so-far content isn't lost. The model only arrives in
+	// "done", so supply the fallback (session → harness) the hook should use.
+	const { persistInterruptedTurn } = usePersistInterruptedTurn(
+		() => sessionModel ?? activeHarness?.model ?? null,
+	);
 
 	useChatStreamSideEffects({
 		onMcpError: (_convoId, event) => {
@@ -420,64 +355,6 @@ function ChatPage() {
 		},
 	});
 
-	// When the active workspace changes, queue a one-shot attempt to restore the
-	// workspace's most-recent chat (if touched within LAST_CHAT_RESTORE_WINDOW_MS).
-	// Tracked via a ref so nulling activeConvoId on "New chat" doesn't re-trigger.
-	useEffect(() => {
-		if (prevWorkspaceIdRef.current === activeWorkspaceId) return;
-		prevWorkspaceIdRef.current = activeWorkspaceId;
-		pendingRestoreWorkspaceIdRef.current = activeWorkspaceId;
-	}, [activeWorkspaceId]);
-
-	useEffect(() => {
-		const pending = pendingRestoreWorkspaceIdRef.current;
-		if (!pending || pending !== activeWorkspaceId) return;
-		if (!conversations) return;
-		if (activeConvoId) {
-			pendingRestoreWorkspaceIdRef.current = null;
-			return;
-		}
-		pendingRestoreWorkspaceIdRef.current = null;
-		const cutoff = Date.now() - LAST_CHAT_RESTORE_WINDOW_MS;
-		const mostRecent = conversations.find(
-			(c) =>
-				!(c as Record<string, unknown>).editParentConversationId &&
-				c.lastMessageAt >= cutoff,
-		);
-		if (mostRecent) {
-			setActiveConvoId(mostRecent._id);
-		}
-	}, [activeWorkspaceId, conversations, activeConvoId]);
-
-	useEffect(() => {
-		if (!workspaces || workspaces.length === 0) {
-			setActiveWorkspaceId(null);
-			setActiveConvoId(null);
-			return;
-		}
-
-		if (
-			activeWorkspaceId &&
-			workspaces.some((workspace) => workspace._id === activeWorkspaceId)
-		) {
-			return;
-		}
-
-		if (
-			initialWorkspaceId &&
-			workspaces.some((workspace) => workspace._id === initialWorkspaceId)
-		) {
-			setActiveWorkspaceId(initialWorkspaceId as Id<"workspaces">);
-			return;
-		}
-
-		setActiveWorkspaceId(workspaces[0]._id);
-	}, [workspaces, activeWorkspaceId, initialWorkspaceId]);
-
-	const activeWorkspace = workspaces?.find(
-		(workspace) => workspace._id === activeWorkspaceId,
-	);
-
 	useEffect(() => {
 		if (!activeWorkspace) {
 			if (!initialHarnessId && harnesses?.length) {
@@ -494,12 +371,24 @@ function ChatPage() {
 			setActiveHarnessId(null);
 		}
 		setActiveSandboxSelection(activeWorkspace.sandboxId ?? "none");
+	}, [activeWorkspace, harnesses, initialHarnessId]);
+
+	// Mirror the active workspace AND conversation into the URL (merging, so other
+	// params like harnessId survive) so a refresh/bookmark reopens exactly what's
+	// on screen — deep links from the share page (workspaceId + convoId) depend on
+	// the convoId staying in the URL.
+	useEffect(() => {
+		if (!activeWorkspaceId) return;
 		navigate({
 			to: "/workspaces",
-			search: { workspaceId: activeWorkspace._id },
+			search: (prev) => ({
+				...prev,
+				workspaceId: activeWorkspaceId,
+				convoId: activeConvoId ?? undefined,
+			}),
 			replace: true,
 		});
-	}, [activeWorkspace, harnesses, initialHarnessId, navigate]);
+	}, [activeWorkspaceId, activeConvoId, navigate]);
 
 	// Reset session model whenever the active harness or conversation changes
 	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on harness/conversation switch
@@ -546,21 +435,6 @@ function ChatPage() {
 
 		prevStreamingRef.current = new Set(curr);
 	}, [chatStream.streamingConvoIds]);
-
-	const handleStreamSynced = useCallback(
-		(convoId: string) => {
-			clearStreamState(convoId);
-
-			// Process next queued message now that Convex has synced
-			if (messageQueueRef.current.length > 0) {
-				const next = shiftQueue();
-				if (next) {
-					pendingQueueSendRef.current = { convoId, content: next };
-				}
-			}
-		},
-		[clearStreamState, shiftQueue],
-	);
 
 	const activeHarness = harnesses?.find((h) => h._id === activeHarnessId);
 	const selectedSandbox =
@@ -626,112 +500,16 @@ function ChatPage() {
 		return buildHarnessStreamConfig(activeHarness, {
 			model: sessionModel,
 			sandboxId: effectiveSandboxDaytonaId,
+			workspaceId: activeWorkspaceId,
 		});
-	}, [activeHarness, effectiveSandboxDaytonaId, sessionModel]);
+	}, [
+		activeHarness,
+		activeWorkspaceId,
+		effectiveSandboxDaytonaId,
+		sessionModel,
+	]);
 
-	// Health-check MCP servers when harness changes, or on-demand via refreshHealth.
-	const healthCheckRunRef = useRef<{ cancel: () => void } | null>(null);
-	const runHealthCheck = useCallback(
-		(
-			servers: Array<{
-				name: string;
-				url: string;
-				authType: McpAuthType;
-				authToken?: string;
-			}>,
-		) => {
-			healthCheckRunRef.current?.cancel();
-
-			if (servers.length === 0) {
-				setMcpHealthStatuses({});
-				return;
-			}
-
-			// Mark unknown URLs as checking; preserve already-known statuses so
-			// previously-healthy servers don't flash to "Checking…" during a
-			// refresh triggered by adding/removing a server.
-			setMcpHealthStatuses((prev) => {
-				const next: Record<string, HealthStatus> = {};
-				for (const s of servers) {
-					next[s.url] = prev[s.url] ?? "checking";
-				}
-				return next;
-			});
-
-			let cancelled = false;
-			const run = async () => {
-				try {
-					const token = await getToken();
-					const res = await fetch(`${FASTAPI_URL}/api/mcp/health/check`, {
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							...(token ? { Authorization: `Bearer ${token}` } : {}),
-						},
-						body: JSON.stringify({
-							mcp_servers: servers.map((s) => ({
-								name: s.name,
-								url: s.url,
-								auth_type: s.authType,
-								...(s.authToken ? { auth_token: s.authToken } : {}),
-							})),
-							force: true,
-						}),
-					});
-					if (cancelled) return;
-					if (!res.ok) {
-						const fallback: Record<string, HealthStatus> = {};
-						for (const s of servers) fallback[s.url] = "unreachable";
-						setMcpHealthStatuses(fallback);
-						return;
-					}
-					const data = await res.json();
-					if (cancelled) return;
-					const statuses: Record<string, HealthStatus> = {};
-					for (const server of data.servers) {
-						if (server.status === "ok") statuses[server.url] = "reachable";
-						else if (server.status === "auth_required")
-							statuses[server.url] = "auth_required";
-						else statuses[server.url] = "unreachable";
-					}
-					setMcpHealthStatuses(statuses);
-				} catch {
-					if (cancelled) return;
-					const fallback: Record<string, HealthStatus> = {};
-					for (const s of servers) fallback[s.url] = "unreachable";
-					setMcpHealthStatuses(fallback);
-				}
-			};
-
-			run();
-			healthCheckRunRef.current = {
-				cancel: () => {
-					cancelled = true;
-				},
-			};
-		},
-		[getToken],
-	);
-
-	const refreshHealth = useCallback(() => {
-		if (activeHarness) runHealthCheck(activeHarness.mcpServers);
-	}, [activeHarness, runHealthCheck]);
-
-	// Re-run when the harness or its set of MCP server URLs changes. The URL
-	// key catches inline adds/removes from the header tooltip without making
-	// every harness-doc edit (name, model, etc.) trigger a health re-check.
-	const mcpUrlKey = activeHarness?.mcpServers.map((s) => s.url).join("|") ?? "";
-	// biome-ignore lint/correctness/useExhaustiveDependencies: deps are id + url-set; runHealthCheck is stable
-	useEffect(() => {
-		if (!activeHarness) {
-			setMcpHealthStatuses({});
-			return;
-		}
-		runHealthCheck(activeHarness.mcpServers);
-		return () => {
-			healthCheckRunRef.current?.cancel();
-		};
-	}, [activeHarness?._id, mcpUrlKey]);
+	const { mcpHealthStatuses, refreshHealth } = useMcpHealthCheck(activeHarness);
 
 	const handleInterrupt = useCallback(
 		(convoId: string) => {
@@ -770,51 +548,33 @@ function ChatPage() {
 		[activeHarness, chatStream, sendMessageFromQueue, buildHarnessConfig],
 	);
 
-	const handleSendNow = useCallback(
-		(id: number) => {
-			if (!activeConvoId) return;
-			const item = messageQueueRef.current.find((it) => it.id === id);
-			if (!item) return;
-			messageQueueRef.current = messageQueueRef.current.filter(
-				(it) => it.id !== id,
-			);
-			setMessageQueue([...messageQueueRef.current]);
-			if (chatStream.streamingConvoIds.has(activeConvoId)) {
-				pendingQueueSendRef.current = {
-					convoId: activeConvoId,
-					content: item.content,
-				};
-				chatStream.cancel(activeConvoId);
-			} else {
-				void sendQueuedMessage(activeConvoId, item.content);
-			}
+	const {
+		messageQueue,
+		enqueueMessage,
+		dequeueMessage,
+		handleSendNow,
+		drainQueueAfterTurn,
+		processQueuedAfterSync,
+	} = useMessageQueue({ activeConvoId, activeHarness, sendQueuedMessage });
+
+	const handleStreamSynced = useCallback(
+		(convoId: string) => {
+			clearStreamState(convoId);
+			processQueuedAfterSync(convoId);
 		},
-		[activeConvoId, chatStream, sendQueuedMessage],
+		[clearStreamState, processQueuedAfterSync],
 	);
-
-	// Process pending queued messages after stream ends
-	useEffect(() => {
-		const pending = pendingQueueSendRef.current;
-		if (!pending || !activeHarness) return;
-
-		const convoId = pending.convoId;
-		// Wait until the conversation is no longer streaming
-		if (chatStream.streamingConvoIds.has(convoId)) return;
-
-		pendingQueueSendRef.current = null;
-		void sendQueuedMessage(convoId, pending.content);
-	}, [chatStream.streamingConvoIds, activeHarness, sendQueuedMessage]);
 
 	const handleSelectConversation = useCallback(
 		(convoId: Id<"conversations"> | null) => {
+			// "New chat" (null) cancels any armed restore so it stays empty.
+			if (!convoId) {
+				startNewChat();
+				return;
+			}
 			setActiveConvoId(convoId);
 
-			if (
-				convoId &&
-				userSettings?.autoSwitchHarness &&
-				conversations &&
-				harnesses
-			) {
+			if (userSettings?.autoSwitchHarness && conversations && harnesses) {
 				const convo = conversations.find((c) => c._id === convoId);
 				if (
 					convo?.lastHarnessId &&
@@ -824,7 +584,35 @@ function ChatPage() {
 				}
 			}
 		},
-		[userSettings, conversations, harnesses],
+		[userSettings, conversations, harnesses, startNewChat, setActiveConvoId],
+	);
+
+	// "New session from summary": clone a fresh conversation seeded with a
+	// compaction summary, then open it.
+	const [isStartingClone, setIsStartingClone] = useState(false);
+	const cloneFromCompaction = useMutation({
+		mutationFn: useConvexMutation(api.compactions.cloneFromCompaction),
+	});
+	const handleStartFromSummary = useCallback(
+		async (compactionId: string) => {
+			setIsStartingClone(true);
+			try {
+				const newId = await cloneFromCompaction.mutateAsync({
+					compactionId: compactionId as Id<"compactions">,
+					harnessId: activeHarnessId ?? undefined,
+				});
+				handleSelectConversation(newId as Id<"conversations">);
+			} catch (error) {
+				toast.error(
+					error instanceof Error
+						? error.message
+						: "Could not start session from summary",
+				);
+			} finally {
+				setIsStartingClone(false);
+			}
+		},
+		[cloneFromCompaction, activeHarnessId, handleSelectConversation],
 	);
 
 	// State handlers for searching
@@ -879,21 +667,10 @@ function ChatPage() {
 		],
 	);
 
-	const forkConversation = useMutation({
-		mutationFn: useConvexMutation(api.conversations.fork),
-	});
-
-	const handleFork = useCallback(
-		async (messageId: Id<"messages">) => {
-			if (!activeConvoId) return;
-			const newConvoId = await forkConversation.mutateAsync({
-				conversationId: activeConvoId,
-				upToMessageId: messageId,
-			});
-			handleSelectConversation(newConvoId);
-		},
-		[activeConvoId, forkConversation, handleSelectConversation],
-	);
+	// Fork-at-message ("Fork" on an assistant message + "Rewind & fork" on a
+	// user message) and in-place rewind, shared with the /chat route.
+	const { handleRewind, forkAtMessage, handleRewindToPart, forkAtPart } =
+		useRewind(activeConvoId, handleSelectConversation);
 
 	const editForkAndSend = useMutation({
 		mutationFn: useConvexMutation(api.conversations.editForkAndSend),
@@ -972,12 +749,24 @@ function ChatPage() {
 			: false,
 		canStartNewConversation: Boolean(activeWorkspace),
 		sidebarOpen,
-		onNewConversation: () => setActiveConvoId(null),
+		onNewConversation: startNewChat,
 		onCancelStream: () => {
 			if (activeConvoId) handleInterrupt(activeConvoId);
 		},
 		onToggleSidebar: () => setSidebarOpen((v) => !v),
 	});
+
+	// Hooks must run unconditionally — keep these ABOVE the early return.
+	const isLocalActiveStreaming = activeConvoId
+		? chatStream.streamingConvoIds.has(activeConvoId)
+		: false;
+	// When THIS tab isn't driving the active conversation's turn (another tab or
+	// a sharee is), follow the live token feed so it streams down here too.
+	const { followState: ownerFollow, clearFollow: clearOwnerFollow } =
+		useFollowStream({
+			conversationId: activeConvoId ?? null,
+			enabled: !!activeConvoId && !isLocalActiveStreaming,
+		});
 
 	if (harnessesLoading || !harnesses || harnesses.length === 0) {
 		return <ChatSkeleton />;
@@ -985,12 +774,13 @@ function ChatPage() {
 	const activeConversation = conversations?.find(
 		(c) => c._id === activeConvoId,
 	);
-	const activeStreamState = activeConvoId
+	const localActiveStreamState = activeConvoId
 		? (streamStates[activeConvoId] ?? EMPTY_STREAM_STATE)
 		: EMPTY_STREAM_STATE;
-	const isActiveConvoStreaming = activeConvoId
-		? chatStream.streamingConvoIds.has(activeConvoId)
-		: false;
+	// Prefer the follow feed; else local — covers our own turn AND the post-done
+	// handoff window before the persisted row syncs.
+	const activeStreamState = ownerFollow ?? localActiveStreamState;
+	const isActiveConvoStreaming = isLocalActiveStreaming || ownerFollow != null;
 	const agentActivityCount = countActiveAgents(
 		activeStreamState.parts,
 		isActiveConvoStreaming,
@@ -1017,10 +807,7 @@ function ChatPage() {
 								harnesses={harnesses ?? []}
 								sandboxes={sandboxes ?? []}
 								activeWorkspaceId={activeWorkspaceId}
-								onSelectWorkspace={(workspaceId) => {
-									setActiveWorkspaceId(workspaceId);
-									setActiveConvoId(null);
-								}}
+								onSelectWorkspace={selectWorkspace}
 								conversations={(conversations ?? []).filter(
 									(c) =>
 										!(c as Record<string, unknown>).editParentConversationId,
@@ -1120,12 +907,20 @@ function ChatPage() {
 							agentStatus={activeStreamState.agentStatus}
 							streamPlan={activeStreamState.plan}
 							agentUsage={activeStreamState.agentUsage}
-							onStreamSynced={handleStreamSynced}
+							onStreamSynced={(cid) => {
+								handleStreamSynced(cid);
+								clearOwnerFollow();
+							}}
 							displayMode={
 								(userSettings?.displayMode as DisplayMode) ?? "standard"
 							}
 							onRegenerate={handleRegenerate}
-							onFork={handleFork}
+							onFork={forkAtMessage}
+							onRewind={handleRewind}
+							onRewindFork={forkAtMessage}
+							onRewindToPart={handleRewindToPart}
+							onForkToPart={forkAtPart}
+							seamsEnabled={userSettings?.rewindSeams ?? true}
 							onStartEditPrompt={handleStartEditPrompt}
 							onCancelEditPrompt={handleCancelEditPrompt}
 							onSaveEditPrompt={handleSaveEditPrompt}
@@ -1150,6 +945,9 @@ function ChatPage() {
 							isStreaming={isActiveConvoStreaming}
 							scrollToMessageId={scrollToMessageId}
 							onClearScrollTarget={() => setScrollToMessageId(null)}
+							compactions={activeCompactions ?? []}
+							onStartFromSummary={handleStartFromSummary}
+							isStartingClone={isStartingClone}
 						/>
 					) : (
 						<EmptyChat
@@ -1220,6 +1018,177 @@ function ChatPage() {
 	);
 }
 
+/**
+ * One draggable workspace row in the sidebar. Drag is handle-initiated (the grip)
+ * via useDragControls + dragListener={false}, so the row body stays clickable for
+ * selecting the workspace. Memoized so a drag swap only re-renders the rows whose
+ * props (index/active) actually changed, keeping the gesture at frame rate.
+ */
+const WorkspaceRow = memo(function WorkspaceRow({
+	workspace,
+	index,
+	isActive,
+	harnessName,
+	sandboxName,
+	isMac,
+	modifierHeld,
+	onSelect,
+	onEdit,
+	onDragStart,
+	onDragEnd,
+	onMove,
+}: {
+	workspace: {
+		_id: Id<"workspaces">;
+		name: string;
+		harnessId?: Id<"harnesses">;
+		sandboxId?: Id<"sandboxes">;
+		color?: string;
+		isDefault?: boolean;
+	};
+	index: number;
+	isActive: boolean;
+	harnessName: string;
+	sandboxName: string;
+	isMac: boolean;
+	modifierHeld: boolean;
+	onSelect: (id: Id<"workspaces">) => void;
+	onEdit: (workspace: {
+		_id: Id<"workspaces">;
+		name: string;
+		harnessId?: Id<"harnesses">;
+		sandboxId?: Id<"sandboxes">;
+		color?: string;
+	}) => void;
+	onDragStart: () => void;
+	onDragEnd: () => void;
+	onMove: (id: Id<"workspaces">, dir: -1 | 1) => void;
+}) {
+	const controls = useDragControls();
+	const colorHex = getWorkspaceColorHex(workspace.color);
+	const hasShortcut = index < 9;
+	const shortcutDigit = index + 1;
+	return (
+		<Reorder.Item
+			value={workspace._id}
+			dragListener={false}
+			dragControls={controls}
+			onDragStart={onDragStart}
+			onDragEnd={onDragEnd}
+			// Glue the row to the cursor (no rubber-band / momentum) and settle the
+			// sibling reshuffle + drop crisply. NB: the className uses
+			// `transition-colors`, never `transition-all` — a CSS transition on
+			// `transform` would fight motion's per-frame drag transform and make the
+			// drag visibly lag the pointer.
+			dragElastic={0}
+			dragMomentum={false}
+			transition={{ type: "spring", stiffness: 600, damping: 40, mass: 0.6 }}
+			whileDrag={{ scale: 1.02, boxShadow: "0 4px 12px rgba(0,0,0,0.18)" }}
+			as="div"
+			// select-none (not touch-none) on the row: touch-none here would
+			// suppress touch panning of the whole list; the grip handle carries
+			// touch-none so the drag gesture itself doesn't scroll-fight.
+			className={cn(
+				"group relative flex select-none items-stretch rounded-md transition-colors",
+				colorHex
+					? "hover:brightness-95"
+					: isActive
+						? "bg-muted"
+						: "hover:bg-muted/50",
+				isActive && colorHex && "ring-2 ring-inset ring-foreground/40",
+			)}
+			style={colorHex ? { backgroundColor: colorHex } : undefined}
+		>
+			<button
+				type="button"
+				aria-label={`Reorder ${workspace.name} (drag, or use arrow keys)`}
+				// No preventDefault here — it would block the grip from focusing on
+				// click, breaking click-then-arrow keyboard reordering; select-none on
+				// the row already prevents text selection during a drag.
+				onPointerDown={(event) => controls.start(event)}
+				onKeyDown={(event) => {
+					// Ignore auto-repeat so holding the key doesn't fire a mutation per
+					// tick; one discrete press = one move.
+					if (event.repeat) return;
+					if (event.key === "ArrowUp") {
+						event.preventDefault();
+						onMove(workspace._id, -1);
+					} else if (event.key === "ArrowDown") {
+						event.preventDefault();
+						onMove(workspace._id, 1);
+					}
+				}}
+				className={cn(
+					"flex shrink-0 cursor-grab touch-none items-center pl-1 active:cursor-grabbing",
+					colorHex
+						? "text-foreground/40 hover:text-foreground/70"
+						: "text-muted-foreground/40 hover:text-muted-foreground",
+				)}
+			>
+				<GripVertical size={12} />
+			</button>
+			<button
+				type="button"
+				onClick={() => onSelect(workspace._id)}
+				aria-keyshortcuts={
+					hasShortcut ? ariaKeyShortcut(shortcutDigit, isMac) : undefined
+				}
+				title={
+					hasShortcut
+						? `${workspace.name} — ${formatShortcut(shortcutDigit, isMac)}`
+						: workspace.name
+				}
+				className={cn(
+					"flex min-w-0 flex-1 items-start gap-2 py-2 pl-1 pr-8 text-left",
+					colorHex
+						? "text-foreground"
+						: isActive
+							? "text-foreground"
+							: "text-muted-foreground group-hover:text-foreground",
+				)}
+			>
+				<span className="min-w-0 flex-1">
+					<span className="block truncate text-xs font-medium">
+						{workspace.name}
+					</span>
+					<span
+						className={cn(
+							"block truncate text-[10px]",
+							colorHex ? "text-foreground/60" : "text-muted-foreground",
+						)}
+					>
+						{harnessName} / {sandboxName}
+					</span>
+				</span>
+			</button>
+			{modifierHeld && hasShortcut && (
+				<span
+					aria-hidden="true"
+					className="pointer-events-none absolute right-1 top-1 rounded-sm bg-background/85 px-1 py-0.5 font-mono text-[9px] leading-none text-muted-foreground ring-1 ring-border/60 backdrop-blur-sm transition-opacity group-hover:opacity-0"
+				>
+					{formatShortcut(shortcutDigit, isMac)}
+				</span>
+			)}
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button
+						variant="ghost"
+						size="icon-xs"
+						className="absolute right-1 top-1.5 opacity-0 group-hover:opacity-100"
+						onClick={(event) => {
+							event.stopPropagation();
+							onEdit(workspace);
+						}}
+					>
+						<Pencil size={10} />
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent>Edit workspace</TooltipContent>
+			</Tooltip>
+		</Reorder.Item>
+	);
+});
+
 function WorkspaceSidebar({
 	workspaces,
 	harnesses,
@@ -1244,6 +1213,7 @@ function WorkspaceSidebar({
 		harnessId?: Id<"harnesses">;
 		sandboxId?: Id<"sandboxes">;
 		color?: string;
+		isDefault?: boolean;
 	}>;
 	harnesses: Array<{
 		_id: Id<"harnesses">;
@@ -1264,6 +1234,8 @@ function WorkspaceSidebar({
 		title: string;
 		lastMessageAt: number;
 		lastHarnessId?: Id<"harnesses">;
+		workspaceId?: Id<"workspaces">;
+		pinnedAt?: number;
 	}>;
 	activeConvoId: Id<"conversations"> | null;
 	onSelect: (id: Id<"conversations"> | null) => void;
@@ -1279,12 +1251,6 @@ function WorkspaceSidebar({
 	onPendingEditConsumed?: () => void;
 	pendingCreateWorkspace?: number;
 }) {
-	const removeConvo = useMutation({
-		mutationFn: useConvexMutation(api.conversations.remove),
-		onSuccess: () => {
-			if (activeConvoId) onSelect(null);
-		},
-	});
 	const createWorkspace = useMutation({
 		mutationFn: useConvexMutation(api.workspaces.create),
 		onSuccess: (workspaceId) => {
@@ -1304,10 +1270,92 @@ function WorkspaceSidebar({
 			setRenameWorkspaceColor(null);
 		},
 	});
+	// Local sidebar order for optimistic drag-and-drop.
+	const [orderedIds, setOrderedIds] = useState<Id<"workspaces">[]>(() =>
+		workspaces.map((w) => w._id),
+	);
+	// True while a drag gesture is in progress (between Reorder.Item onDragStart
+	// and onDragEnd) — used to gate the server resync below.
+	const isDraggingRef = useRef(false);
+
+	const reorderWorkspaces = useMutation({
+		mutationFn: useConvexMutation(api.workspaces.reorder),
+		onError: () => {
+			// Revert to the server order on a failed save.
+			setOrderedIds(workspaces.map((w) => w._id));
+			toast.error("Couldn't save the new workspace order.");
+		},
+	});
+
+	// Adopt the server order whenever idle — no active drag and no pending save —
+	// so a reorder from another tab/device is picked up, membership changes
+	// apply, and a failed save reverts. While dragging or saving, the optimistic
+	// local order is authoritative and must not be clobbered.
+	useEffect(() => {
+		if (isDraggingRef.current || reorderWorkspaces.isPending) return;
+		const serverIds = workspaces.map((w) => w._id);
+		setOrderedIds((prev) =>
+			prev.length === serverIds.length &&
+			prev.every((id, i) => id === serverIds[i])
+				? prev
+				: serverIds,
+		);
+	}, [workspaces, reorderWorkspaces.isPending]);
+
+	const orderedWorkspaces = useMemo(() => {
+		const byId = new Map(workspaces.map((w) => [w._id, w]));
+		return orderedIds
+			.map((id) => byId.get(id))
+			.filter((w): w is (typeof workspaces)[number] => w != null);
+	}, [orderedIds, workspaces]);
+	// Feed Reorder.Group exactly the ids it renders (the filtered set), so its
+	// tracked values can't disagree with the rendered items on a membership change.
+	const renderedIds = useMemo(
+		() => orderedWorkspaces.map((w) => w._id),
+		[orderedWorkspaces],
+	);
+	const renderedIdsRef = useRef(renderedIds);
+	renderedIdsRef.current = renderedIds;
+	const serverIdsRef = useRef<Id<"workspaces">[]>([]);
+	serverIdsRef.current = workspaces.map((w) => w._id);
+
+	// onReorder fires on every swap during a drag — update the live UI only.
+	const handleReorderWorkspaces = useCallback((newIds: Id<"workspaces">[]) => {
+		setOrderedIds(newIds);
+	}, []);
+	const handleDragStart = useCallback(() => {
+		isDraggingRef.current = true;
+	}, []);
+	// Persist ONCE, on drop, with the final order (not on every intermediate
+	// swap) — and skip the write entirely when the drop didn't change anything
+	// (e.g. a jittery grip click that registers as a tiny drag).
+	const handleDragEnd = useCallback(() => {
+		isDraggingRef.current = false;
+		const next = renderedIdsRef.current;
+		const server = serverIdsRef.current;
+		const unchanged =
+			next.length === server.length && next.every((id, i) => id === server[i]);
+		if (unchanged) return;
+		reorderWorkspaces.mutate({ orderedIds: next });
+	}, [reorderWorkspaces]);
+	// Keyboard reordering (grip focused): move a workspace one step and persist.
+	const moveWorkspace = useCallback(
+		(id: Id<"workspaces">, dir: -1 | 1) => {
+			const cur = renderedIdsRef.current;
+			const i = cur.indexOf(id);
+			const j = i + dir;
+			if (i < 0 || j < 0 || j >= cur.length) return;
+			const next = [...cur];
+			[next[i], next[j]] = [next[j], next[i]];
+			setOrderedIds(next);
+			reorderWorkspaces.mutate({ orderedIds: next });
+		},
+		[reorderWorkspaces],
+	);
 
 	const isMac = useIsMac();
-	useWorkspaceShortcuts(workspaces, onSelectWorkspace, isMac);
-	useWorkspaceSwitchCommands(workspaces, onSelectWorkspace, isMac);
+	useWorkspaceShortcuts(orderedWorkspaces, onSelectWorkspace, isMac);
+	useWorkspaceSwitchCommands(orderedWorkspaces, onSelectWorkspace, isMac);
 	const modifierHeld = useModifierHeld(isMac);
 
 	const handleNew = () => {
@@ -1361,7 +1409,34 @@ function WorkspaceSidebar({
 		),
 	});
 
-	const grouped = groupByDate(conversations);
+	const pinned = conversations.filter((c) => c.pinnedAt != null);
+	const grouped = groupByDate(conversations.filter((c) => c.pinnedAt == null));
+
+	const [shareTarget, setShareTarget] = useState<Id<"conversations"> | null>(
+		null,
+	);
+	const renderRow = (convo: (typeof conversations)[number]) => (
+		<ConversationRow
+			key={convo._id}
+			convo={convo}
+			workspaces={workspaces}
+			active={activeConvoId === convo._id}
+			streaming={streamingConvoIds.has(convo._id)}
+			done={doneConvoIds.has(convo._id)}
+			onSelect={(id) => onSelect(id)}
+			onForked={(id) => onSelect(id)}
+			onRequestShare={(id) => setShareTarget(id)}
+			onDeleted={() => {
+				if (activeConvoId === convo._id) onSelect(null);
+			}}
+			onMoved={() => {
+				// In a workspace-scoped view, a moved chat leaves the current list
+				// (same-workspace moves are guarded out) — deselect so we don't
+				// strand an orphaned open pane.
+				if (activeConvoId === convo._id) onSelect(null);
+			}}
+		/>
+	);
 
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [usageOpen, setUsageOpen] = useState(false);
@@ -1431,20 +1506,25 @@ function WorkspaceSidebar({
 		});
 	};
 
-	const startRenameWorkspace = (workspace: {
-		_id: Id<"workspaces">;
-		name: string;
-		harnessId?: Id<"harnesses">;
-		sandboxId?: Id<"sandboxes">;
-		color?: string;
-	}) => {
-		setRenameWorkspace(workspace);
-		setRenameWorkspaceName(workspace.name);
-		setRenameWorkspaceHarnessId(workspace.harnessId ?? null);
-		setRenameWorkspaceSandboxId(workspace.sandboxId ?? null);
-		setRenameWorkspaceColor(workspace.color ?? null);
-		setConfirmDeleteWorkspace(false);
-	};
+	// Stable so memoized WorkspaceRow rows don't re-render every time the sidebar
+	// re-renders (e.g. on every drag swap).
+	const startRenameWorkspace = useCallback(
+		(workspace: {
+			_id: Id<"workspaces">;
+			name: string;
+			harnessId?: Id<"harnesses">;
+			sandboxId?: Id<"sandboxes">;
+			color?: string;
+		}) => {
+			setRenameWorkspace(workspace);
+			setRenameWorkspaceName(workspace.name);
+			setRenameWorkspaceHarnessId(workspace.harnessId ?? null);
+			setRenameWorkspaceSandboxId(workspace.sandboxId ?? null);
+			setRenameWorkspaceColor(workspace.color ?? null);
+			setConfirmDeleteWorkspace(false);
+		},
+		[],
+	);
 
 	// Open the edit dialog when an external trigger (e.g. the empty-state
 	// "Attach a harness" CTA) requests it for a specific workspace.
@@ -1488,6 +1568,12 @@ function WorkspaceSidebar({
 	};
 
 	const activeWorkspace = workspaces.find((w) => w._id === activeWorkspaceId);
+	// The Default workspace is permanent — its harness/sandbox/name stay editable,
+	// but it can't be deleted (the server enforces this too).
+	const renameWorkspaceIsDefault = renameWorkspace
+		? (workspaces.find((w) => w._id === renameWorkspace._id)?.isDefault ??
+			false)
+		: false;
 	useWorkspaceActionCommands({
 		activeWorkspace,
 		canCreateWorkspace: true,
@@ -1499,7 +1585,10 @@ function WorkspaceSidebar({
 
 	return (
 		<div className="flex h-full w-[280px] flex-col bg-background">
-			<div className="flex items-center justify-between px-3 py-3">
+			{/* Shares min-h-[51px] + border-b with the main ChatHeader so the two
+			    header bottom-borders meet the sidebar's vertical divider at the same
+			    y (a seamless cross-junction). */}
+			<div className="flex min-h-[51px] items-center justify-between border-b border-border px-3 py-3">
 				<Link to="/" className="flex items-center gap-2">
 					<HarnessMark size={18} className="text-foreground" />
 					<span className="text-sm font-semibold tracking-tight text-foreground">
@@ -1526,8 +1615,6 @@ function WorkspaceSidebar({
 				</div>
 			</div>
 
-			<Separator />
-
 			<div className="shrink-0 px-2 py-2">
 				<div className="mb-1 flex items-center justify-between px-2">
 					<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -1546,101 +1633,56 @@ function WorkspaceSidebar({
 						<TooltipContent>New workspace</TooltipContent>
 					</Tooltip>
 				</div>
-				<ScrollArea className="h-56">
-					<div className="space-y-0.5 pr-2">
-						{workspaces.length === 0 ? (
-							<p className="px-2 py-2 text-[11px] text-muted-foreground">
-								Create a workspace to start.
-							</p>
-						) : (
-							workspaces.map((workspace, index) => {
-								const harness = harnesses.find(
-									(item) => item._id === workspace.harnessId,
-								);
-								const sandbox = sandboxes.find(
-									(item) => item._id === workspace.sandboxId,
-								);
-								const colorHex = getWorkspaceColorHex(workspace.color);
-								const isActive = activeWorkspaceId === workspace._id;
-								const hasShortcut = index < 9;
-								const shortcutDigit = index + 1;
-								return (
-									<div key={workspace._id} className="group relative">
-										<button
-											type="button"
-											onClick={() => onSelectWorkspace(workspace._id)}
-											aria-keyshortcuts={
-												hasShortcut
-													? ariaKeyShortcut(shortcutDigit, isMac)
-													: undefined
-											}
-											title={
-												hasShortcut
-													? `${workspace.name} — ${formatShortcut(shortcutDigit, isMac)}`
-													: workspace.name
-											}
-											style={
-												colorHex ? { backgroundColor: colorHex } : undefined
-											}
-											className={cn(
-												"flex w-full items-start gap-2 rounded-md px-2 py-2 pr-8 text-left transition-all",
-												colorHex
-													? "text-foreground hover:brightness-95"
-													: isActive
-														? "bg-muted text-foreground"
-														: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-												isActive &&
-													colorHex &&
-													"ring-2 ring-inset ring-foreground/40",
-											)}
-										>
-											<Sparkles size={12} className="mt-0.5 shrink-0" />
-											<span className="min-w-0 flex-1">
-												<span className="block truncate text-xs font-medium">
-													{workspace.name}
-												</span>
-												<span
-													className={cn(
-														"block truncate text-[10px]",
-														colorHex
-															? "text-foreground/60"
-															: "text-muted-foreground",
-													)}
-												>
-													{harness?.name ?? "None"} / {sandbox?.name ?? "None"}
-												</span>
-											</span>
-										</button>
-										{modifierHeld && hasShortcut && (
-											<span
-												aria-hidden="true"
-												className="pointer-events-none absolute right-1 top-1 rounded-sm bg-background/85 px-1 py-0.5 font-mono text-[9px] leading-none text-muted-foreground ring-1 ring-border/60 backdrop-blur-sm transition-opacity group-hover:opacity-0"
-											>
-												{formatShortcut(shortcutDigit, isMac)}
-											</span>
-										)}
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<Button
-													variant="ghost"
-													size="icon-xs"
-													className="absolute right-1 top-1.5 opacity-0 group-hover:opacity-100"
-													onClick={(event) => {
-														event.stopPropagation();
-														startRenameWorkspace(workspace);
-													}}
-												>
-													<Pencil size={10} />
-												</Button>
-											</TooltipTrigger>
-											<TooltipContent>Edit workspace</TooltipContent>
-										</Tooltip>
-									</div>
-								);
-							})
-						)}
+				{workspaces.length === 0 ? (
+					<div className="h-56">
+						<p className="px-2 py-2 text-[11px] text-muted-foreground">
+							Create a workspace to start.
+						</p>
 					</div>
-				</ScrollArea>
+				) : (
+					// A `motion.div` (not the Group) is the scroll container, marked
+					// `layoutScroll` so motion's projection subtracts scrollTop when
+					// measuring rows (no snap on a scrolled list). It also stays a
+					// scrollable *ancestor* of the Group, which is what motion's
+					// drag-to-edge auto-scroll walks up to find — making the Group
+					// itself the scroller would break auto-scroll.
+					<motion.div
+						layoutScroll
+						className="h-56 overflow-x-hidden overflow-y-auto pr-2"
+					>
+						<Reorder.Group
+							as="div"
+							axis="y"
+							values={renderedIds}
+							onReorder={handleReorderWorkspaces}
+							className="space-y-0.5"
+						>
+							{orderedWorkspaces.map((workspace, index) => (
+								<WorkspaceRow
+									key={workspace._id}
+									workspace={workspace}
+									index={index}
+									isActive={activeWorkspaceId === workspace._id}
+									harnessName={
+										harnesses.find((h) => h._id === workspace.harnessId)
+											?.name ?? "None"
+									}
+									sandboxName={
+										sandboxes.find((s) => s._id === workspace.sandboxId)
+											?.name ?? "None"
+									}
+									isMac={isMac}
+									modifierHeld={modifierHeld}
+									onSelect={onSelectWorkspace}
+									onEdit={startRenameWorkspace}
+									onDragStart={handleDragStart}
+									onDragEnd={handleDragEnd}
+									onMove={moveWorkspace}
+								/>
+							))}
+						</Reorder.Group>
+					</motion.div>
+				)}
 			</div>
 
 			<Separator />
@@ -1665,7 +1707,12 @@ function WorkspaceSidebar({
 				</div>
 			</div>
 
-			<ScrollArea className="min-h-0 flex-1 px-2 py-2">
+			{/* Plain block-flow scroller (not Radix ScrollArea): Radix wraps content
+			    in a `display:table; min-width:100%` box that shrink-wraps to the
+			    widest title, growing past the 280px column so `w-full` rows never
+			    truncate and the hover kebab gets clipped off-screen. Block flow is
+			    bounded by the column width, so min-w-0 + truncate work. */}
+			<div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 py-2">
 				{/* BRANCH 1: Active search — show search results */}
 				{searchQuery &&
 				titleSearch.status !== "LoadingFirstPage" &&
@@ -1717,7 +1764,7 @@ function WorkspaceSidebar({
 										)}
 									>
 										<MessageSquare size={12} className="shrink-0" />
-										<span className="truncate">
+										<span className="min-w-0 flex-1 truncate">
 											<HighlightText text={convo.title} query={searchQuery} />
 										</span>
 									</button>
@@ -1804,123 +1851,31 @@ function WorkspaceSidebar({
 					</p>
 				) : (
 					<div className="space-y-4">
+						{pinned.length > 0 && (
+							<div>
+								<p className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+									Pinned
+								</p>
+								{pinned.map((convo) => renderRow(convo))}
+							</div>
+						)}
 						{grouped.map((group) => (
 							<div key={group.label}>
 								<p className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
 									{group.label}
 								</p>
-								{group.items.map((convo) => (
-									<div key={convo._id} className="group relative">
-										<button
-											type="button"
-											onClick={() => onSelect(convo._id)}
-											className={cn(
-												"flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs transition-colors",
-												activeConvoId === convo._id
-													? "bg-muted text-foreground"
-													: "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-											)}
-										>
-											<AnimatePresence mode="wait">
-												{streamingConvoIds.has(convo._id) ? (
-													<motion.span
-														key="spinner"
-														initial={{ opacity: 0, scale: 0.5 }}
-														animate={{ opacity: 1, scale: 1 }}
-														exit={{ opacity: 0, scale: 0.5 }}
-														transition={{ duration: 0.15 }}
-														className="flex shrink-0"
-													>
-														<RoseCurveSpinner
-															size={12}
-															className="text-muted-foreground"
-														/>
-													</motion.span>
-												) : doneConvoIds.has(convo._id) ? (
-													<motion.span
-														key="check"
-														initial={{ opacity: 0, scale: 0.5 }}
-														animate={{ opacity: 1, scale: 1 }}
-														exit={{ opacity: 0, scale: 0.5 }}
-														transition={{ duration: 0.15 }}
-														className="flex shrink-0"
-													>
-														<Check size={12} className="text-emerald-500" />
-													</motion.span>
-												) : (
-													<motion.span
-														key="icon"
-														initial={{ opacity: 0, scale: 0.5 }}
-														animate={{ opacity: 1, scale: 1 }}
-														exit={{ opacity: 0, scale: 0.5 }}
-														transition={{ duration: 0.15 }}
-														className="flex shrink-0"
-													>
-														<MessageSquare size={12} />
-													</motion.span>
-												)}
-											</AnimatePresence>
-											<span className="truncate">{convo.title}</span>
-										</button>
-										<Button
-											variant="ghost"
-											size="icon-xs"
-											className="absolute right-1 top-1 opacity-0 group-hover:opacity-100"
-											onClick={(e) => {
-												e.stopPropagation();
-												removeConvo.mutate({
-													id: convo._id,
-												});
-											}}
-										>
-											<Trash2 size={10} />
-										</Button>
-									</div>
-								))}
+								{group.items.map((convo) => renderRow(convo))}
 							</div>
 						))}
 					</div>
 				)}
-			</ScrollArea>
+			</div>
 
 			<Separator />
-			<div className="px-2 py-1">
-				<UsageBadge onClick={() => setUsageOpen(true)} />
-			</div>
-			<Separator />
-			<div className="space-y-0.5 p-2">
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					asChild
-				>
-					<Link to="/sandboxes">
-						<Box size={12} />
-						Manage Sandboxes
-					</Link>
-				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					asChild
-				>
-					<Link to="/harnesses">
-						<SlidersHorizontal size={12} />
-						Manage Harnesses
-					</Link>
-				</Button>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="w-full justify-start"
-					onClick={() => setSettingsOpen(true)}
-				>
-					<Settings size={12} />
-					Settings
-				</Button>
-			</div>
+			<ManageNavFooter
+				onOpenSettings={() => setSettingsOpen(true)}
+				onOpenUsage={() => setUsageOpen(true)}
+			/>
 
 			<Dialog open={createOpen} onOpenChange={setCreateOpen}>
 				<DialogContent className="sm:max-w-sm">
@@ -2101,7 +2056,10 @@ function WorkspaceSidebar({
 								onChange={setRenameWorkspaceColor}
 							/>
 						</div>
-						{confirmDeleteWorkspace ? (
+						{renameWorkspace ? (
+							<WorkspaceCredentialsField workspaceId={renameWorkspace._id} />
+						) : null}
+						{confirmDeleteWorkspace && !renameWorkspaceIsDefault ? (
 							<p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
 								Deleting this workspace will also delete its conversations.
 								Click delete again to confirm.
@@ -2124,27 +2082,45 @@ function WorkspaceSidebar({
 							)}
 							Save Workspace
 						</Button>
-						<Button
-							type="button"
-							variant="destructive"
-							className="w-full"
-							disabled={updateWorkspace.isPending || deleteWorkspace.isPending}
-							onClick={removeWorkspace}
-						>
-							{deleteWorkspace.isPending ? (
-								<RoseCurveSpinner size={14} />
-							) : (
-								<Trash2 size={14} />
-							)}
-							{confirmDeleteWorkspace
-								? "Confirm Delete Workspace"
-								: "Delete Workspace"}
-						</Button>
+						{renameWorkspaceIsDefault ? (
+							<p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+								This is your Default workspace and can't be deleted. Its harness
+								and sandbox are still editable.
+							</p>
+						) : (
+							<Button
+								type="button"
+								variant="destructive"
+								className="w-full"
+								disabled={
+									updateWorkspace.isPending || deleteWorkspace.isPending
+								}
+								onClick={removeWorkspace}
+							>
+								{deleteWorkspace.isPending ? (
+									<RoseCurveSpinner size={14} />
+								) : (
+									<Trash2 size={14} />
+								)}
+								{confirmDeleteWorkspace
+									? "Confirm Delete Workspace"
+									: "Delete Workspace"}
+							</Button>
+						)}
 					</div>
 				</DialogContent>
 			</Dialog>
 			<SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 			<UsageDialog open={usageOpen} onOpenChange={setUsageOpen} />
+			{shareTarget && (
+				<ShareDialog
+					conversationId={shareTarget}
+					open={shareTarget !== null}
+					onOpenChange={(o) => {
+						if (!o) setShareTarget(null);
+					}}
+				/>
+			)}
 		</div>
 	);
 }
@@ -2212,7 +2188,7 @@ function ChatHeader({
 	const workspaceColorHex = getWorkspaceColorHex(workspace?.color);
 
 	return (
-		<header className="flex items-center justify-between border-b border-border px-4 py-2.5">
+		<header className="flex min-h-[51px] items-center justify-between border-b border-border px-4 py-2.5">
 			<div className="flex items-center gap-2">
 				{!sidebarOpen && (
 					<Tooltip>

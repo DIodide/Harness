@@ -12,13 +12,19 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SignUpRouteImport } from './routes/sign-up'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as ManageSharingRouteImport } from './routes/manage-sharing'
 import { Route as AppRouteImport } from './routes/app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as WorkspacesIndexRouteImport } from './routes/workspaces/index'
+import { Route as SkillPacksIndexRouteImport } from './routes/skill-packs/index'
 import { Route as SandboxesIndexRouteImport } from './routes/sandboxes/index'
 import { Route as HarnessesIndexRouteImport } from './routes/harnesses/index'
+import { Route as CredentialsIndexRouteImport } from './routes/credentials/index'
 import { Route as ChatIndexRouteImport } from './routes/chat/index'
+import { Route as SkillPacksNewRouteImport } from './routes/skill-packs/new'
+import { Route as SkillPacksPackIdRouteImport } from './routes/skill-packs/$packId'
 import { Route as ShareTokenRouteImport } from './routes/share/$token'
+import { Route as ShareHarnessTokenRouteImport } from './routes/share-harness/$token'
 import { Route as SandboxesCreate_sandboxRouteImport } from './routes/sandboxes/create_sandbox'
 import { Route as SandboxesSandboxIdRouteImport } from './routes/sandboxes/$sandboxId'
 import { Route as HarnessesHarnessIdRouteImport } from './routes/harnesses/$harnessId'
@@ -38,6 +44,11 @@ const OnboardingRoute = OnboardingRouteImport.update({
   path: '/onboarding',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ManageSharingRoute = ManageSharingRouteImport.update({
+  id: '/manage-sharing',
+  path: '/manage-sharing',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppRoute = AppRouteImport.update({
   id: '/app',
   path: '/app',
@@ -53,6 +64,11 @@ const WorkspacesIndexRoute = WorkspacesIndexRouteImport.update({
   path: '/workspaces/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SkillPacksIndexRoute = SkillPacksIndexRouteImport.update({
+  id: '/skill-packs/',
+  path: '/skill-packs/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SandboxesIndexRoute = SandboxesIndexRouteImport.update({
   id: '/sandboxes/',
   path: '/sandboxes/',
@@ -63,14 +79,34 @@ const HarnessesIndexRoute = HarnessesIndexRouteImport.update({
   path: '/harnesses/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CredentialsIndexRoute = CredentialsIndexRouteImport.update({
+  id: '/credentials/',
+  path: '/credentials/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ChatIndexRoute = ChatIndexRouteImport.update({
   id: '/chat/',
   path: '/chat/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SkillPacksNewRoute = SkillPacksNewRouteImport.update({
+  id: '/skill-packs/new',
+  path: '/skill-packs/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SkillPacksPackIdRoute = SkillPacksPackIdRouteImport.update({
+  id: '/skill-packs/$packId',
+  path: '/skill-packs/$packId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ShareTokenRoute = ShareTokenRouteImport.update({
   id: '/share/$token',
   path: '/share/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ShareHarnessTokenRoute = ShareHarnessTokenRouteImport.update({
+  id: '/share-harness/$token',
+  path: '/share-harness/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SandboxesCreate_sandboxRoute = SandboxesCreate_sandboxRouteImport.update({
@@ -92,47 +128,65 @@ const HarnessesHarnessIdRoute = HarnessesHarnessIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/app': typeof AppRoute
+  '/manage-sharing': typeof ManageSharingRoute
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
   '/sandboxes/$sandboxId': typeof SandboxesSandboxIdRoute
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
+  '/share-harness/$token': typeof ShareHarnessTokenRoute
   '/share/$token': typeof ShareTokenRoute
+  '/skill-packs/$packId': typeof SkillPacksPackIdRoute
+  '/skill-packs/new': typeof SkillPacksNewRoute
   '/chat/': typeof ChatIndexRoute
+  '/credentials/': typeof CredentialsIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
   '/sandboxes/': typeof SandboxesIndexRoute
+  '/skill-packs/': typeof SkillPacksIndexRoute
   '/workspaces/': typeof WorkspacesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/app': typeof AppRoute
+  '/manage-sharing': typeof ManageSharingRoute
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
   '/sandboxes/$sandboxId': typeof SandboxesSandboxIdRoute
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
+  '/share-harness/$token': typeof ShareHarnessTokenRoute
   '/share/$token': typeof ShareTokenRoute
+  '/skill-packs/$packId': typeof SkillPacksPackIdRoute
+  '/skill-packs/new': typeof SkillPacksNewRoute
   '/chat': typeof ChatIndexRoute
+  '/credentials': typeof CredentialsIndexRoute
   '/harnesses': typeof HarnessesIndexRoute
   '/sandboxes': typeof SandboxesIndexRoute
+  '/skill-packs': typeof SkillPacksIndexRoute
   '/workspaces': typeof WorkspacesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/app': typeof AppRoute
+  '/manage-sharing': typeof ManageSharingRoute
   '/onboarding': typeof OnboardingRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/harnesses/$harnessId': typeof HarnessesHarnessIdRoute
   '/sandboxes/$sandboxId': typeof SandboxesSandboxIdRoute
   '/sandboxes/create_sandbox': typeof SandboxesCreate_sandboxRoute
+  '/share-harness/$token': typeof ShareHarnessTokenRoute
   '/share/$token': typeof ShareTokenRoute
+  '/skill-packs/$packId': typeof SkillPacksPackIdRoute
+  '/skill-packs/new': typeof SkillPacksNewRoute
   '/chat/': typeof ChatIndexRoute
+  '/credentials/': typeof CredentialsIndexRoute
   '/harnesses/': typeof HarnessesIndexRoute
   '/sandboxes/': typeof SandboxesIndexRoute
+  '/skill-packs/': typeof SkillPacksIndexRoute
   '/workspaces/': typeof WorkspacesIndexRoute
 }
 export interface FileRouteTypes {
@@ -140,62 +194,86 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/app'
+    | '/manage-sharing'
     | '/onboarding'
     | '/sign-in'
     | '/sign-up'
     | '/harnesses/$harnessId'
     | '/sandboxes/$sandboxId'
     | '/sandboxes/create_sandbox'
+    | '/share-harness/$token'
     | '/share/$token'
+    | '/skill-packs/$packId'
+    | '/skill-packs/new'
     | '/chat/'
+    | '/credentials/'
     | '/harnesses/'
     | '/sandboxes/'
+    | '/skill-packs/'
     | '/workspaces/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/app'
+    | '/manage-sharing'
     | '/onboarding'
     | '/sign-in'
     | '/sign-up'
     | '/harnesses/$harnessId'
     | '/sandboxes/$sandboxId'
     | '/sandboxes/create_sandbox'
+    | '/share-harness/$token'
     | '/share/$token'
+    | '/skill-packs/$packId'
+    | '/skill-packs/new'
     | '/chat'
+    | '/credentials'
     | '/harnesses'
     | '/sandboxes'
+    | '/skill-packs'
     | '/workspaces'
   id:
     | '__root__'
     | '/'
     | '/app'
+    | '/manage-sharing'
     | '/onboarding'
     | '/sign-in'
     | '/sign-up'
     | '/harnesses/$harnessId'
     | '/sandboxes/$sandboxId'
     | '/sandboxes/create_sandbox'
+    | '/share-harness/$token'
     | '/share/$token'
+    | '/skill-packs/$packId'
+    | '/skill-packs/new'
     | '/chat/'
+    | '/credentials/'
     | '/harnesses/'
     | '/sandboxes/'
+    | '/skill-packs/'
     | '/workspaces/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRoute
+  ManageSharingRoute: typeof ManageSharingRoute
   OnboardingRoute: typeof OnboardingRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
   HarnessesHarnessIdRoute: typeof HarnessesHarnessIdRoute
   SandboxesSandboxIdRoute: typeof SandboxesSandboxIdRoute
   SandboxesCreate_sandboxRoute: typeof SandboxesCreate_sandboxRoute
+  ShareHarnessTokenRoute: typeof ShareHarnessTokenRoute
   ShareTokenRoute: typeof ShareTokenRoute
+  SkillPacksPackIdRoute: typeof SkillPacksPackIdRoute
+  SkillPacksNewRoute: typeof SkillPacksNewRoute
   ChatIndexRoute: typeof ChatIndexRoute
+  CredentialsIndexRoute: typeof CredentialsIndexRoute
   HarnessesIndexRoute: typeof HarnessesIndexRoute
   SandboxesIndexRoute: typeof SandboxesIndexRoute
+  SkillPacksIndexRoute: typeof SkillPacksIndexRoute
   WorkspacesIndexRoute: typeof WorkspacesIndexRoute
 }
 
@@ -222,6 +300,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OnboardingRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/manage-sharing': {
+      id: '/manage-sharing'
+      path: '/manage-sharing'
+      fullPath: '/manage-sharing'
+      preLoaderRoute: typeof ManageSharingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/app': {
       id: '/app'
       path: '/app'
@@ -243,6 +328,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspacesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/skill-packs/': {
+      id: '/skill-packs/'
+      path: '/skill-packs'
+      fullPath: '/skill-packs/'
+      preLoaderRoute: typeof SkillPacksIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sandboxes/': {
       id: '/sandboxes/'
       path: '/sandboxes'
@@ -257,6 +349,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HarnessesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/credentials/': {
+      id: '/credentials/'
+      path: '/credentials'
+      fullPath: '/credentials/'
+      preLoaderRoute: typeof CredentialsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/chat/': {
       id: '/chat/'
       path: '/chat'
@@ -264,11 +363,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/skill-packs/new': {
+      id: '/skill-packs/new'
+      path: '/skill-packs/new'
+      fullPath: '/skill-packs/new'
+      preLoaderRoute: typeof SkillPacksNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/skill-packs/$packId': {
+      id: '/skill-packs/$packId'
+      path: '/skill-packs/$packId'
+      fullPath: '/skill-packs/$packId'
+      preLoaderRoute: typeof SkillPacksPackIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/share/$token': {
       id: '/share/$token'
       path: '/share/$token'
       fullPath: '/share/$token'
       preLoaderRoute: typeof ShareTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/share-harness/$token': {
+      id: '/share-harness/$token'
+      path: '/share-harness/$token'
+      fullPath: '/share-harness/$token'
+      preLoaderRoute: typeof ShareHarnessTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sandboxes/create_sandbox': {
@@ -298,16 +418,22 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRoute,
+  ManageSharingRoute: ManageSharingRoute,
   OnboardingRoute: OnboardingRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
   HarnessesHarnessIdRoute: HarnessesHarnessIdRoute,
   SandboxesSandboxIdRoute: SandboxesSandboxIdRoute,
   SandboxesCreate_sandboxRoute: SandboxesCreate_sandboxRoute,
+  ShareHarnessTokenRoute: ShareHarnessTokenRoute,
   ShareTokenRoute: ShareTokenRoute,
+  SkillPacksPackIdRoute: SkillPacksPackIdRoute,
+  SkillPacksNewRoute: SkillPacksNewRoute,
   ChatIndexRoute: ChatIndexRoute,
+  CredentialsIndexRoute: CredentialsIndexRoute,
   HarnessesIndexRoute: HarnessesIndexRoute,
   SandboxesIndexRoute: SandboxesIndexRoute,
+  SkillPacksIndexRoute: SkillPacksIndexRoute,
   WorkspacesIndexRoute: WorkspacesIndexRoute,
 }
 export const routeTree = rootRouteImport

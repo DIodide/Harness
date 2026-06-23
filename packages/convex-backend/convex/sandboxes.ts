@@ -7,8 +7,11 @@ import {
 } from "./_generated/server";
 
 // Per-user sandbox cap. Mirrored on the frontend in
-// apps/web/src/lib/sandbox.ts (MAX_SANDBOXES_PER_USER) — keep them in sync.
-const MAX_SANDBOXES_PER_USER = 5;
+// apps/web/src/lib/sandbox.ts and in the FastAPI gateway
+// (session_manager.MAX_SANDBOXES_PER_USER) — keep all three in sync. Headroom
+// is generous because each workspace now keeps ONE persistent unified agent
+// sandbox (auto-stopped when idle), so the cap scales with workspaces.
+const MAX_SANDBOXES_PER_USER = 20;
 const SANDBOX_LIMIT_ERROR = "sandbox_limit_reached";
 
 const sandboxLimitError = () =>
@@ -169,6 +172,20 @@ export const remove = mutation({
 					}),
 				),
 		);
+		// Clear the link from any workspace that adopted this sandbox, so a
+		// deleted box doesn't leave a dangling workspace.sandboxId (the gateway
+		// then creates a fresh unified sandbox on the next session).
+		const userWorkspaces = await ctx.db
+			.query("workspaces")
+			.withIndex("by_user", (q) => q.eq("userId", identity.subject))
+			.collect();
+		await Promise.all(
+			userWorkspaces
+				.filter((workspace) => workspace.sandboxId === args.id)
+				.map((workspace) =>
+					ctx.db.patch(workspace._id, { sandboxId: undefined }),
+				),
+		);
 		await ctx.db.delete(args.id);
 	},
 });
@@ -181,6 +198,9 @@ export const createInternal = internalMutation({
 	args: {
 		userId: v.string(),
 		harnessId: v.optional(v.id("harnesses")),
+		// When set, point this workspace at the new sandbox (unless it already
+		// links one) so a workspace's box unifies with the agent's.
+		workspaceId: v.optional(v.id("workspaces")),
 		daytonaSandboxId: v.string(),
 		name: v.string(),
 		status: v.union(
@@ -201,7 +221,23 @@ export const createInternal = internalMutation({
 		}),
 	},
 	handler: async (ctx, args) => {
-		const { harnessId, ...rest } = args;
+		const { harnessId, workspaceId, ...rest } = args;
+		// Lost-race guard: if a workspace box was requested but the workspace
+		// already links one (a sibling session won the race to create it), do
+		// NOT create a duplicate row or relink — return null so the gateway
+		// reclaims its now-redundant Daytona box on teardown. Convex mutations
+		// are serializable, so two concurrent callers can't both pass this: the
+		// second re-executes against the committed sandboxId and bails here.
+		if (workspaceId) {
+			const workspace = await ctx.db.get(workspaceId);
+			if (
+				workspace &&
+				workspace.userId === args.userId &&
+				workspace.sandboxId
+			) {
+				return null;
+			}
+		}
 		const existing = await ctx.db
 			.query("sandboxes")
 			.withIndex("by_user", (q) => q.eq("userId", args.userId))
@@ -218,11 +254,27 @@ export const createInternal = internalMutation({
 		// Link to harness if provided
 		if (harnessId) {
 			const harness = await ctx.db.get(harnessId);
-			if (harness) {
+			if (harness && harness.userId === args.userId) {
 				await ctx.db.patch(harness._id, {
+					// Only flip the toggle for an agent harness: the gateway only
+					// creates unified boxes for ACP agents, but guard anyway so a
+					// broadened call site can't silently sandbox-enable a harness
+					// the user deliberately left off.
+					...(harness.agent ? { sandboxEnabled: true } : {}),
 					sandboxId: id,
 					daytonaSandboxId: args.daytonaSandboxId,
 				});
+			}
+		}
+		// Link to workspace if provided (the guard above proved it has none).
+		if (workspaceId) {
+			const workspace = await ctx.db.get(workspaceId);
+			if (
+				workspace &&
+				workspace.userId === args.userId &&
+				!workspace.sandboxId
+			) {
+				await ctx.db.patch(workspaceId, { sandboxId: id });
 			}
 		}
 		return id;
@@ -250,6 +302,37 @@ export const removeByDaytonaId = internalMutation({
 			)
 			.collect();
 		for (const row of rows) {
+			// Clear any harness/workspace links to this row before deleting it,
+			// so teardown of a unified box never leaves a dangling reference
+			// (mirrors the user-facing remove()). Scoped to the row's owner.
+			const harnesses = await ctx.db
+				.query("harnesses")
+				.withIndex("by_user", (q) => q.eq("userId", row.userId))
+				.collect();
+			await Promise.all(
+				harnesses
+					.filter(
+						(h) =>
+							h.sandboxId === row._id ||
+							h.daytonaSandboxId === row.daytonaSandboxId,
+					)
+					.map((h) =>
+						ctx.db.patch(h._id, {
+							sandboxEnabled: false,
+							sandboxId: undefined,
+							daytonaSandboxId: undefined,
+						}),
+					),
+			);
+			const workspaces = await ctx.db
+				.query("workspaces")
+				.withIndex("by_user", (q) => q.eq("userId", row.userId))
+				.collect();
+			await Promise.all(
+				workspaces
+					.filter((w) => w.sandboxId === row._id)
+					.map((w) => ctx.db.patch(w._id, { sandboxId: undefined })),
+			);
 			await ctx.db.delete(row._id);
 		}
 		return { removed: rows.length > 0 };

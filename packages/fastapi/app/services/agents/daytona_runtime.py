@@ -28,6 +28,8 @@ from daytona_sdk import (
 
 from app.config import settings
 from app.services.agents.registry import (
+    HARNESS_MANAGED_MARKER,
+    HARNESS_MANAGED_SKILL_FILE,
     SANDBOX_HOME,
     SANDBOX_WORKSPACE,
     AgentCredentials,
@@ -39,6 +41,27 @@ logger = logging.getLogger(__name__)
 
 SHIM_PATH = Path(__file__).parent / "acp_shim.mjs"
 RUNTIME_MARKER = "/opt/harness/.acp-runtime-v1"
+
+
+def _auto_delete_minutes(persist: bool) -> int:
+    """Minutes a stopped/archived box lingers before Daytona auto-deletes it.
+
+    Persistent workspace boxes hold the user's files → a long grace period;
+    session-owned scratch boxes hold nothing durable → reclaimed quickly. This
+    is the source-level bound that keeps abandoned/leaked ACP sandboxes (a
+    scratch box leaked by a missed teardown, a workspace nobody returns to)
+    from piling up as archived boxes and dragging the control plane down.
+
+    Clamps any non-positive config to -1 (disabled): Daytona reads 0 as "delete
+    immediately on stop", which would nuke a workspace box the moment it idles —
+    so a mis-set 0 must mean "off", not "instant data loss".
+    """
+    minutes = (
+        settings.acp_persistent_sandbox_auto_delete_minutes
+        if persist
+        else settings.acp_scratch_sandbox_auto_delete_minutes
+    )
+    return minutes if minutes > 0 else -1
 
 
 def _shim_remote_path(agent: AgentDefinition) -> str:
@@ -193,6 +216,24 @@ def _kill_shim_command(agent: AgentDefinition) -> str:
     )
 
 
+def _prune_managed_context_command() -> str:
+    """Shell: remove ONLY Harness-managed skill-pack context, so removed skills
+    or a detached pack clear from a reused sandbox. Deletes each
+    ~/.claude/skills/<slug> dir carrying the managed marker file, and
+    AGENTS.md/CLAUDE.md whose first line is the managed sentinel — leaving any
+    user-authored files untouched. The current set is written right after."""
+    skills = f"{SANDBOX_HOME}/.claude/skills"
+    return (
+        f'for d in "{skills}"/*/; do '
+        f'[ -f "$d/{HARNESS_MANAGED_SKILL_FILE}" ] && rm -rf "$d"; '
+        "done 2>/dev/null; "
+        f'for f in "{SANDBOX_HOME}/AGENTS.md" "{SANDBOX_HOME}/CLAUDE.md"; do '
+        f'[ -f "$f" ] && head -1 "$f" 2>/dev/null | '
+        f"grep -qF {shlex.quote(HARNESS_MANAGED_MARKER)} && rm -f \"$f\"; "
+        "done 2>/dev/null; true"
+    )
+
+
 def _build_launcher(agent: AgentDefinition, shim_token: str) -> str:
     """Launcher script: exports NON-SECRET config and backgrounds the shim.
 
@@ -239,6 +280,7 @@ def provision_agent_sandbox(
     creds: AgentCredentials,
     attach_sandbox_id: str | None = None,
     reuse: ProvisionedRuntime | None = None,
+    persist: bool = False,
 ) -> ProvisionedRuntime:
     """Start the agent shim in a sandbox and wait until it is healthy.
 
@@ -246,6 +288,11 @@ def provision_agent_sandbox(
     persistent sandbox (bootstrapping node + adapters on first use) so it
     works on the user's real files; otherwise a fresh session-owned sandbox
     is created from the ACP snapshot.
+
+    With `persist` (and no attach_sandbox_id), the freshly-created sandbox is
+    the workspace's UNIFIED sandbox: returned with owns_sandbox=False so it
+    survives teardown, rooted at the persistent home, and labelled for reuse.
+    The caller links it back to the workspace/harness in Convex.
 
     With `reuse`, the shim is relaunched into the session's EXISTING sandbox
     (auto-started if stopped) with a fresh shim token and preview link —
@@ -278,23 +325,42 @@ def provision_agent_sandbox(
         _ensure_agent_runtime(sandbox)
         cwd = SANDBOX_HOME
     else:
+        # A freshly-created box is OWNED at first (owns_sandbox=True) regardless
+        # of persist: it's reclaimable on teardown until the caller confirms it
+        # was linked back to a workspace, at which point it flips to persistent.
+        # This fail-safe means any failure between create and link (conn error,
+        # provision timeout, lost race) reclaims the box instead of orphaning it.
+        # persist=True only changes the SHAPE of the box: rooted at the
+        # user-visible home (files survive once it becomes the unified box) and
+        # labelled for reuse — and, via owns_sandbox, it gets the gai.conf write.
         owns_sandbox = True
         params = CreateSandboxFromSnapshotParams(
             snapshot=settings.acp_snapshot_name,
             labels={
                 "harness_user_id": user_id,
                 "harness_acp_agent": agent.id,
+                **({"harness_persistent": "1"} if persist else {}),
             },
             auto_stop_interval=30,
+            # Reclaim the box if it sits stopped/archived past its grace
+            # period — leaked scratch boxes and abandoned workspaces otherwise
+            # accumulate as archived boxes forever. A vanished workspace box
+            # self-heals on the next provision (see _provision_once).
+            auto_delete_interval=_auto_delete_minutes(persist),
             ephemeral=False,
         )
         logger.info(
-            "Provisioning ACP sandbox (agent=%s, snapshot=%s) for user '%s'",
-            agent.id, settings.acp_snapshot_name, user_id,
+            "Provisioning ACP sandbox (agent=%s, snapshot=%s, persist=%s) "
+            "for user '%s'",
+            agent.id, settings.acp_snapshot_name, persist, user_id,
         )
         sandbox = client.create(params)
         sandbox_id = sandbox.id
-        cwd = SANDBOX_WORKSPACE
+        # The unified box roots the agent at the user-visible home so its files
+        # survive across sessions, like an attached one. The ACP snapshot ships
+        # node + adapters, so no runtime bootstrap; gai.conf is still written
+        # below (owns_sandbox is True for this freshly-created box).
+        cwd = SANDBOX_HOME if persist else SANDBOX_WORKSPACE
 
     try:
         # Daytona sandboxes blackhole outbound IPv6 (TCP connects, TLS gets
@@ -359,6 +425,39 @@ def provision_agent_sandbox(
                     json.dumps(merged, indent=2).encode("utf-8"), remote_path,
                 ),
                 "upload merged config",
+            )
+
+        # On a REUSED sandbox (attach / revive), prune previously Harness-managed
+        # skill-pack context BEFORE writing the current set, so removed skills or
+        # a detached pack actually disappear instead of lingering. Sentinel-
+        # guarded — only touches files Harness wrote, never user-authored ones. A
+        # freshly-created box has nothing to prune.
+        if reuse is not None or attach_sandbox_id:
+            with contextlib.suppress(Exception):
+                _with_retries(
+                    lambda: sandbox.process.exec(
+                        f"bash -c {shlex.quote(_prune_managed_context_command())}",
+                        timeout=15,
+                    ),
+                    "prune managed context",
+                )
+
+        # Non-secret context files (skill-pack AGENTS.md / CLAUDE.md and
+        # materialized SKILL.md). World-readable (no chmod 600) — they're
+        # context the agent loads, not credentials. Replaced each provision so
+        # edits to a pack take effect on the next session.
+        for remote_path, content in creds.context_files.items():
+            parent = remote_path.rsplit("/", 1)[0]
+            if parent and parent != SANDBOX_HOME:
+                _with_retries(
+                    lambda parent=parent: sandbox.fs.create_folder(parent, "0755"),
+                    "create context dir",
+                )
+            _with_retries(
+                lambda remote_path=remote_path, content=content: sandbox.fs.upload_file(
+                    content.encode("utf-8"), remote_path,
+                ),
+                "upload context file",
             )
 
         # Shim + launcher.

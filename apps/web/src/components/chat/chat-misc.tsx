@@ -202,14 +202,14 @@ export function SandboxPanelToggle() {
 	return <SandboxPanel />;
 }
 
-export function groupByDate(
-	conversations: Array<{
+export function groupByDate<
+	T extends {
 		_id: Id<"conversations">;
 		title: string;
 		lastMessageAt: number;
 		lastHarnessId?: Id<"harnesses">;
-	}>,
-) {
+	},
+>(conversations: T[]) {
 	const now = Date.now();
 	const dayMs = 86400000;
 	const todayStart = now - (now % dayMs);

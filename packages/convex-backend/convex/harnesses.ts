@@ -3,9 +3,9 @@ import { internalQuery, mutation, query } from "./_generated/server";
 import { resolveConversationRole } from "./shares";
 
 /** Match apps/web `SYSTEM_PROMPT_MAX_LENGTH` and FastAPI `HarnessConfig.system_prompt`. */
-const SYSTEM_PROMPT_MAX_CHARS = 4000;
+export const SYSTEM_PROMPT_MAX_CHARS = 4000;
 
-function assertSystemPromptLength(systemPrompt: string | undefined) {
+export function assertSystemPromptLength(systemPrompt: string | undefined) {
 	if (systemPrompt !== undefined && systemPrompt.length > SYSTEM_PROMPT_MAX_CHARS) {
 		throw new Error(
 			`System prompt must be at most ${SYSTEM_PROMPT_MAX_CHARS} characters`,
@@ -83,9 +83,13 @@ export const resolveForCollab = internalQuery({
 			model: harness.model,
 			systemPrompt: harness.systemPrompt ?? null,
 			skills: harness.skills,
+			skillPackIds: harness.skillPackIds ?? [],
 			// "default" | "claude-code" | "codex" | ... | null
 			agent: harness.agent ?? null,
 			agentCredentialId: harness.agentCredentialId ?? null,
+			// Persisted ACP session defaults (seed the collaborator's server run).
+			agentMode: harness.agentMode ?? null,
+			reasoningEffort: harness.reasoningEffort ?? null,
 			mcpServers: harness.mcpServers.map((s) => ({
 				name: s.name,
 				url: s.url,
@@ -97,6 +101,10 @@ export const resolveForCollab = internalQuery({
 			// (verify_sandbox_owner looks it up via getOwnerByDaytonaId).
 			sandboxId: harness.daytonaSandboxId ?? null,
 			sandboxConfig: harness.sandboxConfig ?? null,
+			// The conversation's workspace, so a collaborator's run unifies on the
+			// same per-workspace sandbox as the owner (owner runs send it from the
+			// client; the collab path has no client harness, so resolve it here).
+			workspaceId: convo.workspaceId ?? null,
 		};
 	},
 });
@@ -112,9 +120,12 @@ export const create = mutation({
 		),
 		mcpServers: v.array(mcpServerValidator),
 		skills: v.array(v.object({ name: v.string(), description: v.string() })),
+		skillPackIds: v.optional(v.array(v.id("skillPacks"))),
 		systemPrompt: v.optional(v.string()),
 		agent: v.optional(v.string()),
 		agentCredentialId: v.optional(v.id("agentCredentials")),
+		agentMode: v.optional(v.string()),
+		reasoningEffort: v.optional(v.string()),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxConfig: v.optional(
 			v.object({
@@ -158,10 +169,13 @@ export const update = mutation({
 		),
 		mcpServers: v.optional(v.array(mcpServerValidator)),
 		skills: v.optional(v.array(v.object({ name: v.string(), description: v.string() }))),
+		skillPackIds: v.optional(v.array(v.id("skillPacks"))),
 		systemPrompt: v.optional(v.string()),
 		suggestedPrompts: v.optional(v.array(v.string())),
 		agent: v.optional(v.string()),
 		agentCredentialId: v.optional(v.id("agentCredentials")),
+		agentMode: v.optional(v.string()),
+		reasoningEffort: v.optional(v.string()),
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxId: v.optional(v.id("sandboxes")),
 		daytonaSandboxId: v.optional(v.string()),
@@ -224,12 +238,15 @@ export const duplicate = mutation({
 			status: harness.status,
 			mcpServers: harness.mcpServers,
 			skills: harness.skills,
+			skillPackIds: harness.skillPackIds,
 			systemPrompt: harness.systemPrompt,
 			// The agent loop and its credential are part of what the user
 			// is duplicating — dropping them silently turned the copy into
 			// a default-loop harness with an agent-only model id.
 			agent: harness.agent,
 			agentCredentialId: harness.agentCredentialId,
+			agentMode: harness.agentMode,
+			reasoningEffort: harness.reasoningEffort,
 			suggestedPrompts: harness.suggestedPrompts,
 			userId: identity.subject,
 			lastUsedAt: Date.now(),
@@ -246,6 +263,15 @@ export const remove = mutation({
 		if (!harness || harness.userId !== identity.subject) {
 			throw new Error("Not found");
 		}
+		// Cascade-delete share grants so deleting a shared harness doesn't leave
+		// orphaned harnessShareGrants rows: once the harness is gone the owner can
+		// never revoke them (revoke re-asserts ownership via the now-missing
+		// harness) and a stale public token would keep resolving to a dangling id.
+		const grants = await ctx.db
+			.query("harnessShareGrants")
+			.withIndex("by_harness", (q) => q.eq("harnessId", args.id))
+			.collect();
+		for (const g of grants) await ctx.db.delete(g._id);
 		await ctx.db.delete(args.id);
 	},
 });

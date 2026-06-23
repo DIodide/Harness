@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     # Clerk JWT verification — pinned issuer prevents attacker-controlled JWKS.
     clerk_issuer: str = ""
 
+    # Redis Streams bus for live token fan-out to passive viewers (owner's other
+    # tabs, sharees). OPTIONAL: when unset, turns stream only to the initiating
+    # client exactly as before (no regression) — the /follow endpoint just has
+    # nothing to relay. A shared instance also makes fan-out work across multiple
+    # FastAPI workers/boxes.
+    redis_url: str = ""
+
     # ── ACP agent gateway (external agents in Daytona sandboxes) ──
     # Daytona snapshot with node + codex-acp + claude-agent-acp preinstalled.
     # Built by packages/fastapi/scripts/create_acp_snapshot.py.
@@ -46,6 +53,24 @@ class Settings(BaseSettings):
     # of session.ready_event must not hang forever. On timeout the session
     # is marked errored with an actionable message so the next send recreates.
     acp_provision_timeout_seconds: int = 180
+    # Daytona auto-deletes a sandbox once it has been continuously stopped for
+    # this many minutes — the same "continuously stopped" clock that drives
+    # auto-archive (default 7 days), so it spans the archived period too. This
+    # is the source-level bound that stops abandoned ACP boxes from
+    # accumulating (a scratch box leaked by a missed teardown after a gateway
+    # restart, or a workspace nobody returns to) and dragging the control plane
+    # down: archived boxes take ~3 minutes to wake and once enough pile up the
+    # whole account slows to a crawl. The clock only ticks while a box is
+    # stopped, so a live or recently-resumed session never trips it. Scratch
+    # (session-owned) boxes hold nothing durable → reclaimed within a day
+    # (before they even archive); persistent workspace boxes hold the user's
+    # files → a long grace period. A vanished workspace box self-heals on the
+    # next provision (a fresh one is created + relinked). MUST be positive:
+    # Daytona reads 0 as "delete immediately on stop" (NOT disabled), so any
+    # value <= 0 is clamped to "disabled" before reaching the SDK. Tunable via
+    # env without a redeploy.
+    acp_scratch_sandbox_auto_delete_minutes: int = 1440  # 1 day
+    acp_persistent_sandbox_auto_delete_minutes: int = 20160  # 14 days
     # Encrypts per-user agent credentials (AES-256-GCM; key derived via
     # SHA-256). Required for users to connect their own agent accounts —
     # there is no server-level credential fallback.
@@ -54,7 +79,7 @@ class Settings(BaseSettings):
     # ~/.claude/settings.json (availableModels). Entries surface in the ACP
     # config options and pass through to setModel verbatim, exposing models
     # the headless SDK doesn't list on its own (e.g. Fable).
-    claude_available_models: str = "claude-fable-5,opus,sonnet,haiku"
+    claude_available_models: str = "claude-fable-5,opus,opus[1m],sonnet,haiku"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
