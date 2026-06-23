@@ -1549,15 +1549,39 @@ class AgentSessionManager:
         if not adopted:
             if attach_sandbox_id is None:
                 await self._check_sandbox_cap(session.user_id)
-            session.runtime = await asyncio.to_thread(
-                provision_agent_sandbox,
-                session.user_id,
-                agent,
-                creds,
-                attach_sandbox_id,
-                None,
-                create_persistent,
-            )
+            try:
+                session.runtime = await asyncio.to_thread(
+                    provision_agent_sandbox,
+                    session.user_id,
+                    agent,
+                    creds,
+                    attach_sandbox_id,
+                    None,
+                    create_persistent,
+                )
+            except DaytonaNotFoundError:
+                # The box we tried to attach is gone from Daytona — auto-delete
+                # reclaimed an abandoned one, or it was removed out-of-band —
+                # while Convex still linked it (verify_sandbox_owner checks the
+                # Convex record, not Daytona). Heal instead of dead-ending: drop
+                # the stale link, and for a workspace-unification attach create
+                # a fresh persistent box to relink. An explicit, user-chosen
+                # harness sandbox can't be fabricated, so that re-raises.
+                if attach_sandbox_id is None or not await (
+                    self._recover_from_missing_attach(session, attach_sandbox_id)
+                ):
+                    raise
+                attach_sandbox_id, create_persistent = None, True
+                await self._check_sandbox_cap(session.user_id)
+                session.runtime = await asyncio.to_thread(
+                    provision_agent_sandbox,
+                    session.user_id,
+                    agent,
+                    creds,
+                    None,
+                    None,
+                    True,
+                )
             conn = AcpConnection(
                 session.runtime.base_url, session.runtime.headers,
             )
@@ -1699,6 +1723,45 @@ class AgentSessionManager:
         # No workspace sandbox yet (or a stale/foreign link) — create one and
         # link it back so it becomes the workspace's unified sandbox.
         return None, True
+
+    async def _recover_from_missing_attach(
+        self, session: AgentSession, attach_sandbox_id: str,
+    ) -> bool:
+        """A box we tried to attach is gone from Daytona while Convex still
+        linked it (auto-deleted after its grace period, or removed out-of-band).
+
+        Drop the dead link so it stops being attached and stops counting
+        against the per-user cap. Return True if the caller should recover by
+        creating a fresh persistent box — a workspace-unification attach, which
+        is transparently re-created and re-linked. Return False for an explicit,
+        user-chosen harness sandbox: fabricating a replacement would silently
+        discard the box the user pointed the harness at, so surface the loss.
+        """
+        explicit = bool(
+            session.harness.sandbox_enabled
+            and session.harness.sandbox_id == attach_sandbox_id
+        )
+        await self._unlink_dead_sandbox(attach_sandbox_id)
+        logger.warning(
+            "Attached sandbox '%s' is gone (%s) — %s",
+            attach_sandbox_id,
+            "explicit harness sandbox" if explicit else "workspace unified box",
+            "surfacing the loss" if explicit else "creating a fresh one",
+        )
+        return not explicit
+
+    async def _unlink_dead_sandbox(self, daytona_id: str) -> None:
+        """Best-effort: drop the Convex sandbox row + workspace/harness links
+        for a Daytona box that no longer exists. The caller recovers regardless
+        (a fresh box is created), so a Convex hiccup here must not abort it."""
+        from app.services.convex import ConvexMutationError, run_convex_mutation
+
+        with contextlib.suppress(ConvexMutationError):
+            await run_convex_mutation(
+                self._http_client(),
+                "sandboxes:removeByDaytonaId",
+                {"daytonaSandboxId": daytona_id},
+            )
 
     async def _register_workspace_sandbox(
         self, session: AgentSession, agent,

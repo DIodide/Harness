@@ -172,10 +172,17 @@ class DaytonaService:
             **(labels or {}),
         }
 
+        # User-visible workspace/code-exec boxes hold the user's files, so give
+        # them the long grace period before Daytona reclaims an untouched one —
+        # the bound that stops stopped/archived boxes from accumulating without
+        # surprise-deleting an actively-used sandbox. Clamp non-positive to -1
+        # (disabled): Daytona reads 0 as "delete immediately on stop".
+        auto_delete = settings.acp_persistent_sandbox_auto_delete_minutes
         params = CreateSandboxFromSnapshotParams(
             snapshot=snapshot,
             language=language,
             auto_stop_interval=15,
+            auto_delete_interval=auto_delete if auto_delete > 0 else -1,
             labels=sandbox_labels,
             ephemeral=False,
         )

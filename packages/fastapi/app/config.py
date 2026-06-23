@@ -53,6 +53,24 @@ class Settings(BaseSettings):
     # of session.ready_event must not hang forever. On timeout the session
     # is marked errored with an actionable message so the next send recreates.
     acp_provision_timeout_seconds: int = 180
+    # Daytona auto-deletes a sandbox once it has been continuously stopped for
+    # this many minutes — the same "continuously stopped" clock that drives
+    # auto-archive (default 7 days), so it spans the archived period too. This
+    # is the source-level bound that stops abandoned ACP boxes from
+    # accumulating (a scratch box leaked by a missed teardown after a gateway
+    # restart, or a workspace nobody returns to) and dragging the control plane
+    # down: archived boxes take ~3 minutes to wake and once enough pile up the
+    # whole account slows to a crawl. The clock only ticks while a box is
+    # stopped, so a live or recently-resumed session never trips it. Scratch
+    # (session-owned) boxes hold nothing durable → reclaimed within a day
+    # (before they even archive); persistent workspace boxes hold the user's
+    # files → a long grace period. A vanished workspace box self-heals on the
+    # next provision (a fresh one is created + relinked). MUST be positive:
+    # Daytona reads 0 as "delete immediately on stop" (NOT disabled), so any
+    # value <= 0 is clamped to "disabled" before reaching the SDK. Tunable via
+    # env without a redeploy.
+    acp_scratch_sandbox_auto_delete_minutes: int = 1440  # 1 day
+    acp_persistent_sandbox_auto_delete_minutes: int = 20160  # 14 days
     # Encrypts per-user agent credentials (AES-256-GCM; key derived via
     # SHA-256). Required for users to connect their own agent accounts —
     # there is no server-level credential fallback.
