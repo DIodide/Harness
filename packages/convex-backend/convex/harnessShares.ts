@@ -1,19 +1,19 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
-	type MutationCtx,
-	type QueryCtx,
 	internalMutation,
+	type MutationCtx,
 	mutation,
+	type QueryCtx,
 	query,
 } from "./_generated/server";
 import { assertSystemPromptLength } from "./harnesses";
 import {
 	ALLOWED_AVATAR_HOSTS,
-	MIN_TOKEN_LENGTH,
 	clampAuthorImageUrl,
 	clampAuthorName,
 	isActiveGrant,
+	MIN_TOKEN_LENGTH,
 } from "./shares";
 
 // re-export so a reader of this module sees the shared allowlist origin.
@@ -308,6 +308,16 @@ export const revokeHarnessShareGrant = mutation({
 		if (!grant) return; // already gone — idempotent
 		await assertOwnedHarness(ctx, grant.harnessId);
 		await ctx.db.delete(args.grantId);
+		// Revoking the LAST grant one-by-one must leave the harness in the same
+		// state as unshareHarness — otherwise a stale sharedLocked lingers and a
+		// later re-share silently starts locked (editors blocked, no UI signal).
+		const remaining = await ctx.db
+			.query("harnessShareGrants")
+			.withIndex("by_harness", (q) => q.eq("harnessId", grant.harnessId))
+			.first();
+		if (!remaining) {
+			await ctx.db.patch(grant.harnessId, { sharedLocked: undefined });
+		}
 	},
 });
 
@@ -484,8 +494,7 @@ export const listIncomingSharedHarnesses = query({
 		const ranked = grants
 			.filter(isActiveGrant)
 			.sort(
-				(a, b) =>
-					(a.role === "editor" ? 0 : 1) - (b.role === "editor" ? 0 : 1),
+				(a, b) => (a.role === "editor" ? 0 : 1) - (b.role === "editor" ? 0 : 1),
 			);
 		for (const g of ranked) {
 			const key = g.harnessId as string;

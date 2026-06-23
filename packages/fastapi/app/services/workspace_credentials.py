@@ -80,6 +80,32 @@ _RESERVED_NAMES: frozenset[str] = frozenset(
         "RUBYOPT",
         "GEM_PATH",
         "GIT_SSH_COMMAND",
+        # Outbound-proxy / TLS-trust / package-registry env can silently MITM the
+        # sandbox's traffic (Anthropic API, git-over-https, npm/pip) or pin a
+        # rogue CA — reject so a credential can't reroute or intercept it.
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "FTP_PROXY",
+        "NO_PROXY",
+        "NODE_EXTRA_CA_CERTS",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "GIT_SSL_CAINFO",
+        "PIP_INDEX_URL",
+        "PIP_EXTRA_INDEX_URL",
+        # git-config injection: GIT_CONFIG_* can set arbitrary config (e.g.
+        # core.sshCommand) → command execution during git ops; GIT_PROXY_COMMAND
+        # / GIT_SSH run an arbitrary binary. Bare names here; the dynamic
+        # GIT_CONFIG_* / NPM_CONFIG_* families are caught by _RESERVED_PREFIXES.
+        "GIT_CONFIG",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_PROXY_COMMAND",
+        "GIT_SSH",
         # Harness ACP shim / launcher internals
         "SHIM_PORT",
         "SHIM_TOKEN",
@@ -107,7 +133,15 @@ _RESERVED_NAMES: frozenset[str] = frozenset(
 #   LD_*    dynamic-linker injection on Linux (LD_PRELOAD, LD_LIBRARY_PATH, …)
 #   DYLD_*  the macOS equivalent
 #   BASH_FUNC_*  exported shell functions (shellshock-style injection)
-_RESERVED_PREFIXES: tuple[str, ...] = ("LD_", "DYLD_", "BASH_FUNC_")
+#   GIT_CONFIG_*  GIT_CONFIG_COUNT/KEY_n/VALUE_n inject arbitrary git config
+#   NPM_CONFIG_*  npm config overrides (registry, cafile, …) reroute installs
+_RESERVED_PREFIXES: tuple[str, ...] = (
+    "LD_",
+    "DYLD_",
+    "BASH_FUNC_",
+    "GIT_CONFIG_",
+    "NPM_CONFIG_",
+)
 
 
 class WorkspaceCredentialError(Exception):

@@ -88,6 +88,28 @@ class TestValidateEnvCredential:
         for name in ("IS_SANDBOX", "is_sandbox", "CLAUDE_HOME", "CODEX_HOME"):
             assert "reserved" in validate_env_credential(name, "v"), name
 
+    def test_proxy_tls_registry_families_rejected(self):
+        # These reroute or intercept the sandbox's outbound traffic (Anthropic
+        # API, git-over-https, npm/pip) or pin a rogue CA — must be rejected.
+        for name in (
+            "HTTP_PROXY", "https_proxy", "ALL_PROXY", "NO_PROXY",
+            "NODE_EXTRA_CA_CERTS", "NODE_TLS_REJECT_UNAUTHORIZED",
+            "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+            "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL",
+        ):
+            assert "reserved" in (validate_env_credential(name, "v") or ""), name
+
+    def test_git_config_injection_rejected(self):
+        # GIT_CONFIG_* injects arbitrary git config (e.g. core.sshCommand →
+        # command execution); GIT_PROXY_COMMAND / GIT_SSH run a chosen binary;
+        # NPM_CONFIG_* overrides npm config (registry, cafile, …).
+        for name in (
+            "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_VALUE_0", "GIT_CONFIG_GLOBAL", "GIT_PROXY_COMMAND",
+            "GIT_SSH", "NPM_CONFIG_REGISTRY", "npm_config_cafile",
+        ):
+            assert "reserved" in (validate_env_credential(name, "v") or ""), name
+
     def test_trailing_newline_cannot_bypass_denylist(self):
         # Regression: Python's `$` matches before a trailing "\n", so a name
         # like "PATH\n" used to pass the shape check and then dodge the

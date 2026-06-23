@@ -59,32 +59,59 @@ _BUS_OP_TIMEOUT = 1.0
 
 _redis = None
 _redis_init = False
+_follow_redis = None
+_follow_init = False
+
+
+def _build_redis(max_connections: int):
+    from redis.asyncio import Redis
+
+    return Redis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        socket_connect_timeout=2.0,
+        socket_timeout=20.0,
+        health_check_interval=30,
+        max_connections=max_connections,
+    )
 
 
 def _client():
-    """Lazily build the async Redis client, or None when not configured."""
+    """Producer/tee Redis client, or None when not configured.
+
+    Deliberately SEPARATE from the follower pool (`_follow_client`): each /follow
+    parks a connection for its blocking XREAD window, so sharing one pool let a
+    crowd of viewers exhaust the connections the latency-critical tee path
+    (start_turn/publish/end_turn) needs — once that starved, the owner's turn
+    stopped fanning out. This pool only serves the short producer ops.
+    """
     global _redis, _redis_init
     if not settings.redis_url:
         return None
     if not _redis_init:
         _redis_init = True
         try:
-            from redis.asyncio import Redis
-
-            _redis = Redis.from_url(
-                settings.redis_url,
-                decode_responses=True,
-                socket_connect_timeout=2.0,
-                socket_timeout=20.0,
-                health_check_interval=30,
-                # Each /follow holds a connection for its blocking XREAD window —
-                # a generous pool so many concurrent followers don't starve it.
-                max_connections=256,
-            )
+            _redis = _build_redis(64)
         except Exception:
             logger.exception("Failed to init Redis client — live fan-out disabled")
             _redis = None
     return _redis
+
+
+def _follow_client():
+    """Redis client for blocking follower reads — its own large pool so parked
+    follower connections never starve the producer/tee pool above."""
+    global _follow_redis, _follow_init
+    if not settings.redis_url:
+        return None
+    if not _follow_init:
+        _follow_init = True
+        try:
+            _follow_redis = _build_redis(256)
+        except Exception:
+            logger.exception("Failed to init Redis follower client — follow disabled")
+            _follow_redis = None
+    return _follow_redis
 
 
 def enabled() -> bool:
@@ -205,8 +232,9 @@ async def tee(gen: AsyncIterator[dict], conversation_id: str) -> AsyncIterator[d
 async def follow(conversation_id: str) -> AsyncIterator[dict]:
     """Yield {event, data} frames for a passive viewer: replay the current turn
     (if one is live) then BLOCK-tail for new frames. Returns immediately when
-    Redis is unconfigured."""
-    r = _client()
+    Redis is unconfigured. Uses the dedicated follower pool so its long-held
+    blocking connection can't starve the producer/tee pool."""
+    r = _follow_client()
     if r is None:
         return
     skey = _stream_key(conversation_id)

@@ -111,22 +111,17 @@ describe("useMessageQueue", () => {
 		expect(sendQueuedMessage).toHaveBeenCalledWith("c1", "queued");
 	});
 
-	it("processQueuedAfterSync arms the next queued message for the drain effect", () => {
+	it("processQueuedAfterSync arms the next queued message and the drain flushes it deterministically", () => {
 		const sendQueuedMessage = vi.fn().mockResolvedValue(undefined);
-		const { result, rerender } = render({ sendQueuedMessage });
+		const { result } = render({ sendQueuedMessage });
 		act(() => result.current.enqueueMessage("next"));
 		act(() => result.current.processQueuedAfterSync("c1"));
-		// Shifted out of the visible queue into the pending slot.
+		// Shifted out of the visible queue and flushed on the same cycle by the
+		// drain effect (armed sends bump an explicit flush signal). No longer
+		// reliant on the send callback's identity changing between turns — which
+		// a stabilized callback would have silently broken.
 		expect(result.current.messageQueue).toHaveLength(0);
-		// The drain effect flushes it on its next run (here: a fresh send callback,
-		// mirroring the route recreating sendQueuedMessage between turns).
-		const send2 = vi.fn().mockResolvedValue(undefined);
-		rerender({
-			activeConvoId: cid("c1"),
-			activeHarness: HARNESS,
-			sendQueuedMessage: send2,
-		});
-		expect(send2).toHaveBeenCalledWith("c1", "next");
+		expect(sendQueuedMessage).toHaveBeenCalledWith("c1", "next");
 	});
 
 	it("clears the queue when the active conversation changes", () => {

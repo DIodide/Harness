@@ -40,7 +40,11 @@ async function seedHarness(
 					authType: "bearer" as const,
 					authToken: "sk-SUPER-SECRET",
 				},
-				{ name: "Public", url: "https://pub.example.com", authType: "none" as const },
+				{
+					name: "Public",
+					url: "https://pub.example.com",
+					authType: "none" as const,
+				},
 			],
 			skills: [{ name: "skill", description: "does things" }],
 			systemPrompt: "be helpful",
@@ -115,7 +119,11 @@ describe("owner link management", () => {
 		);
 		const b = await asUser("owner").mutation(
 			api.harnessShares.ensureHarnessPublicLink,
-			{ harnessId: h, role: "editor", token: "htok_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+			{
+				harnessId: h,
+				role: "editor",
+				token: "htok_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			},
 		);
 		expect(b.grantId).toBe(a.grantId); // same active link reused
 		await expect(
@@ -152,6 +160,30 @@ describe("owner link management", () => {
 			}),
 		).toBeNull();
 	});
+
+	it("revoking the LAST grant one-by-one clears the lock (re-share starts unlocked)", async () => {
+		const { raw, asUser } = makeT();
+		const h = await seedHarness(raw, "owner");
+		const link = await asUser("owner").mutation(
+			api.harnessShares.ensureHarnessPublicLink,
+			{ harnessId: h, role: "editor", token: TOKEN },
+		);
+		await asUser("owner").mutation(api.harnessShares.setHarnessLock, {
+			harnessId: h,
+			locked: true,
+		});
+		// Remove the only grant via per-recipient revoke (NOT unshareHarness).
+		await asUser("owner").mutation(api.harnessShares.revokeHarnessShareGrant, {
+			grantId: link.grantId,
+		});
+		const list = await asUser("owner").query(
+			api.harnessShares.listHarnessShareGrants,
+			{ harnessId: h },
+		);
+		expect(list?.grants.length).toBe(0);
+		// Lock cleared, so a later re-share doesn't silently start locked.
+		expect(list?.locked).toBe(false);
+	});
 });
 
 describe("cloneSharedHarness — secrets dropped", () => {
@@ -183,7 +215,9 @@ describe("cloneSharedHarness — secrets dropped", () => {
 describe("editSharedHarness — lock + role gating", () => {
 	async function shareToUser(
 		raw: ReturnType<typeof convexTest>,
-		asUser: (u: string) => ReturnType<ReturnType<typeof convexTest>["withIdentity"]>,
+		asUser: (
+			u: string,
+		) => ReturnType<ReturnType<typeof convexTest>["withIdentity"]>,
 		h: Id<"harnesses">,
 		grantee: string,
 		role: "viewer" | "editor",
@@ -327,7 +361,10 @@ describe("email invite → bind-later", () => {
 		});
 		// Not yet visible to bob (unbound).
 		expect(
-			await asUser("bob").query(api.harnessShares.listIncomingSharedHarnesses, {}),
+			await asUser("bob").query(
+				api.harnessShares.listIncomingSharedHarnesses,
+				{},
+			),
 		).toEqual([]);
 		// Server-verified bind.
 		const res = await raw.mutation(
@@ -400,7 +437,10 @@ describe("email invite → bind-later", () => {
 		);
 		expect(res.bound).toBe(0);
 		expect(
-			await asUser("bob").query(api.harnessShares.listIncomingSharedHarnesses, {}),
+			await asUser("bob").query(
+				api.harnessShares.listIncomingSharedHarnesses,
+				{},
+			),
 		).toEqual([]);
 	});
 });
@@ -430,7 +470,10 @@ describe("listMySharedHarnesses", () => {
 			"link",
 		]);
 		expect(
-			await asUser("intruder").query(api.harnessShares.listMySharedHarnesses, {}),
+			await asUser("intruder").query(
+				api.harnessShares.listMySharedHarnesses,
+				{},
+			),
 		).toEqual([]);
 	});
 });

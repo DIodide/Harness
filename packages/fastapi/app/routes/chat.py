@@ -404,8 +404,12 @@ async def chat_stream(
 
         # Resolve GitHub OAuth credentials for sandbox git operations.
         # Check standalone GitHub token first, then fall back to MCP token.
+        # NEVER on a collaborator turn: the agent runs in the OWNER's sandbox, so
+        # injecting the owner's GitHub token (into ~/.git-credentials and the tool
+        # env) would hand it to a collaborator who can read it back with a sandbox
+        # command (`cat ~/.git-credentials`). The owner's secrets stay server-side.
         git_credentials: dict | None = None
-        if sandbox_id and daytona_service:
+        if sandbox_id and daytona_service and not is_collab:
             gh_token = await get_valid_token(
                 http_client, user_id, GITHUB_STANDALONE_URL,
             )
@@ -444,8 +448,12 @@ async def chat_stream(
 
         # Resolve the workspace's assigned env-var credentials once per turn;
         # injected into every sandbox tool invocation below. NEVER log the dict.
+        # Skipped on a collaborator turn: these are the OWNER's decrypted secrets
+        # (user_id is the owner here), and a collaborator driving a sandbox tool
+        # could echo them straight back to their browser — secrets must not leave
+        # the server for a collaborator.
         workspace_env: dict[str, str] = {}
-        if sandbox_id and daytona_service and body.harness.workspace_id:
+        if sandbox_id and daytona_service and body.harness.workspace_id and not is_collab:
             try:
                 workspace_env = await resolve_workspace_env(
                     http_client, body.harness.workspace_id, user_id,

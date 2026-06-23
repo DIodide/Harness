@@ -71,15 +71,23 @@ export function useRecentChatRestore({
 		}
 		pendingRestoreWorkspaceIdRef.current = null;
 		const cutoff = Date.now() - windowMs;
-		const mostRecent = conversations.find(
-			(c) =>
+		// Pick the genuinely most-recent eligible chat by lastMessageAt — NOT
+		// the first match: `conversations` is pinned-first ordered, so find()
+		// would restore a pinned-but-older chat over a newer unpinned one.
+		let mostRecent: (typeof conversations)[number] | undefined;
+		for (const c of conversations) {
+			if (
 				// Defensive: only restore a conversation that belongs to the active
 				// workspace (live rows always do; this just protects against ever
 				// being handed a stale previous-workspace list).
 				(c.workspaceId === undefined || c.workspaceId === activeWorkspaceId) &&
 				!c.editParentConversationId &&
-				c.lastMessageAt >= cutoff,
-		);
+				c.lastMessageAt >= cutoff &&
+				(!mostRecent || c.lastMessageAt > mostRecent.lastMessageAt)
+			) {
+				mostRecent = c;
+			}
+		}
 		if (mostRecent) {
 			onRestore(mostRecent._id);
 		}

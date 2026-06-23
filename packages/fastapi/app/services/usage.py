@@ -329,7 +329,19 @@ def _parse_unified_rate_limit_headers(headers: httpx.Headers) -> dict | None:
             try:
                 window["resetsAt"] = int(reset)
             except ValueError:
-                pass
+                # Most windows carry Unix seconds, but accept an RFC 3339
+                # timestamp too (normalize to epoch seconds) so a format
+                # variance doesn't silently drop the reset — losing it would
+                # strip the panel's countdown AND defeat the stale-window
+                # self-heal (which drops a window only once resetsAt passes).
+                try:
+                    window["resetsAt"] = int(
+                        datetime.fromisoformat(
+                            reset.replace("Z", "+00:00")
+                        ).timestamp()
+                    )
+                except (ValueError, TypeError):
+                    pass
         buckets[name] = window
     return {"buckets": buckets} if buckets else None
 

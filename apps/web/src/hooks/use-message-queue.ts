@@ -43,6 +43,16 @@ export function useMessageQueue({
 		convoId: string;
 		content: string;
 	} | null>(null);
+	// Bumped every time a pending send is armed so the post-stream drain effect
+	// re-runs deterministically. Without it, arming the ref changes none of that
+	// effect's deps — processQueuedAfterSync runs after the convo already left
+	// streamingConvoIds, so the queued message would flush only by the incidental
+	// recreation of sendQueuedMessage between turns (silently stuck if stabilized).
+	const [flushSignal, setFlushSignal] = useState(0);
+	const armPendingSend = useCallback((convoId: string, content: string) => {
+		pendingQueueSendRef.current = { convoId, content };
+		setFlushSignal((n) => n + 1);
+	}, []);
 
 	const enqueueMessage = useCallback((content: string) => {
 		const item: QueueItem = { id: ++queueIdCounter.current, content };
@@ -78,10 +88,10 @@ export function useMessageQueue({
 		(convoId: string) => {
 			if (!pendingQueueSendRef.current && messageQueueRef.current.length > 0) {
 				const next = shiftQueue();
-				if (next) pendingQueueSendRef.current = { convoId, content: next };
+				if (next) armPendingSend(convoId, next);
 			}
 		},
-		[shiftQueue],
+		[shiftQueue, armPendingSend],
 	);
 
 	const processQueuedAfterSync = useCallback(
@@ -90,11 +100,11 @@ export function useMessageQueue({
 			if (messageQueueRef.current.length > 0) {
 				const next = shiftQueue();
 				if (next) {
-					pendingQueueSendRef.current = { convoId, content: next };
+					armPendingSend(convoId, next);
 				}
 			}
 		},
-		[shiftQueue],
+		[shiftQueue, armPendingSend],
 	);
 
 	const handleSendNow = useCallback(
@@ -111,19 +121,20 @@ export function useMessageQueue({
 			// ends; otherwise there's no controller to cancel (no-op) so send the
 			// message directly rather than dropping it.
 			if (chatStream.streamingConvoIds.has(activeConvoId)) {
-				pendingQueueSendRef.current = {
-					convoId: activeConvoId,
-					content: item.content,
-				};
+				armPendingSend(activeConvoId, item.content);
 				chatStream.cancel(activeConvoId);
 			} else {
 				void sendQueuedMessage(activeConvoId, item.content);
 			}
 		},
-		[activeConvoId, chatStream, sendQueuedMessage],
+		[activeConvoId, chatStream, sendQueuedMessage, armPendingSend],
 	);
 
-	// Process pending queued messages after the stream ends.
+	// Process pending queued messages after the stream ends. `flushSignal` is a
+	// deliberate re-run trigger (bumped when a pending send is armed) — the body
+	// never reads it, so it re-checks the drain even when no streamingConvoIds
+	// change occurred (the processQueuedAfterSync path).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: flushSignal is a re-run trigger, not read in the body
 	useEffect(() => {
 		const pending = pendingQueueSendRef.current;
 		if (!pending || !activeHarness) return;
@@ -134,7 +145,12 @@ export function useMessageQueue({
 
 		pendingQueueSendRef.current = null;
 		void sendQueuedMessage(convoId, pending.content);
-	}, [chatStream.streamingConvoIds, activeHarness, sendQueuedMessage]);
+	}, [
+		chatStream.streamingConvoIds,
+		activeHarness,
+		sendQueuedMessage,
+		flushSignal,
+	]);
 
 	return {
 		messageQueue,

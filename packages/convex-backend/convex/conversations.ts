@@ -187,7 +187,10 @@ export const ensureInWorkspace = mutation({
 			.withIndex("by_conversation", (q) =>
 				q.eq("conversationId", args.conversationId),
 			)
-			.collect();
+			// Bound the scan like fork() does — an uncapped .collect() + patch
+			// fan-out on a very long conversation can blow the per-transaction
+			// read/write limit and abort the whole adoption.
+			.take(8192);
 		await Promise.all(
 			messages.map((m) => ctx.db.patch(m._id, { workspaceId })),
 		);
@@ -291,7 +294,10 @@ export const moveToWorkspace = mutation({
 		const messages = await ctx.db
 			.query("messages")
 			.withIndex("by_conversation", (q) => q.eq("conversationId", args.id))
-			.collect();
+			// Bound the scan like fork() does — an uncapped .collect() + patch
+			// fan-out on a very long conversation can blow the per-transaction
+			// read/write limit and abort the move.
+			.take(8192);
 		await Promise.all(
 			messages.map((m) =>
 				ctx.db.patch(m._id, { workspaceId: targetWorkspaceId }),
