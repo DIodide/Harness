@@ -10,9 +10,12 @@ def no_redis(monkeypatch):
     from app.config import settings
 
     monkeypatch.setattr(settings, "redis_url", "")
-    # Reset the lazy client so a prior test's state doesn't leak.
+    # Reset BOTH lazy clients (producer + follower) so a prior test's state
+    # doesn't leak — follow() builds the follower client lazily too.
     monkeypatch.setattr(stream_bus, "_redis", None)
     monkeypatch.setattr(stream_bus, "_redis_init", False)
+    monkeypatch.setattr(stream_bus, "_follow_redis", None)
+    monkeypatch.setattr(stream_bus, "_follow_init", False)
 
 
 class TestDisabled:

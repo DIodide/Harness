@@ -335,11 +335,13 @@ def _parse_unified_rate_limit_headers(headers: httpx.Headers) -> dict | None:
                 # strip the panel's countdown AND defeat the stale-window
                 # self-heal (which drops a window only once resetsAt passes).
                 try:
-                    window["resetsAt"] = int(
-                        datetime.fromisoformat(
-                            reset.replace("Z", "+00:00")
-                        ).timestamp()
-                    )
+                    dt = datetime.fromisoformat(reset.replace("Z", "+00:00"))
+                    # An offset-less timestamp parses NAIVE; .timestamp() would
+                    # then read it in the server's LOCAL tz, skewing resetsAt by
+                    # the UTC offset. Anthropic emits UTC, so assume UTC.
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    window["resetsAt"] = int(dt.timestamp())
                 except (ValueError, TypeError):
                     pass
         buckets[name] = window

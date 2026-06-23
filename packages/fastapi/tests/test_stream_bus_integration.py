@@ -27,6 +27,10 @@ async def bus(monkeypatch):
     monkeypatch.setattr(settings, "redis_url", TEST_URL)
     monkeypatch.setattr(stream_bus, "_redis", None)
     monkeypatch.setattr(stream_bus, "_redis_init", False)
+    # follow() lazily builds a SEPARATE follower client — reset it too so a
+    # prior test's client doesn't leak across the suite.
+    monkeypatch.setattr(stream_bus, "_follow_redis", None)
+    monkeypatch.setattr(stream_bus, "_follow_init", False)
     client = stream_bus._client()
     if client is None:
         pytest.skip("redis client not built")
@@ -41,8 +45,17 @@ async def bus(monkeypatch):
         await client.aclose()
     except Exception:
         pass
+    # Close the follower client too if follow() built one during the test.
+    follow_client = stream_bus._follow_redis
+    if follow_client is not None:
+        try:
+            await follow_client.aclose()
+        except Exception:
+            pass
     monkeypatch.setattr(stream_bus, "_redis", None)
     monkeypatch.setattr(stream_bus, "_redis_init", False)
+    monkeypatch.setattr(stream_bus, "_follow_redis", None)
+    monkeypatch.setattr(stream_bus, "_follow_init", False)
 
 
 async def _collect_until_done(bus, cid, timeout=5.0):

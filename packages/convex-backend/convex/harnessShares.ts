@@ -308,14 +308,17 @@ export const revokeHarnessShareGrant = mutation({
 		if (!grant) return; // already gone — idempotent
 		await assertOwnedHarness(ctx, grant.harnessId);
 		await ctx.db.delete(args.grantId);
-		// Revoking the LAST grant one-by-one must leave the harness in the same
-		// state as unshareHarness — otherwise a stale sharedLocked lingers and a
-		// later re-share silently starts locked (editors blocked, no UI signal).
+		// Revoking the LAST active grant one-by-one must leave the harness as
+		// unshareHarness does — else a stale sharedLocked lingers and a later
+		// re-share silently starts locked (editors blocked, no UI signal). Key on
+		// ACTIVE grants like every other read in this module, so a future
+		// soft-revoke / link-expiry can't leave an inactive row that wrongly
+		// reads as "still shared" and skips the unlock.
 		const remaining = await ctx.db
 			.query("harnessShareGrants")
 			.withIndex("by_harness", (q) => q.eq("harnessId", grant.harnessId))
-			.first();
-		if (!remaining) {
+			.collect();
+		if (!remaining.some(isActiveGrant)) {
 			await ctx.db.patch(grant.harnessId, { sharedLocked: undefined });
 		}
 	},

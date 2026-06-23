@@ -50,6 +50,16 @@ export function useMessageQueue({
 	// recreation of sendQueuedMessage between turns (silently stuck if stabilized).
 	const [flushSignal, setFlushSignal] = useState(0);
 	const armPendingSend = useCallback((convoId: string, content: string) => {
+		// Never clobber an already-armed send: requeue this one at the FRONT so
+		// both flush in order, instead of silently dropping the earlier one.
+		// (drainQueueAfterTurn guards before shifting; handleSendNow and
+		// processQueuedAfterSync don't, so the collision is handled here.)
+		if (pendingQueueSendRef.current) {
+			const item: QueueItem = { id: ++queueIdCounter.current, content };
+			messageQueueRef.current = [item, ...messageQueueRef.current];
+			setMessageQueue([...messageQueueRef.current]);
+			return;
+		}
 		pendingQueueSendRef.current = { convoId, content };
 		setFlushSignal((n) => n + 1);
 	}, []);

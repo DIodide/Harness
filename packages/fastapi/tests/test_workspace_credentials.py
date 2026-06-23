@@ -218,6 +218,26 @@ class TestResolveWorkspaceEnv:
         # The broken one is dropped; the good one still resolves.
         assert env == {"GOOD": "v"}
 
+    async def test_reserved_name_row_skipped_at_resolve(self, fake_convex):
+        # A row stored before the denylist was expanded (e.g. HTTP_PROXY,
+        # GIT_CONFIG_COUNT, npm_config_registry) must NOT be injected — the
+        # denylist is enforced at resolve/injection time, not just creation.
+        fake_convex.workspaces["ws1"] = {
+            "_ownerUserId": "u1",
+            "rows": [
+                {"credentialId": "c1", "name": "GITHUB_TOKEN",
+                 "ciphertext": encrypt_secret("ghp_ok")},
+                {"credentialId": "c2", "name": "HTTP_PROXY",
+                 "ciphertext": encrypt_secret("http://evil:8080")},
+                {"credentialId": "c3", "name": "GIT_CONFIG_COUNT",
+                 "ciphertext": encrypt_secret("1")},
+                {"credentialId": "c4", "name": "npm_config_registry",
+                 "ciphertext": encrypt_secret("http://evil/reg")},
+            ],
+        }
+        env = await resolve_workspace_env(None, "ws1", "u1")
+        assert env == {"GITHUB_TOKEN": "ghp_ok"}  # reserved rows never injected
+
 
 class TestStoreWorkspaceCredential:
     async def test_creates_new_credential(self, fake_convex):

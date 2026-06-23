@@ -144,6 +144,20 @@ _RESERVED_PREFIXES: tuple[str, ...] = (
 )
 
 
+def is_reserved_env_name(name: str | None) -> bool:
+    """True if `name` is a reserved env var that must never originate from a
+    user credential (loader/proxy/registry/git injection, the login shell,
+    agent auth, server secrets). Case-insensitive.
+
+    Enforced at BOTH creation (validate_env_credential) AND resolve/injection
+    time (resolve_workspace_env), so a row stored before the denylist was
+    expanded can never be injected into a sandbox."""
+    upper = (name or "").upper()
+    return upper in _RESERVED_NAMES or any(
+        upper.startswith(p) for p in _RESERVED_PREFIXES
+    )
+
+
 class WorkspaceCredentialError(Exception):
     """A workspace credential could not be stored or resolved."""
 
@@ -164,10 +178,7 @@ def validate_env_credential(name: str, value: str) -> str | None:
         )
     if len(name) > MAX_ENV_NAME_LENGTH:
         return "Name is too long."
-    upper = name.upper()
-    if upper in _RESERVED_NAMES or any(
-        upper.startswith(p) for p in _RESERVED_PREFIXES
-    ):
+    if is_reserved_env_name(name):
         return (
             f"'{name}' is a reserved name and can't be used as a credential "
             "(it controls how the sandbox runs or is managed elsewhere)."
@@ -254,6 +265,18 @@ async def resolve_workspace_env(
         name = row.get("name")
         ciphertext = row.get("ciphertext")
         if not name or not ciphertext:
+            continue
+        # Enforce the reserved-name denylist HERE too, not just at creation: a
+        # row stored before the denylist was expanded must never be injected
+        # (its MITM / git-config-injection / rogue-CA vector is exactly what the
+        # denylist exists to close). Skip it; never inject.
+        if is_reserved_env_name(name):
+            logger.warning(
+                "Skipping reserved-name workspace credential '%s' (workspace "
+                "'%s') — not injected into the sandbox.",
+                name,
+                workspace_id,
+            )
             continue
         try:
             env[name] = decrypt_secret(ciphertext)

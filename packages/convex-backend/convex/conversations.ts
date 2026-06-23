@@ -12,6 +12,17 @@ const FORK_SUFFIX = /\s*\(fork(?:\s+\d+)?\)$/i;
 // scans ("title >= base AND title < base+PREFIX_END" → titles starting with base).
 const PREFIX_END = "￿";
 
+// Cap on a single-transaction message scan + patch fan-out. Convex bounds the
+// documents one transaction may read/write; an uncapped .collect() over a very
+// long conversation would blow that limit and abort. fork() copies only this
+// prefix into a NEW conversation (harmless). The workspace re-stamp paths
+// (ensureInWorkspace / moveToWorkspace) patch in place, so a conversation with
+// MORE than this many messages has only its first MESSAGE_SCAN_CAP re-stamped:
+// the adopt/move still succeeds (the conversation row itself is stamped), but a
+// giant conversation's oldest messages stay out of workspace-scoped search
+// until a future paginated re-stamp lands. Practically unreachable today.
+const MESSAGE_SCAN_CAP = 8192;
+
 /** Strip an existing fork suffix so re-forking a fork yields "(fork 2)", not
  *  "(fork) (fork)". */
 function forkBaseTitle(title: string): string {
@@ -190,7 +201,7 @@ export const ensureInWorkspace = mutation({
 			// Bound the scan like fork() does — an uncapped .collect() + patch
 			// fan-out on a very long conversation can blow the per-transaction
 			// read/write limit and abort the whole adoption.
-			.take(8192);
+			.take(MESSAGE_SCAN_CAP);
 		await Promise.all(
 			messages.map((m) => ctx.db.patch(m._id, { workspaceId })),
 		);
@@ -297,7 +308,7 @@ export const moveToWorkspace = mutation({
 			// Bound the scan like fork() does — an uncapped .collect() + patch
 			// fan-out on a very long conversation can blow the per-transaction
 			// read/write limit and abort the move.
-			.take(8192);
+			.take(MESSAGE_SCAN_CAP);
 		await Promise.all(
 			messages.map((m) =>
 				ctx.db.patch(m._id, { workspaceId: targetWorkspaceId }),
@@ -334,7 +345,7 @@ export const fork = mutation({
 			.withIndex("by_conversation", (q) =>
 				q.eq("conversationId", args.conversationId),
 			)
-			.take(8192);
+			.take(MESSAGE_SCAN_CAP);
 
 		let messagesToCopy = allMessages;
 		if (args.upToMessageId != null) {
@@ -452,7 +463,7 @@ export const editForkAndSend = mutation({
 			.withIndex("by_conversation", (q) =>
 				q.eq("conversationId", args.conversationId),
 			)
-			.take(8192);
+			.take(MESSAGE_SCAN_CAP);
 
 		if (
 			args.upToMessageCount < 0 ||

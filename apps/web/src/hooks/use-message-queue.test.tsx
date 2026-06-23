@@ -124,6 +124,30 @@ describe("useMessageQueue", () => {
 		expect(sendQueuedMessage).toHaveBeenCalledWith("c1", "next");
 	});
 
+	it("never drops an armed send when a second arm collides (requeues instead)", () => {
+		const sendQueuedMessage = vi.fn().mockResolvedValue(undefined);
+		mockStream.value.streamingConvoIds = new Set(["c1"]);
+		const { result, rerender } = render({ sendQueuedMessage });
+		act(() => result.current.enqueueMessage("A"));
+		act(() => result.current.enqueueMessage("B"));
+		// Arm A while streaming → held pending, not yet flushed.
+		act(() => result.current.drainQueueAfterTurn("c1"));
+		// A second arm for the same convo (still streaming) must NOT clobber A —
+		// B is requeued at the front instead of overwriting the pending slot.
+		act(() => result.current.processQueuedAfterSync("c1"));
+		expect(result.current.messageQueue.map((q) => q.content)).toEqual(["B"]);
+		// Turn ends → the originally-armed A flushes; B survives in the queue.
+		mockStream.value = { streamingConvoIds: new Set(), cancel: vi.fn() };
+		rerender({
+			activeConvoId: cid("c1"),
+			activeHarness: HARNESS,
+			sendQueuedMessage,
+		});
+		expect(sendQueuedMessage).toHaveBeenCalledWith("c1", "A");
+		expect(sendQueuedMessage).not.toHaveBeenCalledWith("c1", "B");
+		expect(result.current.messageQueue.map((q) => q.content)).toEqual(["B"]);
+	});
+
 	it("clears the queue when the active conversation changes", () => {
 		const { result, rerender } = render({ sendQueuedMessage: vi.fn() });
 		act(() => result.current.enqueueMessage("a"));
