@@ -43,6 +43,27 @@ SHIM_PATH = Path(__file__).parent / "acp_shim.mjs"
 RUNTIME_MARKER = "/opt/harness/.acp-runtime-v1"
 
 
+def _auto_delete_minutes(persist: bool) -> int:
+    """Minutes a stopped/archived box lingers before Daytona auto-deletes it.
+
+    Persistent workspace boxes hold the user's files → a long grace period;
+    session-owned scratch boxes hold nothing durable → reclaimed quickly. This
+    is the source-level bound that keeps abandoned/leaked ACP sandboxes (a
+    scratch box leaked by a missed teardown, a workspace nobody returns to)
+    from piling up as archived boxes and dragging the control plane down.
+
+    Clamps any non-positive config to -1 (disabled): Daytona reads 0 as "delete
+    immediately on stop", which would nuke a workspace box the moment it idles —
+    so a mis-set 0 must mean "off", not "instant data loss".
+    """
+    minutes = (
+        settings.acp_persistent_sandbox_auto_delete_minutes
+        if persist
+        else settings.acp_scratch_sandbox_auto_delete_minutes
+    )
+    return minutes if minutes > 0 else -1
+
+
 def _shim_remote_path(agent: AgentDefinition) -> str:
     # Per-agent filename so pkill targets only this agent's shim and
     # multiple agents can coexist in one attached sandbox.
@@ -321,6 +342,11 @@ def provision_agent_sandbox(
                 **({"harness_persistent": "1"} if persist else {}),
             },
             auto_stop_interval=30,
+            # Reclaim the box if it sits stopped/archived past its grace
+            # period — leaked scratch boxes and abandoned workspaces otherwise
+            # accumulate as archived boxes forever. A vanished workspace box
+            # self-heals on the next provision (see _provision_once).
+            auto_delete_interval=_auto_delete_minutes(persist),
             ephemeral=False,
         )
         logger.info(
