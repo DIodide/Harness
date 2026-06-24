@@ -1,13 +1,13 @@
 """Tests for ACP session/update normalization — the kind synthesis and
 first-class flow detection that drives Harness's agent rendering."""
 
-from app.services.agents.session_manager import (
-    _build_replay_preamble,
+from app.services.agents.event_encoder import (
     _parse_workflow_script,
     normalize_sdk_task_message,
     normalize_session_update,
     parse_sdk_compaction,
 )
+from app.services.agents.session_manager import _build_replay_preamble
 
 COMPACTION_SUMMARY = (
     "This session is being continued from a previous conversation that ran "
