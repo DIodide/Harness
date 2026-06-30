@@ -1,8 +1,8 @@
 """Gateway-side agent-usage helpers: session/new _meta + per-turn cost delta."""
 
 from app.models import HarnessConfig
+from app.services.agents.event_encoder import SDK_TASK_MESSAGE_FILTERS
 from app.services.agents.session_manager import (
-    SDK_TASK_MESSAGE_FILTERS,
     AgentSession,
     AgentSessionManager,
 )
