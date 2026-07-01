@@ -45,6 +45,7 @@ from app.services.agents.registry import (
     HARNESS_MANAGED_SKILL_FILE,
     SANDBOX_HOME,
     SANDBOX_WORKSPACE,
+    PreparedProvisioning,
     get_agent,
 )
 from app.services.mcp_client import UserContext
@@ -435,6 +436,65 @@ def _is_sdk_result_message(message: dict) -> bool:
     return message.get("type") == "system" and message.get("subtype") == "result"
 
 
+class ProvisioningContext:
+    """Bakes an agent session's full credential + context state behind one
+    interface.
+
+    The caller gets fully-materialized ``AgentCredentials`` plus the
+    workspace-env fingerprint from a single await, instead of sequencing three
+    order-sensitive steps and threading a half-built creds object — a sequence
+    ``create`` and ``_revive`` used to duplicate verbatim (the drift risk this
+    removes). The order is load-bearing and preserved exactly:
+
+      1. ``resolve_agent_credentials`` — resolve + decrypt (the ONLY step that
+         raises; a missing/foreign credential surfaces to the caller);
+      2. ``_inject_workspace_env`` — merges the workspace env into ``creds.env``
+         (``{**ws, **creds.env}`` so agent auth wins) and returns the
+         fingerprint;
+      3. ``_attach_skill_pack_context`` — stages skill-pack context files.
+
+    Steps 2-3 are best-effort (they degrade to empty rather than raise), so a
+    Convex/GitHub hiccup still lets a session start. NOTHING is memoized:
+    ``reprepare`` re-resolves on every revive, which is exactly where a
+    credential rotation/revocation takes effect for a previously-live session.
+    Daytona provisioning stays OUTSIDE this module — it is the caller's
+    ``asyncio.to_thread`` boundary, fed the baked ``creds``.
+    """
+
+    def __init__(self, manager: "AgentSessionManager") -> None:
+        self._manager = manager
+
+    async def prepare(
+        self, user_id: str, harness: HarnessConfig, agent_id: str,
+    ) -> PreparedProvisioning:
+        """Bake creds + context for a NEW session (``create``)."""
+        return await self._prepare(user_id, harness, agent_id)
+
+    async def reprepare(self, session: "AgentSession") -> PreparedProvisioning:
+        """Re-bake for a live session being revived. Re-resolves from scratch
+        (never cached) so a rotation/revocation lands on the revived session."""
+        return await self._prepare(
+            session.user_id, session.harness, session.agent_id,
+        )
+
+    async def _prepare(
+        self, user_id: str, harness: HarnessConfig, agent_id: str,
+    ) -> PreparedProvisioning:
+        creds = await resolve_agent_credentials(
+            self._manager._http_client(), agent_id, user_id,
+            credential_id=harness.agent_credential_id,
+        )
+        workspace_env_version = await self._manager._inject_workspace_env(
+            creds, harness, user_id,
+        )
+        await self._manager._attach_skill_pack_context(
+            creds, harness, agent_id, user_id,
+        )
+        return PreparedProvisioning(
+            creds=creds, workspace_env_version=workspace_env_version,
+        )
+
+
 class AgentSessionManager:
     def __init__(self):
         self._sessions: dict[str, AgentSession] = {}
@@ -451,6 +511,9 @@ class AgentSessionManager:
         # of the last fetch) — the windows move slowly, so once a minute is plenty
         # and keeps the extra inference calls negligible.
         self._sub_usage_fetched_at: dict[str, float] = {}
+        # Bakes creds + workspace-env + skill-pack context behind one interface
+        # (used by both create and _revive, which used to duplicate the steps).
+        self._provisioning = ProvisioningContext(self)
 
     @staticmethod
     def _runtime_key(
@@ -749,10 +812,9 @@ class AgentSessionManager:
                     "Sandbox not found or not owned by this user"
                 )
 
-        creds = await resolve_agent_credentials(
-            self._http_client(), agent_id, user_id,
-            credential_id=harness.agent_credential_id,
-        )
+        # Resolve credentials + workspace env + skill-pack context in one baked
+        # step (resolve -> inject workspace env -> materialize skill packs).
+        prepared = await self._provisioning.prepare(user_id, harness, agent_id)
         session = AgentSession(
             id=uuid.uuid4().hex,
             user_id=user_id,
@@ -760,17 +822,12 @@ class AgentSessionManager:
             harness=harness,
             conversation_id=conversation_id,
         )
-        # Inject the workspace's assigned env-var credentials and record the
-        # fingerprint BEFORE provisioning so _claim_parked can compare it.
-        session.workspace_env_version = await self._inject_workspace_env(
-            creds, harness, user_id,
-        )
-        # Materialize the harness's skill-pack context (AGENTS.md / CLAUDE.md /
-        # ~/.claude/skills) into the creds so provisioning writes it.
-        await self._attach_skill_pack_context(creds, harness, agent_id, user_id)
+        # Record the workspace-env fingerprint BEFORE provisioning so
+        # _claim_parked can compare it (refuse a runtime with stale credentials).
+        session.workspace_env_version = prepared.workspace_env_version
         self._sessions[session.id] = session
         self._ensure_reaper()
-        asyncio.create_task(self._provision(session, creds, user_ctx))
+        asyncio.create_task(self._provision(session, prepared.creds, user_ctx))
         return session
 
     def _claim_parked(self, session: AgentSession, attach_sandbox_id: str | None):
@@ -1294,20 +1351,12 @@ class AgentSessionManager:
             session.connection = None
 
         agent = get_agent(session.agent_id)
-        creds = await resolve_agent_credentials(
-            self._http_client(), session.agent_id, session.user_id,
-            credential_id=session.harness.agent_credential_id,
-        )
-        # Re-provisioning relaunches the agent process, so pick up the LATEST
-        # workspace credentials here (this is the point at which a revocation
-        # or rotation takes effect for a previously-live session).
-        session.workspace_env_version = await self._inject_workspace_env(
-            creds, session.harness, session.user_id,
-        )
-        # Re-materialize skill-pack context so pack edits land on revive too.
-        await self._attach_skill_pack_context(
-            creds, session.harness, session.agent_id, session.user_id,
-        )
+        # Re-bake credentials + workspace env + skill-pack context. Re-resolved
+        # every time (never cached), so this is where a credential rotation or
+        # revocation takes effect for a previously-live session.
+        prepared = await self._provisioning.reprepare(session)
+        session.workspace_env_version = prepared.workspace_env_version
+        creds = prepared.creds
         owns = session.runtime.owns_sandbox
         old_sandbox_id = session.runtime.sandbox_id
         try:

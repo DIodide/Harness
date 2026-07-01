@@ -59,6 +59,22 @@ class AgentCredentials:
 
 
 @dataclass(frozen=True)
+class PreparedProvisioning:
+    """Fully-baked provisioning inputs for one agent session: the materialized
+    credentials plus the workspace-env fingerprint, kept as SIBLINGS.
+
+    The fingerprint is a first-class field (not folded into `creds`) on purpose:
+    it is what `_claim_parked` / victim-stealing compare to refuse adopting a
+    warm runtime that was launched with rotated-away credentials or a
+    since-revoked workspace env. Dropping it or hiding it inside creds would
+    silently disable that guard.
+    """
+
+    creds: AgentCredentials
+    workspace_env_version: str
+
+
+@dataclass(frozen=True)
 class AgentDefinition:
     id: str
     name: str
