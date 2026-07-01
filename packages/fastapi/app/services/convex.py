@@ -197,6 +197,61 @@ async def patch_message_usage(
         )
 
 
+async def save_compaction(
+    http_client: httpx.AsyncClient,
+    conversation_id: str,
+    summary: str,
+    trigger: str,
+    at_message_count: int | None = None,
+    pre_tokens: int | None = None,
+    post_tokens: int | None = None,
+    model: str | None = None,
+    requester_user_id: str | None = None,
+    requester_token: str | None = None,
+) -> None:
+    """Record a Claude Code context compaction (manual /compact or auto).
+
+    Deploy-key admin auth → the internal `compactions:record` mutation (which
+    derives the owner server-side). Fail-soft: a compaction record is
+    observability metadata, so a save failure must never break the live turn.
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        logger.warning("Convex not configured — skipping compaction save")
+        return
+
+    args: dict = {
+        "conversationId": conversation_id,
+        "summary": summary,
+        "trigger": trigger if trigger in ("manual", "auto") else "manual",
+    }
+    if at_message_count is not None:
+        args["atMessageCount"] = at_message_count
+    if pre_tokens is not None:
+        args["preTokens"] = pre_tokens
+    if post_tokens is not None:
+        args["postTokens"] = post_tokens
+    if model:
+        args["model"] = model
+    if requester_user_id:
+        args["requesterUserId"] = requester_user_id
+    if requester_token:
+        args["requesterToken"] = requester_token
+
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/mutation",
+            headers={"Authorization": f"Convex {settings.convex_deploy_key}"},
+            json={"path": "compactions:record", "args": args, "format": "json"},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        logger.info("Recorded compaction for conversation '%s'", conversation_id)
+    except Exception:
+        logger.exception(
+            "Failed to record compaction for conversation '%s'", conversation_id
+        )
+
+
 async def verify_conversation_access(
     http_client: httpx.AsyncClient,
     conversation_id: str,
@@ -374,6 +429,42 @@ async def count_user_sandboxes(
         return None
 
 
+async def resolve_skill_pack_context(
+    http_client: httpx.AsyncClient,
+    user_id: str,
+    skill_pack_ids: list[str],
+) -> dict | None:
+    """Resolve a harness's skill packs into agent context (deploy-key query).
+
+    Returns {agentsMd, claudeMd, claudeImportsAgents, skills:[{name, detail,
+    skillName}]} — concatenated AGENTS.md/CLAUDE.md and the union of pack
+    skills joined to their cached SKILL.md. None when Convex is unconfigured/
+    unreachable or there are no packs (the gateway then writes no context).
+    """
+    if not skill_pack_ids or not settings.convex_url or not settings.convex_deploy_key:
+        return None
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/query",
+            headers={"Authorization": f"Convex {settings.convex_deploy_key}"},
+            json={
+                "path": "skillPacks:resolveForGateway",
+                "args": {"userId": user_id, "skillPackIds": skill_pack_ids},
+                "format": "json",
+            },
+            timeout=8.0,
+        )
+        resp.raise_for_status()
+        value = resp.json().get("value")
+        return value if isinstance(value, dict) else None
+    except Exception:
+        logger.exception(
+            "Failed to resolve skill packs %s for user '%s'",
+            skill_pack_ids, user_id,
+        )
+        return None
+
+
 class SandboxRecordError(Exception):
     """Raised when Convex rejects a sandbox record creation.
 
@@ -386,6 +477,40 @@ class SandboxRecordError(Exception):
         self.code = code
 
 
+async def resolve_workspace_sandbox(
+    http_client: httpx.AsyncClient,
+    workspace_id: str,
+) -> dict | None:
+    """The workspace's linked sandbox, as {daytonaSandboxId, status}, or None.
+
+    Lets the ACP gateway reuse a workspace's existing sandbox (attach the
+    agent to it) instead of spinning a separate one. None means "no sandbox
+    linked yet" — the gateway then creates one and links it back. Returns None
+    too when Convex is unconfigured/unreachable (degrade to a session sandbox).
+    """
+    if not settings.convex_url or not settings.convex_deploy_key:
+        return None
+    try:
+        resp = await http_client.post(
+            f"{settings.convex_url}/api/query",
+            headers={"Authorization": f"Convex {settings.convex_deploy_key}"},
+            json={
+                "path": "workspaces:resolveSandboxInternal",
+                "args": {"workspaceId": workspace_id},
+                "format": "json",
+            },
+            timeout=5.0,
+        )
+        resp.raise_for_status()
+        value = resp.json().get("value")
+        return value if isinstance(value, dict) else None
+    except Exception:
+        logger.exception(
+            "Failed to resolve workspace sandbox for '%s'", workspace_id
+        )
+        return None
+
+
 async def create_sandbox_record(
     http_client: httpx.AsyncClient,
     user_id: str,
@@ -395,8 +520,13 @@ async def create_sandbox_record(
     language: str,
     ephemeral: bool,
     resources: dict,
+    workspace_id: str | None = None,
 ) -> str | None:
     """Create a sandbox record in Convex and link it to the harness.
+
+    When `workspace_id` is given, the new sandbox is also linked as that
+    workspace's sandbox (unless one is already set) so the workspace and agent
+    share one box.
 
     Returns the Convex sandbox document ID. Returns None when Convex is not
     configured. Raises SandboxRecordError if the mutation fails (HTTP error)
@@ -418,6 +548,8 @@ async def create_sandbox_record(
     }
     if harness_id:
         args["harnessId"] = harness_id
+    if workspace_id:
+        args["workspaceId"] = workspace_id
 
     try:
         resp = await http_client.post(
@@ -458,6 +590,14 @@ async def create_sandbox_record(
         raise SandboxRecordError(message, code=code)
 
     sandbox_doc_id = result.get("value")
+    if sandbox_doc_id is None:
+        # createInternal returns null when it declined to create — the workspace
+        # already links a box (a lost create race). The caller reclaims its box.
+        logger.info(
+            "Convex skipped sandbox record for daytona_id '%s' (workspace "
+            "already links a sandbox)", daytona_sandbox_id,
+        )
+        return None
     logger.info(
         "Created sandbox record '%s' (daytona_id=%s) for harness '%s'",
         sandbox_doc_id, daytona_sandbox_id, harness_id,

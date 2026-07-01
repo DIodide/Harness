@@ -4,9 +4,10 @@ import { api } from "@harness/convex-backend/convex/_generated/api";
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useConvexAuth } from "convex/react";
 import { GitFork, Loader2, Lock, PanelRight, Send, Square } from "lucide-react";
 import { AnimatePresence } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { type ComponentProps, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { AgentPermissionCard } from "../../components/agent-permission-card";
 import { AgentQuestionCard } from "../../components/agent-question-card";
@@ -20,11 +21,20 @@ import {
 	AvatarImage,
 } from "../../components/ui/avatar";
 import { Button } from "../../components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "../../components/ui/dialog";
 import type { AgentMode } from "../../lib/agent-mode";
 import {
 	EMPTY_STREAM_STATE,
 	useChatStreamContext,
 } from "../../lib/chat-stream-context";
+import { openConversation } from "../../lib/navigate-to-conversation";
 import {
 	SandboxPanelProvider,
 	useSandboxPanel,
@@ -36,6 +46,7 @@ import {
 } from "../../lib/share";
 import { useAgentSessionConfig } from "../../lib/use-agent-session-config";
 import type { StreamPart } from "../../lib/use-chat-stream";
+import { useFollowStream } from "../../lib/use-follow-stream";
 
 export const Route = createFileRoute("/share/$token")({
 	// No beforeLoad auth guard — anonymous visitors must be able to view.
@@ -53,6 +64,9 @@ type ShareHeader = {
 	ownerImageUrl: string | null;
 	agent: string | null;
 	sandboxId: string | null;
+	// The owner's own conversation workspace (null for everyone but the owner,
+	// and for legacy conversations that predate workspaces).
+	workspaceId: string | null;
 };
 
 type SharedMessage = {
@@ -72,27 +86,23 @@ function SharedChatPage() {
 	const { data: messages, isPending: messagesPending } = useQuery(
 		convexQuery(api.shares.listSharedMessages, { token }),
 	);
-	const forkShared = useMutation({
-		mutationFn: useConvexMutation(api.shares.forkSharedConversation),
+	// Only the owner needs their workspace mode (to decide where their own link
+	// reopens). Skip the query for anonymous/collaborator viewers.
+	const { data: userSettings } = useQuery({
+		...convexQuery(api.userSettings.get, {}),
+		enabled: header?.viewerIsOwner === true,
+	});
+	const ensureInWorkspace = useMutation({
+		mutationFn: useConvexMutation(api.conversations.ensureInWorkspace),
 	});
 
-	const runFork = () => {
-		forkShared.mutate(
-			{ token },
-			{
-				onSuccess: (newConvoId) => {
-					toast.success("Forked to your account");
-					navigate({ to: "/chat", search: { convoId: newConvoId as string } });
-				},
-				onError: (e) =>
-					toast.error(
-						e instanceof Error ? e.message : "Couldn't fork this chat",
-					),
-			},
-		);
-	};
+	// Fork opens a workspace picker (signed-in only); null = closed. The optional
+	// upToMessageId forks just the transcript up to that message.
+	const [forkPicker, setForkPicker] = useState<{
+		upToMessageId?: Id<"messages">;
+	} | null>(null);
 
-	const handleFork = () => {
+	const requestFork = (opts?: { upToMessageId?: Id<"messages"> }) => {
 		if (!isSignedIn) {
 			// Persist the intent (sign-up + onboarding can be several redirects)
 			// so the fork resumes automatically when we return here.
@@ -100,21 +110,48 @@ function SharedChatPage() {
 			navigate({ to: "/sign-in", search: { redirect: `/share/${token}` } });
 			return;
 		}
-		runFork();
+		setForkPicker(opts ?? {});
 	};
 
 	// Owner opened their OWN link → send them to their editable chat, not the
-	// read-only view. (/chat?convoId opens in the chat view regardless of mode.)
+	// read-only view. Respect their mode: workspaces users land in the chat's
+	// workspace (adopting legacy conversations into Default); otherwise /chat.
 	const ownerRedirected = useRef(false);
 	useEffect(() => {
-		if (header?.viewerIsOwner && !ownerRedirected.current) {
-			ownerRedirected.current = true;
-			navigate({
-				to: "/chat",
-				search: { convoId: header.conversationId as string },
-			});
+		if (!header?.viewerIsOwner || ownerRedirected.current) return;
+		// Wait for the owner's mode before deciding where to send them.
+		if (userSettings === undefined) return;
+		ownerRedirected.current = true;
+		const convoId = header.conversationId as string;
+		const mode = userSettings.workspacesMode;
+		if (mode !== "workspaces") {
+			openConversation(navigate, { workspacesMode: mode, convoId });
+			return;
 		}
-	}, [header, navigate]);
+		const openInWorkspace = (workspaceId: string) =>
+			openConversation(navigate, {
+				workspacesMode: mode,
+				workspaceId,
+				convoId,
+			});
+		if (header.workspaceId) {
+			openInWorkspace(header.workspaceId);
+		} else {
+			// Legacy conversation with no workspace → adopt into Default, then open.
+			ensureInWorkspace
+				.mutateAsync({
+					conversationId: header.conversationId as Id<"conversations">,
+				})
+				.then((wid) => openInWorkspace(wid as string))
+				.catch(() => {
+					// Transient failure (e.g. auth race) — surface it and let them
+					// retry from their workspaces rather than failing silently.
+					ownerRedirected.current = false;
+					toast.error("Couldn't open this conversation. Please try again.");
+					navigate({ to: "/workspaces" });
+				});
+		}
+	}, [header, userSettings, navigate, ensureInWorkspace]);
 
 	// Resume an intended fork once the visitor is back and signed in.
 	const autoForked = useRef(false);
@@ -129,7 +166,7 @@ function SharedChatPage() {
 		autoForked.current = true;
 		const intentToken = peekForkIntent();
 		clearForkIntent();
-		if (intentToken === token) runFork();
+		if (intentToken === token) requestFork();
 	}, [isSignedIn, header, token]);
 
 	// Hold the spinner until the header AND transcript are loaded (so the
@@ -200,8 +237,7 @@ function SharedChatPage() {
 				<Button
 					size="sm"
 					variant="default"
-					onClick={handleFork}
-					disabled={forkShared.isPending}
+					onClick={() => requestFork()}
 					className="shrink-0"
 				>
 					<GitFork size={14} />
@@ -214,43 +250,250 @@ function SharedChatPage() {
 					token={token}
 					header={header as ShareHeader}
 					messages={(messages ?? []) as SharedMessage[]}
+					onRequestFork={(upToMessageId) => requestFork({ upToMessageId })}
 				/>
 			) : (
-				<div className="flex flex-1 flex-col overflow-hidden">
-					<ChatMessages
-						conversationId={header.conversationId as Id<"conversations">}
-						messages={messages ?? []}
-						readOnly
-						shareToken={token}
-						streamingContent={null}
-						streamingReasoning={null}
-						activeToolCalls={[]}
-						streamParts={[]}
-						pendingDoneContent={null}
-						streamUsage={null}
-						streamModel={null}
-						agentStatus={null}
-						streamPlan={null}
-						agentUsage={null}
-						isStreaming={false}
-						displayMode="standard"
-						editingMessageId={null}
-						editingContent=""
-						allConversations={[]}
-						activeConversation={undefined}
-						scrollToMessageId={null}
-						onStreamSynced={noop}
-						onRegenerate={noop}
-						onFork={noop}
-						onStartEditPrompt={noop}
-						onCancelEditPrompt={noop}
-						onSaveEditPrompt={noop}
-						onEditContentChange={noop}
-						onNavigateToConversation={noop}
-						onClearScrollTarget={noop}
-					/>
-				</div>
+				<ShareReadOnlyChat
+					token={token}
+					conversationId={header.conversationId as Id<"conversations">}
+					messages={messages ?? []}
+				/>
 			)}
+
+			<ForkWorkspaceDialog
+				token={token}
+				open={forkPicker != null}
+				upToMessageId={forkPicker?.upToMessageId}
+				onOpenChange={(open) => {
+					if (!open) setForkPicker(null);
+				}}
+			/>
+		</div>
+	);
+}
+
+/**
+ * Prompts a signed-in forker to choose which of their workspaces this chat is
+ * copied into, then forks and opens the new copy in that workspace. Defaults to
+ * the (undeletable) Default workspace, which it ensures exists.
+ */
+function ForkWorkspaceDialog({
+	token,
+	open,
+	upToMessageId,
+	onOpenChange,
+}: {
+	token: string;
+	open: boolean;
+	upToMessageId?: Id<"messages">;
+	onOpenChange: (open: boolean) => void;
+}) {
+	const navigate = useNavigate();
+	const { isAuthenticated } = useConvexAuth();
+	const { data: workspaces } = useQuery({
+		...convexQuery(api.workspaces.list, {}),
+		enabled: open,
+	});
+	const { data: userSettings } = useQuery({
+		...convexQuery(api.userSettings.get, {}),
+		enabled: open,
+	});
+	const ensureDefault = useMutation({
+		mutationFn: useConvexMutation(api.workspaces.ensureDefault),
+	});
+	const forkShared = useMutation({
+		mutationFn: useConvexMutation(api.shares.forkSharedConversation),
+	});
+	const [selectedId, setSelectedId] = useState<Id<"workspaces"> | null>(null);
+	// True once the user has manually chosen a workspace, so the auto-preselect
+	// stops overriding their choice.
+	const userPickedRef = useRef(false);
+
+	// Guarantee a Default exists to land in (covers brand-new accounts). Gate on
+	// Convex auth so we don't fire during the post-sign-in token-validation window
+	// (ensureDefault throws "Unauthenticated" then), and reset the fire-once ref
+	// on error so a transient failure can retry instead of wedging the picker.
+	const ensuredRef = useRef(false);
+	useEffect(() => {
+		if (!open || !isAuthenticated || ensuredRef.current) return;
+		ensuredRef.current = true;
+		ensureDefault.mutate(
+			{},
+			{
+				onError: () => {
+					ensuredRef.current = false;
+				},
+			},
+		);
+	}, [open, isAuthenticated, ensureDefault]);
+
+	// Preselect the Default (or, lacking one, the first) and keep preferring the
+	// Default as the list resolves — until the user picks. Without re-running, a
+	// list that arrives before ensureDefault backfills would lock onto a
+	// non-Default workspace. Reset on close.
+	useEffect(() => {
+		if (!open) {
+			setSelectedId(null);
+			userPickedRef.current = false;
+			ensuredRef.current = false;
+			return;
+		}
+		if (userPickedRef.current || !workspaces || workspaces.length === 0) return;
+		const preferred = workspaces.find((w) => w.isDefault) ?? workspaces[0];
+		setSelectedId(preferred._id);
+	}, [open, workspaces]);
+
+	const confirm = () => {
+		if (!selectedId) return;
+		forkShared.mutate(
+			{
+				token,
+				workspaceId: selectedId,
+				...(upToMessageId ? { upToMessageId } : {}),
+			},
+			{
+				onSuccess: (newConvoId) => {
+					toast.success("Forked to your workspace");
+					onOpenChange(false);
+					// Mode-aware landing (workspaces users open the fork in its
+					// workspace; basic-mode users in /chat) — convoId is always carried.
+					openConversation(navigate, {
+						workspacesMode: userSettings?.workspacesMode,
+						workspaceId: selectedId,
+						convoId: newConvoId as string,
+					});
+				},
+				onError: (e) =>
+					toast.error(
+						e instanceof Error ? e.message : "Couldn't fork this chat",
+					),
+			},
+		);
+	};
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="sm:max-w-md">
+				<DialogHeader>
+					<DialogTitle>Fork to a workspace</DialogTitle>
+					<DialogDescription>
+						You'll get your own editable copy. Choose where it lives.
+					</DialogDescription>
+				</DialogHeader>
+				<div className="-mx-1 max-h-72 space-y-1 overflow-y-auto px-1 py-1">
+					{workspaces?.map((w) => {
+						const active = w._id === selectedId;
+						return (
+							<button
+								key={w._id}
+								type="button"
+								onClick={() => {
+									userPickedRef.current = true;
+									setSelectedId(w._id);
+								}}
+								className={`flex w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors ${
+									active
+										? "border-foreground/40 bg-muted"
+										: "border-border hover:bg-muted/50"
+								}`}
+							>
+								<span className="flex min-w-0 items-center gap-2">
+									<span
+										className="size-2.5 shrink-0 rounded-full"
+										style={{ backgroundColor: w.color ?? "var(--border)" }}
+									/>
+									<span className="truncate">{w.name}</span>
+								</span>
+								{w.isDefault && (
+									<span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+										Default
+									</span>
+								)}
+							</button>
+						);
+					})}
+					{workspaces && workspaces.length === 0 && (
+						<div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+							<Loader2 className="animate-spin" size={14} />
+							Setting up your workspace…
+						</div>
+					)}
+				</div>
+				<DialogFooter>
+					<Button variant="outline" onClick={() => onOpenChange(false)}>
+						Cancel
+					</Button>
+					<Button
+						onClick={confirm}
+						disabled={!selectedId || forkShared.isPending}
+					>
+						{forkShared.isPending ? (
+							<Loader2 className="animate-spin" size={14} />
+						) : (
+							<GitFork size={14} />
+						)}
+						Fork here
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
+/**
+ * Read-only viewer (anonymous or viewer-grant): the live transcript with the
+ * owner's turns streaming down via the follow feed. Authorizes by share token
+ * (plus the Clerk JWT when signed in).
+ */
+function ShareReadOnlyChat({
+	token,
+	conversationId,
+	messages,
+}: {
+	token: string;
+	conversationId: Id<"conversations">;
+	messages: ComponentProps<typeof ChatMessages>["messages"];
+}) {
+	const { followState, clearFollow } = useFollowStream({
+		conversationId,
+		token,
+		enabled: true,
+	});
+	const s = followState ?? EMPTY_STREAM_STATE;
+	return (
+		<div className="flex flex-1 flex-col overflow-hidden">
+			<ChatMessages
+				conversationId={conversationId}
+				messages={messages}
+				readOnly
+				shareToken={token}
+				streamingContent={s.content}
+				streamingReasoning={s.reasoning}
+				activeToolCalls={s.toolCalls}
+				streamParts={s.parts}
+				pendingDoneContent={s.pendingDoneContent}
+				streamUsage={s.usage}
+				streamModel={s.model}
+				agentStatus={s.agentStatus}
+				streamPlan={s.plan}
+				agentUsage={s.agentUsage}
+				isStreaming={followState != null}
+				displayMode="standard"
+				editingMessageId={null}
+				editingContent=""
+				allConversations={[]}
+				activeConversation={undefined}
+				scrollToMessageId={null}
+				onStreamSynced={clearFollow}
+				onRegenerate={noop}
+				onFork={noop}
+				onStartEditPrompt={noop}
+				onCancelEditPrompt={noop}
+				onSaveEditPrompt={noop}
+				onEditContentChange={noop}
+				onNavigateToConversation={noop}
+				onClearScrollTarget={noop}
+			/>
 		</div>
 	);
 }
@@ -267,12 +510,13 @@ function ShareEditorChat({
 	token,
 	header,
 	messages,
+	onRequestFork,
 }: {
 	token: string;
 	header: ShareHeader;
 	messages: SharedMessage[];
+	onRequestFork: (upToMessageId: Id<"messages">) => void;
 }) {
-	const navigate = useNavigate();
 	const { user } = useUser();
 	const convoId = header.conversationId;
 	// Omit the agent field for the default OpenRouter loop; pass it through for
@@ -291,17 +535,25 @@ function ShareEditorChat({
 		pendingQuestions,
 		answerQuestion,
 	} = useChatStreamContext();
-	const streamState = streamStates[convoId] ?? EMPTY_STREAM_STATE;
-	const isStreaming = streamingConvoIds.has(convoId);
+	const localStreamState = streamStates[convoId] ?? EMPTY_STREAM_STATE;
+	const isLocalStreaming = streamingConvoIds.has(convoId);
+	// When THIS tab isn't driving the turn (the owner or another collaborator
+	// is), follow the live token feed so it streams down here too.
+	const { followState, clearFollow } = useFollowStream({
+		conversationId: convoId,
+		token,
+		enabled: !isLocalStreaming,
+	});
+	// Prefer the follow feed; else local (covers our own turn + the post-done
+	// handoff window so the finished bubble never flickers away).
+	const streamState = followState ?? localStreamState;
+	const isStreaming = isLocalStreaming || followState != null;
 
 	const sendShared = useMutation({
 		mutationFn: useConvexMutation(api.shares.sendShared),
 	});
 	const truncateFrom = useMutation({
 		mutationFn: useConvexMutation(api.messages.removeFrom),
-	});
-	const forkShared = useMutation({
-		mutationFn: useConvexMutation(api.shares.forkSharedConversation),
 	});
 
 	const [input, setInput] = useState("");
@@ -376,17 +628,7 @@ function ShareEditorChat({
 	};
 
 	const handleForkAt = (messageId: Id<"messages">) => {
-		forkShared.mutate(
-			{ token, upToMessageId: messageId },
-			{
-				onSuccess: (newConvoId) => {
-					toast.success("Forked to your account");
-					navigate({ to: "/chat", search: { convoId: newConvoId as string } });
-				},
-				onError: (e) =>
-					toast.error(e instanceof Error ? e.message : "Couldn't fork"),
-			},
-		);
+		onRequestFork(messageId);
 	};
 
 	const pendingPermission = pendingPermissions[convoId]?.[0];
@@ -424,7 +666,10 @@ function ShareEditorChat({
 						allConversations={[]}
 						activeConversation={undefined}
 						scrollToMessageId={null}
-						onStreamSynced={() => clearStreamState(convoId)}
+						onStreamSynced={() => {
+							clearStreamState(convoId);
+							clearFollow();
+						}}
 						onRegenerate={handleRegenerate}
 						onFork={handleForkAt}
 						onStartEditPrompt={noop}
@@ -491,7 +736,7 @@ function ShareEditorChat({
 								parts={streamState.parts}
 								streaming={isStreaming}
 							/>
-							{isStreaming ? (
+							{isLocalStreaming ? (
 								<Button
 									size="icon"
 									variant="outline"
@@ -504,7 +749,11 @@ function ShareEditorChat({
 								<Button
 									size="icon"
 									onClick={handleSend}
-									disabled={!input.trim() || sendShared.isPending}
+									// Disabled while a followed turn streams (someone else is
+									// driving) — can't send concurrently.
+									disabled={
+										!input.trim() || isStreaming || sendShared.isPending
+									}
 									title="Send"
 								>
 									<Send size={14} />

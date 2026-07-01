@@ -58,23 +58,70 @@ export function peekForkIntent(): string | null {
 	}
 }
 
-/** Generate a high-entropy, URL-safe share token (prefix + 256 bits). */
-export function generateShareToken(): string {
+function randomToken(): string {
 	const bytes = new Uint8Array(32);
 	crypto.getRandomValues(bytes);
 	let bin = "";
 	for (const b of bytes) bin += String.fromCharCode(b);
-	const b64url = btoa(bin)
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/, "");
-	return `shr_${b64url}`;
+	return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-/** Absolute, copy-pasteable URL for a share token. */
+// Carry a "clone this shared harness" intent across the sign-in redirect, so a
+// signed-out visitor who clicks Clone resumes automatically on return.
+const HARNESS_CLONE_INTENT_KEY = "harnessCloneIntent";
+const CLONE_INTENT_TTL_MS = 30 * 60 * 1000;
+
+export function setHarnessCloneIntent(token: string): void {
+	try {
+		sessionStorage.setItem(
+			HARNESS_CLONE_INTENT_KEY,
+			JSON.stringify({ token, ts: Date.now() }),
+		);
+	} catch {}
+}
+export function clearHarnessCloneIntent(): void {
+	try {
+		sessionStorage.removeItem(HARNESS_CLONE_INTENT_KEY);
+	} catch {}
+}
+export function peekHarnessCloneIntent(): string | null {
+	try {
+		const raw = sessionStorage.getItem(HARNESS_CLONE_INTENT_KEY);
+		if (!raw) return null;
+		const parsed = JSON.parse(raw) as { token?: string; ts?: number };
+		if (
+			!parsed.token ||
+			typeof parsed.ts !== "number" ||
+			Date.now() - parsed.ts > CLONE_INTENT_TTL_MS
+		) {
+			return null;
+		}
+		return parsed.token;
+	} catch {
+		return null;
+	}
+}
+
+/** Generate a high-entropy, URL-safe share token (prefix + 256 bits). */
+export function generateShareToken(): string {
+	return `shr_${randomToken()}`;
+}
+
+/** Generate a high-entropy harness-share token (distinct prefix). */
+export function generateHarnessShareToken(): string {
+	return `hsh_${randomToken()}`;
+}
+
+/** Absolute, copy-pasteable URL for a conversation share token. */
 export function buildShareUrl(token: string): string {
 	const origin = typeof window === "undefined" ? "" : window.location.origin;
 	return `${origin}/share/${token}`;
+}
+
+/** Absolute, copy-pasteable URL for a harness share token. */
+export function buildHarnessShareUrl(token: string): string {
+	const origin = typeof window === "undefined" ? "" : window.location.origin;
+	return `${origin}/share-harness/${token}`;
 }
 
 /** Copy text to the clipboard, returning whether it succeeded. */

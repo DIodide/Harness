@@ -82,3 +82,15 @@ async def verify_token(request: Request) -> dict:
     except jwt.InvalidTokenError as e:
         logger.warning("Invalid token received: %s", e)
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+async def verify_token_optional(request: Request) -> dict | None:
+    """Like verify_token but returns None instead of 401 when there's no (or an
+    invalid) bearer token — for endpoints that ALSO accept anonymous callers
+    authorized another way (e.g. a share token on the live-follow stream)."""
+    if not request.headers.get("authorization", "").startswith("Bearer "):
+        return None
+    try:
+        return await verify_token(request)
+    except HTTPException:
+        return None

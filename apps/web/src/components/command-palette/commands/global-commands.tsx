@@ -7,6 +7,7 @@ import {
 	Box,
 	BoxIcon,
 	FolderKanban,
+	KeyRound,
 	LogOut,
 	MessageSquare,
 	Package,
@@ -61,6 +62,14 @@ export function GlobalCommands() {
 				icon: SlidersHorizontal,
 				keywords: ["agents", "configurations"],
 				perform: () => navigate({ to: "/harnesses" }),
+			},
+			{
+				id: "nav:credentials",
+				title: "Manage Credentials",
+				group: "navigation",
+				icon: KeyRound,
+				keywords: ["secrets", "env", "tokens", "github_token", "api key"],
+				perform: () => navigate({ to: "/credentials" }),
 			},
 			{
 				id: "nav:sandboxes",

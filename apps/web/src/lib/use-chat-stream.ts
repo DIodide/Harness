@@ -200,6 +200,7 @@ export interface ChatStreamRequest {
 		system_prompt?: string;
 		sandbox_enabled?: boolean;
 		sandbox_id?: string;
+		workspace_id?: string;
 		sandbox_config?: {
 			persistent: boolean;
 			auto_start: boolean;

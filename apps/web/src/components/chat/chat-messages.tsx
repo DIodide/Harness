@@ -1,6 +1,12 @@
 import type { Id } from "@harness/convex-backend/convex/_generated/dataModel";
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronDown, ChevronRight, Sparkles } from "lucide-react";
+import {
+	ChevronDown,
+	ChevronRight,
+	GitBranch,
+	RotateCcw,
+	Sparkles,
+} from "lucide-react";
 import { motion } from "motion/react";
 import React, {
 	useCallback,
@@ -11,6 +17,13 @@ import React, {
 	useState,
 } from "react";
 import type { AgentPlanEntry } from "../../lib/agent-mode";
+import {
+	computeSeams,
+	describeDropped,
+	hasRenderableAfter,
+	type SeamPart,
+	summarizeDropped,
+} from "../../lib/message-seams";
 import type {
 	AgentUsage,
 	StreamPart,
@@ -26,6 +39,7 @@ import { MessageAttachments } from "../message-attachments";
 import { PendingResponseIndicator } from "../pending-response-indicator";
 import { RoseCurveSpinner } from "../rose-curve-spinner";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
+import { CompactionPanel, type CompactionRow } from "./compaction-panel";
 import { StreamingUsage, ThinkingBlock, ToolCallBlock } from "./message-blocks";
 
 /** Superset of stream parts and persisted Convex parts. */
@@ -232,6 +246,236 @@ function SubagentActivity({
 	);
 }
 
+/**
+ * A seam in the gap below a rendered assistant block — the hover affordance for
+ * mid-message rewind. Resting state is invisible (revealed only when the bubble
+ * is hovered, like MessageActions); hovering previews what's dropped (the parent
+ * dims the blocks below); clicking opens an inline confirm with fork (safe,
+ * primary) and in-place rewind (destructive, secondary).
+ */
+function Seam({
+	dropped,
+	open,
+	onOpen,
+	onClose,
+	onHover,
+	onRewind,
+	onFork,
+}: {
+	dropped: ReturnType<typeof summarizeDropped>;
+	open: boolean;
+	onOpen: () => void;
+	onClose: () => void;
+	onHover: (active: boolean) => void;
+	onRewind: () => void;
+	onFork: () => void;
+}) {
+	// Move focus into the confirm (and let Escape dismiss it) when it opens, so a
+	// keyboard user isn't stranded after the trigger button unmounts.
+	const primaryRef = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		if (open) primaryRef.current?.focus();
+	}, [open]);
+
+	// Escape dismisses the confirm from whichever button has focus (the buttons
+	// are the focusable, interactive elements — keep the handler on them).
+	const onKeyDown = (e: React.KeyboardEvent) => {
+		if (e.key === "Escape") onClose();
+	};
+
+	if (open) {
+		return (
+			<div className="my-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2">
+				<div className="text-[11px] text-foreground">
+					{describeDropped(dropped)}
+				</div>
+				<div className="mt-0.5 text-[11px] text-muted-foreground">
+					{dropped.contentChanges
+						? "Changes what the agent sees on the next turn."
+						: "Only changes your view — the agent's context is unchanged."}
+				</div>
+				<div className="mt-2 flex items-center gap-2">
+					<button
+						type="button"
+						ref={primaryRef}
+						onClick={() => {
+							onFork();
+							onClose();
+						}}
+						onKeyDown={onKeyDown}
+						className="flex items-center gap-1 rounded bg-foreground px-2 py-1 text-[11px] text-background transition-colors hover:bg-foreground/90"
+					>
+						<GitBranch size={11} /> Rewind &amp; fork
+					</button>
+					<button
+						type="button"
+						onClick={() => {
+							onRewind();
+							onClose();
+						}}
+						onKeyDown={onKeyDown}
+						className="flex items-center gap-1 rounded border border-destructive/40 px-2 py-1 text-[11px] text-destructive transition-colors hover:bg-destructive/10"
+					>
+						<RotateCcw size={11} /> Rewind
+					</button>
+					<button
+						type="button"
+						onClick={onClose}
+						onKeyDown={onKeyDown}
+						className="px-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+					>
+						Cancel
+					</button>
+				</div>
+			</div>
+		);
+	}
+
+	return (
+		<button
+			type="button"
+			onMouseEnter={() => onHover(true)}
+			onMouseLeave={() => onHover(false)}
+			onFocus={() => onHover(true)}
+			onBlur={() => onHover(false)}
+			onClick={onOpen}
+			aria-label="Rewind to here"
+			className="group/seam relative flex h-3 w-full items-center opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+		>
+			<span className="h-px w-full border-border border-t border-dashed transition-colors group-hover/seam:border-destructive/60" />
+			<span className="-translate-x-1/2 -translate-y-1/2 absolute top-1/2 left-1/2 whitespace-nowrap rounded bg-background px-1.5 text-[9px] text-muted-foreground opacity-0 transition-opacity group-hover/seam:text-destructive group-hover/seam:opacity-100">
+				⤺ rewind here
+			</span>
+		</button>
+	);
+}
+
+/**
+ * Render an assistant message's `parts[]` timeline, with optional mid-message
+ * rewind seams between top-level blocks. Seam keep-counts are FLAT indices (so a
+ * kept tool call keeps its whole subagent subtree); hovering a seam dims the
+ * blocks it would drop. `rewind` is omitted (no seams) for shared / read-only /
+ * streaming views.
+ */
+function AssistantParts({
+	parts,
+	originalContent,
+	rewind,
+}: {
+	parts: RenderablePart[];
+	originalContent: string;
+	rewind?: {
+		onRewindToPart: (keepPartCount: number) => void;
+		onForkToPart: (keepPartCount: number) => void;
+	};
+}) {
+	// Open-confirm and hover state are keyed by top-level block index (unique per
+	// block; keep-counts can collide). An open confirm pins the dim preview so a
+	// later hover elsewhere can't clear it out from under the open confirm.
+	const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+	const [openIdx, setOpenIdx] = useState<number | null>(null);
+	const organized = useMemo(() => organizeParts(parts), [parts]);
+	const seams = useMemo(() => computeSeams(parts as SeamPart[]), [parts]);
+
+	// Block-index state can't outlive the geometry it indexes: when parts change
+	// in place (e.g. a background subagent appends to the last message), reset so
+	// a stale index can't pin a dim or orphan an open confirm. `parts` is an
+	// intentional change-trigger dependency even though the effect body only
+	// clears state.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset on parts-geometry change
+	useEffect(() => {
+		setOpenIdx(null);
+		setHoverIdx(null);
+	}, [parts]);
+
+	const activeIdx = openIdx ?? hoverIdx;
+	const activeKeep =
+		activeIdx != null && activeIdx < seams.topCount
+			? seams.keepCounts[activeIdx]
+			: null;
+
+	return (
+		<>
+			{organized.map((part, partIdx) => {
+				const key =
+					part.type === "tool_call"
+						? (part.call_id ?? part.tool)
+						: `${part.type}-${partIdx}-${part.content?.slice(0, 24)}`;
+				const dimmed =
+					activeKeep != null && seams.firstFlatIdx[partIdx] >= activeKeep;
+
+				let block: React.ReactNode = null;
+				if (part.type === "reasoning" && part.content) {
+					block = <ThinkingBlock content={part.content} isStreaming={false} />;
+				} else if (part.type === "text" && part.content) {
+					block = <MarkdownMessage content={part.content} />;
+				} else if (part.type === "tool_call" && part.tool) {
+					const toolBlock = part.kind ? (
+						<AgentToolCallBlock {...agentBlockProps(part, false)} />
+					) : (
+						<ToolCallBlock
+							tool={part.tool}
+							arguments={part.arguments ?? {}}
+							result={part.result}
+							isStreaming={false}
+						/>
+					);
+					block = (
+						<>
+							{toolBlock}
+							{part.children.length > 0 && (
+								<SubagentActivity parts={part.children} isStreaming={false} />
+							)}
+						</>
+					);
+				}
+				if (block == null) return null;
+
+				const keep = seams.keepCounts[partIdx];
+				// Only offer a seam that actually drops something the user can see:
+				// never the last block, never a degenerate keep===length seam (e.g.
+				// an interleaved subagent whose child is last), and never one that
+				// would drop only empty/non-rendering parts.
+				const showSeam =
+					rewind != null && hasRenderableAfter(parts as SeamPart[], keep);
+
+				return (
+					<React.Fragment key={key}>
+						<div className={cn("transition-opacity", dimmed && "opacity-40")}>
+							{block}
+						</div>
+						{showSeam && rewind && (
+							<Seam
+								dropped={summarizeDropped(
+									parts as SeamPart[],
+									keep,
+									originalContent,
+								)}
+								open={openIdx === partIdx}
+								// Clear hover on both open and close: clicking unmounts the
+								// seam button while the cursor is still over it, so its
+								// onMouseLeave never fires — without this the dim would stick
+								// after Cancel/Fork/Rewind (activeIdx falls back to hoverIdx).
+								onOpen={() => {
+									setOpenIdx(partIdx);
+									setHoverIdx(null);
+								}}
+								onClose={() => {
+									setOpenIdx(null);
+									setHoverIdx(null);
+								}}
+								onHover={(active) => setHoverIdx(active ? partIdx : null)}
+								onRewind={() => rewind.onRewindToPart(keep)}
+								onFork={() => rewind.onForkToPart(keep)}
+							/>
+						)}
+					</React.Fragment>
+				);
+			})}
+		</>
+	);
+}
+
 export function ChatMessages({
 	conversationId,
 	messages,
@@ -249,6 +493,11 @@ export function ChatMessages({
 	displayMode,
 	onRegenerate,
 	onFork,
+	onRewind,
+	onRewindFork,
+	onRewindToPart,
+	onForkToPart,
+	seamsEnabled = true,
 	onStartEditPrompt,
 	onCancelEditPrompt,
 	onSaveEditPrompt,
@@ -267,6 +516,9 @@ export function ChatMessages({
 	onClearScrollTarget,
 	readOnly = false,
 	shareToken,
+	compactions = [],
+	onStartFromSummary,
+	isStartingClone,
 }: {
 	conversationId: Id<"conversations">;
 	messages: Array<{
@@ -325,6 +577,18 @@ export function ChatMessages({
 		history: Array<{ role: string; content: string }>,
 	) => void;
 	onFork: (messageId: Id<"messages">) => void;
+	/** Rewind the thread to a user message (truncate everything after it). */
+	onRewind?: (messageId: Id<"messages">) => void;
+	/** Branch a new conversation at a user message, leaving the original. */
+	onRewindFork?: (messageId: Id<"messages">) => void;
+	/** Rewind IN PLACE into the middle of an assistant message — keep its first
+	 *  `keepPartCount` flat parts, drop the rest + every later message. */
+	onRewindToPart?: (messageId: Id<"messages">, keepPartCount: number) => void;
+	/** Branch a NEW conversation whose last message is this assistant message
+	 *  truncated to `keepPartCount` flat parts. */
+	onForkToPart?: (messageId: Id<"messages">, keepPartCount: number) => void;
+	/** User setting: show mid-message rewind seams (default true). */
+	seamsEnabled?: boolean;
 	onStartEditPrompt: (messageId: Id<"messages">, content: string) => void;
 	onCancelEditPrompt: () => void;
 	onSaveEditPrompt: (messageId: Id<"messages">, newContent: string) => void;
@@ -357,6 +621,11 @@ export function ChatMessages({
 	readOnly?: boolean;
 	/** Shared view: resolve attachment URLs through the token-scoped query. */
 	shareToken?: string;
+	/** Context-compaction records for this conversation (observability). */
+	compactions?: CompactionRow[];
+	/** Start a fresh conversation seeded from a compaction summary. */
+	onStartFromSummary?: (compactionId: string) => void;
+	isStartingClone?: boolean;
 }) {
 	const navigate = useNavigate();
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -678,60 +947,35 @@ export function ChatMessages({
 										>
 											{msg.role === "assistant" &&
 											(msg as Record<string, unknown>).parts ? (
-												organizeParts(
-													(msg as Record<string, unknown>)
-														.parts as RenderablePart[],
-												).map((part, partIdx) => {
-													const key =
-														part.type === "tool_call"
-															? (part.call_id ?? part.tool)
-															: `${part.type}-${partIdx}-${part.content?.slice(0, 24)}`;
-													if (part.type === "reasoning" && part.content) {
-														return (
-															<ThinkingBlock
-																key={key}
-																content={part.content}
-																isStreaming={false}
-															/>
-														);
+												<AssistantParts
+													parts={
+														(msg as Record<string, unknown>)
+															.parts as RenderablePart[]
 													}
-													if (part.type === "text" && part.content) {
-														return (
-															<MarkdownMessage
-																key={key}
-																content={part.content}
-															/>
-														);
+													originalContent={msg.content}
+													rewind={
+														// Mid-message seams only on the LAST message in
+														// the thread: truncating an earlier assistant
+														// message also deletes every later turn, which
+														// the per-message "view-only" copy can't honestly
+														// account for. v1 keeps this to the latest turn.
+														seamsEnabled &&
+														i === messages.length - 1 &&
+														!readOnly &&
+														!shareToken &&
+														!isStreaming &&
+														displayMode !== "zen" &&
+														onRewindToPart &&
+														onForkToPart
+															? {
+																	onRewindToPart: (keep) =>
+																		onRewindToPart(msg._id, keep),
+																	onForkToPart: (keep) =>
+																		onForkToPart(msg._id, keep),
+																}
+															: undefined
 													}
-													if (part.type === "tool_call" && part.tool) {
-														const block = part.kind ? (
-															// biome-ignore lint/correctness/useJsxKeyInIterable: rendered inside a keyed fragment below
-															<AgentToolCallBlock
-																{...agentBlockProps(part, false)}
-															/>
-														) : (
-															// biome-ignore lint/correctness/useJsxKeyInIterable: rendered inside a keyed fragment below
-															<ToolCallBlock
-																tool={part.tool}
-																arguments={part.arguments ?? {}}
-																result={part.result}
-																isStreaming={false}
-															/>
-														);
-														return (
-															<React.Fragment key={key}>
-																{block}
-																{part.children.length > 0 && (
-																	<SubagentActivity
-																		parts={part.children}
-																		isStreaming={false}
-																	/>
-																)}
-															</React.Fragment>
-														);
-													}
-													return null;
-												})
+												/>
 											) : (
 												<>
 													{msg.role === "assistant" && msg.reasoning && (
@@ -857,6 +1101,18 @@ export function ChatMessages({
 														? () => onFork(msg._id)
 														: undefined
 												}
+												onRewind={
+													// Owner-only for v1 (collaborators via token is a
+													// follow-up). Under EVERY user message.
+													msg.role === "user" && !shareToken && onRewind
+														? () => onRewind(msg._id)
+														: undefined
+												}
+												onRewindFork={
+													msg.role === "user" && !shareToken && onRewindFork
+														? () => onRewindFork(msg._id)
+														: undefined
+												}
 												onEditPrompt={
 													// Editing a prompt forks-and-resends, which is owner-
 													// centric; collaborators (shareToken set) send and
@@ -963,6 +1219,18 @@ export function ChatMessages({
 						);
 					});
 				})()}
+
+				{!readOnly && (
+					// Keyed by conversation so the panel's local "dismissed" state
+					// resets when switching conversations (ChatMessages isn't remounted).
+					<CompactionPanel
+						key={conversationId}
+						compactions={compactions}
+						onStartFromSummary={onStartFromSummary}
+						isStartingClone={isStartingClone}
+						isStreaming={isStreaming}
+					/>
+				)}
 
 				{showStreamingBubble && (
 					<motion.div

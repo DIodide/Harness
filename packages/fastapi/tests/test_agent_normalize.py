@@ -1,10 +1,17 @@
 """Tests for ACP session/update normalization — the kind synthesis and
 first-class flow detection that drives Harness's agent rendering."""
 
-from app.services.agents.session_manager import (
+from app.services.agents.event_encoder import (
     _parse_workflow_script,
     normalize_sdk_task_message,
     normalize_session_update,
+    parse_sdk_compaction,
+)
+from app.services.agents.session_manager import _build_replay_preamble
+
+COMPACTION_SUMMARY = (
+    "This session is being continued from a previous conversation that ran "
+    "out of context.\n\nSummary:\n1. Primary Request and Intent: ..."
 )
 
 WORKFLOW_SCRIPT = """export const meta = {
@@ -295,3 +302,101 @@ class TestSdkTaskMessage:
     def test_non_dict_ignored(self):
         assert normalize_sdk_task_message(None) == []
         assert normalize_sdk_task_message("nope") == []
+
+
+class TestParseSdkCompaction:
+    def test_compact_boundary_metadata(self):
+        out = parse_sdk_compaction(
+            {
+                "type": "system",
+                "subtype": "compact_boundary",
+                "compact_metadata": {
+                    "trigger": "manual",
+                    "pre_tokens": 24798,
+                    "post_tokens": 3194,
+                },
+            }
+        )
+        assert out == {
+            "kind": "boundary",
+            "trigger": "manual",
+            "pre_tokens": 24798,
+            "post_tokens": 3194,
+        }
+
+    def test_compact_boundary_top_level_type(self):
+        out = parse_sdk_compaction(
+            {"type": "compact_boundary", "compact_metadata": {"trigger": "auto"}}
+        )
+        assert out["kind"] == "boundary"
+        assert out["trigger"] == "auto"
+
+    def test_boundary_invalid_trigger_is_none(self):
+        out = parse_sdk_compaction(
+            {"type": "system", "subtype": "compact_boundary", "compact_metadata": {}}
+        )
+        assert out["trigger"] is None
+
+    def test_summary_user_message_string_content(self):
+        out = parse_sdk_compaction(
+            {"type": "user", "message": {"role": "user", "content": COMPACTION_SUMMARY}}
+        )
+        assert out["kind"] == "summary"
+        assert out["summary"].startswith("This session is being continued")
+
+    def test_summary_user_message_leading_whitespace(self):
+        out = parse_sdk_compaction(
+            {"type": "user", "message": {"role": "user", "content": "\n  " + COMPACTION_SUMMARY}}
+        )
+        assert out["kind"] == "summary"
+
+    def test_normal_user_echo_array_content_ignored(self):
+        # Ordinary user-message echoes carry array content — not a summary.
+        out = parse_sdk_compaction(
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "write a haiku"}],
+                },
+            }
+        )
+        assert out is None
+
+    def test_user_message_not_starting_with_preamble_ignored(self):
+        out = parse_sdk_compaction(
+            {"type": "user", "message": {"role": "user", "content": "Tell me about databases"}}
+        )
+        assert out is None
+
+    def test_unrelated_and_malformed_ignored(self):
+        assert parse_sdk_compaction({"type": "assistant"}) is None
+        assert parse_sdk_compaction({"type": "system", "subtype": "init"}) is None
+        assert parse_sdk_compaction(None) is None
+        assert parse_sdk_compaction("nope") is None
+        # boundary message with no compact_metadata still classifies
+        assert parse_sdk_compaction(
+            {"type": "system", "subtype": "compact_boundary"}
+        )["kind"] == "boundary"
+
+
+class TestReplayPreambleSummarySeed:
+    def test_single_summary_message_full_summary_framing(self):
+        out = _build_replay_preamble([{"role": "user", "content": COMPACTION_SUMMARY}])
+        assert "compacted" in out
+        assert "switched the" not in out  # NOT the harness-switch wording
+        assert "This session is being continued" in out
+
+    def test_multi_message_uses_switch_framing(self):
+        out = _build_replay_preamble(
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ]
+        )
+        assert "switched the" in out  # harness-switch wording
+        assert "User: hi" in out
+
+    def test_single_non_summary_message_uses_switch_framing(self):
+        out = _build_replay_preamble([{"role": "user", "content": "just one message"}])
+        assert "switched the" in out

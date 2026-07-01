@@ -31,7 +31,7 @@ export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
 // Per-user sandbox cap. Mirrored in Convex at
 // packages/convex-backend/convex/sandboxes.ts (MAX_SANDBOXES_PER_USER) —
 // Convex enforces the cap; this constant is for the UX banner only.
-export const MAX_SANDBOXES_PER_USER = 5;
+export const MAX_SANDBOXES_PER_USER = 20;
 
 export function getDefaultSandboxSelection(
 	sandbox: Sandbox | undefined,

@@ -7,6 +7,7 @@ In ACP mode no OpenRouter usage/budget accounting happens — the cost is
 incurred on the user's own agent subscription/API key.
 """
 
+import asyncio
 import json
 import logging
 
@@ -41,12 +42,18 @@ from app.services.agents.session_manager import (
 from app.services.convex import (
     resolve_collab_harness,
     save_assistant_message,
+    save_compaction,
     verify_conversation_access,
 )
+from app.services import stream_bus
 from app.services.mcp_client import UserContext, resolve_princeton_netid
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Fire-and-forget compaction saves run as detached tasks; hold a strong ref so
+# the GC can't cancel them before the POST completes (cleared in the callback).
+_compaction_save_tasks: set[asyncio.Task] = set()
 
 USER_MESSAGE_MAX_LENGTH = 16000  # mirror /api/chat/stream
 
@@ -618,6 +625,31 @@ async def prompt(
                                         **refined_args,
                                     }
                                 break
+                elif event["event"] == "compaction":
+                    # Persist eagerly (mid-turn): a compaction is a standalone
+                    # fact that must survive an interrupted turn, unlike the
+                    # assistant-message save (skipped on the SSE disconnect path
+                    # in the `finally` below). Fire-and-forget so a slow Convex
+                    # mutation can't stall the live token/tool stream — the agent
+                    # keeps generating after /compact, so the task finishes in
+                    # the background; save_compaction swallows its own errors.
+                    cd = event["data"]
+                    save_task = asyncio.create_task(
+                        save_compaction(
+                            http_client,
+                            session.conversation_id,
+                            summary=cd.get("summary") or "",
+                            trigger=cd.get("trigger") or "manual",
+                            at_message_count=len(body.history or []),
+                            pre_tokens=cd.get("pre_tokens"),
+                            post_tokens=cd.get("post_tokens"),
+                            model=f"acp:{session.agent_id}",
+                            requester_user_id=requester_sub,
+                            requester_token=requester_token,
+                        )
+                    )
+                    _compaction_save_tasks.add(save_task)
+                    save_task.add_done_callback(_compaction_save_tasks.discard)
                 yield {"event": event["event"], "data": json.dumps(event["data"])}
         finally:
             if terminal_event is None:
@@ -654,7 +686,10 @@ async def prompt(
                 except Exception:
                     logger.warning("Per-turn effort restore failed")
 
-    return EventSourceResponse(event_stream())
+    # Tee display events into the Redis bus for live fan-out to passive viewers.
+    return EventSourceResponse(
+        stream_bus.tee(event_stream(), session.conversation_id)
+    )
 
 
 @router.post("/sessions/{session_id}/permission")
@@ -781,6 +816,19 @@ async def switch_harness(
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return _session_payload(manager.get(session_id, session.user_id))
+
+
+@router.post("/sessions/by-conversation/{conversation_id}/reset")
+async def reset_conversation_sessions(
+    conversation_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Rewind: tear down the caller's live ACP session(s) for a conversation so
+    the next prompt reopens fresh (re-seeded from the truncated history). Only
+    affects the caller's own sessions. Idempotent — returns 0 if none live."""
+    manager = get_session_manager()
+    count = await manager.reset_conversation(user["sub"], conversation_id)
+    return {"reset": count}
 
 
 @router.delete("/sessions/{session_id}")

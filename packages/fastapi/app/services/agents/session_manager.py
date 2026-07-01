@@ -16,7 +16,7 @@ subscription, not Harness's OpenRouter key.
 
 import asyncio
 import contextlib
-import json
+import hashlib
 import logging
 import re
 import time
@@ -40,8 +40,24 @@ from app.services.agents.daytona_runtime import (
 )
 
 from app.services.agents.credentials import resolve_agent_credentials
-from app.services.agents.registry import SANDBOX_WORKSPACE, get_agent
+from app.services.agents.registry import (
+    HARNESS_MANAGED_MARKER,
+    HARNESS_MANAGED_SKILL_FILE,
+    SANDBOX_HOME,
+    SANDBOX_WORKSPACE,
+    PreparedProvisioning,
+    get_agent,
+)
 from app.services.mcp_client import UserContext
+from app.services.workspace_credentials import resolve_workspace_env
+from app.services.agents.event_encoder import (
+    COMPACTION_SUMMARY_PREAMBLE,
+    SDK_TASK_MESSAGE_FILTERS,
+    normalize_sdk_task_message,
+    normalize_session_update,
+    parse_elicitation_fields,
+    parse_sdk_compaction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +66,37 @@ PERMISSION_TIMEOUT_SECONDS = 300.0
 # Mirrors MAX_SANDBOXES_PER_USER in convex/sandboxes.ts — enforced here
 # BEFORE the Daytona sandbox exists (the Convex-side check fires only at
 # registration, after the compute is already spent).
-MAX_SANDBOXES_PER_USER = 5
+MAX_SANDBOXES_PER_USER = 20
+
+
+def _workspace_env_fingerprint(env: dict[str, str]) -> str:
+    """Stable fingerprint of a workspace env dict (names + values).
+
+    Used only to detect change between a parked runtime's spawn-time env and a
+    claiming session's — adding, removing, or rotating any credential yields a
+    different digest. Not a security boundary; never logged with values.
+    """
+    if not env:
+        return ""
+    h = hashlib.sha256()
+    for name in sorted(env):
+        h.update(name.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(env[name].encode("utf-8"))
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+def _skill_dir_slug(name: str | None) -> str:
+    """A filesystem-safe directory name for a skill (used under
+    ~/.claude/skills/<slug>/SKILL.md). Lowercase; keep [a-z0-9._-]; collapse
+    everything else to a single dash; strip leading/trailing dashes. Returns ""
+    for an unusable name so the caller can skip it."""
+    if not name:
+        return ""
+    slug = re.sub(r"[^a-z0-9._-]+", "-", name.strip().lower()).strip("-")
+    # Never let a slug escape the skills dir or collide with dotfiles.
+    return "" if slug in ("", ".", "..") else slug[:80]
 
 
 class SandboxAccessError(Exception):
@@ -165,6 +211,10 @@ class AgentSession:
     # Harness-side transcript for context replay across harness switches.
     transcript: list[dict] = field(default_factory=list)
     pending_replay: bool = False
+    # Compaction metadata from the most recent `compact_boundary` SDK message,
+    # held until the summary user-message arrives so the two can be merged into
+    # one `compaction` event. None between compactions.
+    pending_compaction: dict | None = None
     # MCP relay: index → real server config. The agent only ever sees
     # http://127.0.0.1:<shim>/mcp/<generation>/<index>; Daytona egress
     # restrictions and MCP credentials are both handled backend-side.
@@ -202,12 +252,21 @@ class AgentSession:
     # we persist per-turn DELTAs. Tracks the last cumulative cost seen; reset to
     # 0 whenever a fresh ACP session opens (the SDK cost restarts there).
     last_cost_usd: float = 0.0
+    # Latest Anthropic per-account rate-limit snapshot seen on a usage_update
+    # (_meta._claude/rateLimit); carried onto the authoritative result row.
+    last_rate_limit: object | None = None
     # Editor-grant collaborators authorized on this session (the session always
     # runs under the OWNER's user_id; collaborators are authorized separately).
     # Maps a collaborator's Clerk subject → the share token they joined with,
     # so every action RE-VERIFIES the live grant (revocation takes effect at
     # once). The owner is never in this map.
     collaborator_tokens: dict[str, str] = field(default_factory=dict)
+    # Fingerprint of the workspace credentials (env vars) the agent process was
+    # LAUNCHED with — they're baked into the sandbox at spawn. Set when creds
+    # are resolved; a parked runtime whose fingerprint differs from a claiming
+    # session's must not be adopted (the env would be stale after a credential
+    # change). "" means no workspace credentials.
+    workspace_env_version: str = ""
 
     @property
     def supports_prompt_queueing(self) -> bool:
@@ -248,527 +307,33 @@ async def resolve_mcp_auth_headers(
     return headers
 
 
-def _content_block_text(block: dict) -> str:
-    if block.get("type") == "text":
-        return block.get("text", "")
-    return ""
-
-
-def _claude_meta(update: dict) -> dict:
-    """claude-agent-acp tucks subagent parentage under _meta.claudeCode."""
-    meta = update.get("_meta") or {}
-    claude = meta.get("claudeCode") or {}
-    return claude if isinstance(claude, dict) else {}
-
-
-def _is_subagent_call(kind: str, title: str, raw_input: dict) -> bool:
-    """True for an Agent/Task tool that spawns a background subagent.
-
-    claude-agent-acp maps Agent/Task to kind "think" (same as TodoWrite and
-    the Task* tools). It titles the call from `input.description`, falling
-    back to the literal "Task"/"Agent" when there is none — so we match
-    either that fallback title or the subagent brief signature (a `prompt`).
-    TodoWrite ("Update todos (N)") and TaskCreate ("Create task: X") have
-    neither and stay plain "think".
-    """
-    if kind != "think":
-        return False
-    if title in ("Task", "Agent"):
-        return True
-    return isinstance(raw_input, dict) and "prompt" in raw_input and (
-        "description" in raw_input or "subagent_type" in raw_input
-    )
-
-
-def _is_tool_search(title: str, raw_input: dict) -> bool:
-    """True for a tool-discovery call (Claude's ToolSearch / server tool)."""
-    if (title or "").startswith("mcp__"):
-        return False  # an MCP tool named *ToolSearch* is still an MCP call
-    t = (title or "").lower()
-    return "toolsearch" in t or "tool search" in t or "tool_search" in t
-
-
-def _parse_mcp_title(title: str) -> tuple[str, str] | None:
-    """Split an MCP tool title into (server, clean_tool).
-
-    Claude names MCP tools `mcp__<server>__<tool>`; this is the unambiguous
-    form. Returns None for non-MCP titles (slash/path forms are too risky to
-    parse — the frontend keeps its own light heuristic for those).
-    """
-    if not title or not title.startswith("mcp__"):
-        return None
-    rest = title[len("mcp__") :]
-    if "__" not in rest:
-        return None
-    server, tool = rest.split("__", 1)
-    return server, tool.replace("_", " ").strip()
-
-
-def _extract_balanced(text: str, start: int, open_ch: str, close_ch: str) -> str | None:
-    """Return text[start:end] spanning a balanced open/close pair, or None.
-
-    Skips braces inside JS string literals ('...', "...", `...`) so brace
-    characters in workflow meta values (e.g. a phase detail) aren't counted.
-    """
-    depth = 0
-    quote: str | None = None
-    escaped = False
-    for i in range(start, len(text)):
-        c = text[i]
-        if quote is not None:
-            if escaped:
-                escaped = False
-            elif c == "\\":
-                escaped = True
-            elif c == quote:
-                quote = None
-            continue
-        if c in ("'", '"', "`"):
-            quote = c
-        elif c == open_ch:
-            depth += 1
-        elif c == close_ch:
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return None
-
-
-_WF_NAME = re.compile(r"""name\s*:\s*["'`]([^"'`]+)""")
-_WF_DESC = re.compile(r"""description\s*:\s*["'`]([^"'`]*)""")
-_WF_TITLE = re.compile(r"""title\s*:\s*["'`]([^"'`]+)""")
-_WF_DETAIL = re.compile(r"""detail\s*:\s*["'`]([^"'`]*)""")
-
-
-def _parse_workflow_script(raw_input: dict) -> dict | None:
-    """Parse a Claude Workflow tool's script (JS) into {name, description,
-    phases:[{title,detail}], script}. Tolerant + string-only (the script is
-    untrusted agent output — never eval). Returns None when there is no
-    script; always preserves the raw script so the disclosure still works.
-    """
-    if not isinstance(raw_input, dict):
-        return None
-    script = raw_input.get("script")
-    if not isinstance(script, str) or not script.strip():
-        script = next(
-            (v for v in raw_input.values() if isinstance(v, str) and v.strip()),
-            None,
-        )
-    if not script:
-        return None
-    out: dict = {"script": script[:20000]}
-    try:
-        midx = script.find("meta")
-        brace = script.find("{", midx) if midx != -1 else -1
-        meta_block = (
-            _extract_balanced(script, brace, "{", "}") if brace != -1 else None
-        )
-        if meta_block:
-            m = _WF_NAME.search(meta_block)
-            if m:
-                out["name"] = m.group(1)
-            d = _WF_DESC.search(meta_block)
-            if d and d.group(1):
-                out["description"] = d.group(1)
-            pidx = meta_block.find("phases")
-            pbr = meta_block.find("[", pidx) if pidx != -1 else -1
-            arr = (
-                _extract_balanced(meta_block, pbr, "[", "]") if pbr != -1 else None
-            )
-            phases: list[dict] = []
-            if arr:
-                i = 0
-                while len(phases) < 40:
-                    ob = arr.find("{", i)
-                    if ob == -1:
-                        break
-                    obj = _extract_balanced(arr, ob, "{", "}")
-                    if not obj:
-                        break
-                    t = _WF_TITLE.search(obj)
-                    if t:
-                        ph = {"title": t.group(1)}
-                        de = _WF_DETAIL.search(obj)
-                        if de and de.group(1):
-                            ph["detail"] = de.group(1)
-                        phases.append(ph)
-                    i = ob + len(obj)
-            out["phases"] = phases
-    except Exception:
-        logger.debug("workflow meta parse failed", exc_info=True)
-    return out
-
-
-def _with_workflow(raw_input: dict) -> dict:
-    """Inject parsed workflow metadata into a tool's arguments when present.
-
-    Also caps the raw `script` (which is persisted with the tool call) to the
-    same bound as the parsed copy so a very large generated script can't bloat
-    the persisted message.
-    """
-    wf = _parse_workflow_script(raw_input)
-    if wf is None:
-        return raw_input
-    out = {**raw_input, "workflow": wf}
-    if isinstance(out.get("script"), str):
-        out["script"] = out["script"][:20000]
-    return out
-
-
-def normalize_session_update(update: dict) -> dict | None:
-    """Map an ACP session/update payload to a Harness SSE event."""
-    kind = update.get("sessionUpdate")
-    parent_id = _claude_meta(update).get("parentToolUseId")
-    if kind == "agent_message_chunk":
-        return {
-            "event": "token",
-            "data": {
-                "content": _content_block_text(update.get("content") or {}),
-                # Distinct assistant messages within one turn (e.g. before and
-                # after a background task completes) carry distinct messageIds;
-                # the UI starts a new text part on change.
-                "message_id": update.get("messageId"),
-                **({"parent_id": parent_id} if parent_id else {}),
-            },
-        }
-    if kind == "agent_thought_chunk":
-        return {
-            "event": "thinking",
-            "data": {
-                "content": _content_block_text(update.get("content") or {}),
-                "message_id": update.get("messageId"),
-                **({"parent_id": parent_id} if parent_id else {}),
-            },
-        }
-    if kind == "tool_call":
-        raw_input = update.get("rawInput") or {}
-        title = update.get("title") or update.get("kind") or "tool"
-        tool_kind = update.get("kind") or "other"
-        extra: dict = {}
-        # Refine the kind so the UI can render each flow first-class. These
-        # are synthetic kinds the frontend branches on; no ACP agent emits
-        # them, but they are deterministic from title/rawInput.
-        if title == "Workflow":
-            # Claude's multi-agent orchestration tool (ultracode). The script
-            # (meta.name/description/phases) is usually empty on this initial
-            # tool_call and arrives on a later tool_call_update rawInput; parse
-            # whatever is here and let the update branch fill it in.
-            tool_kind = "workflow"
-            raw_input = _with_workflow(raw_input)
-        elif _is_subagent_call(tool_kind, title, raw_input):
-            tool_kind = "subagent"
-        elif _is_tool_search(title, raw_input):
-            tool_kind = "tool_search"
-        else:
-            mcp = _parse_mcp_title(title)
-            if mcp is not None:
-                extra["server_name"] = mcp[0]
-                title = mcp[1]  # show the clean tool name; server in the badge
-        return {
-            "event": "tool_call",
-            "data": {
-                "call_id": update.get("toolCallId", ""),
-                "tool": title,
-                "arguments": raw_input,
-                # ACP tool kind (execute|read|edit|delete|move|search|fetch|
-                # think|switch_mode|other) plus our synthetic subagent/
-                # tool_search — drives first-class rendering.
-                "kind": tool_kind,
-                "status": update.get("status"),
-                "locations": update.get("locations") or [],
-                **extra,
-                # Set for tool calls made by a background/sub agent — the UI
-                # nests these under the spawning Task tool call.
-                **({"parent_id": parent_id} if parent_id else {}),
-            },
-        }
-    if kind == "tool_call_update":
-        status = update.get("status")
-        # Display-only live command output (codex exec deltas / claude bash).
-        # The agent ran the command in its own sandbox and streams output bytes
-        # via _meta.terminal_output (per-chunk) and _meta.terminal_exit (at end).
-        # These APPEND to the call's output instead of replacing it — and we
-        # must NOT fall through to the rawOutput fallback below, which would
-        # overwrite the streamed terminal with a JSON dump at completion.
-        meta = update.get("_meta") or {}
-        term_out = meta.get("terminal_output") or {}
-        term_exit = meta.get("terminal_exit") or {}
-        output_delta = term_out.get("data") if isinstance(term_out, dict) else None
-        exit_code = term_exit.get("exit_code") if isinstance(term_exit, dict) else None
-        if output_delta is not None or exit_code is not None:
-            data: dict = {
-                "call_id": update.get("toolCallId", ""),
-                "append": True,
-                "status": status,
-            }
-            if output_delta:
-                data["output_delta"] = output_delta
-            if exit_code is not None:
-                data["exit_code"] = exit_code
-            return {"event": "tool_result", "data": data}
-
-        content = update.get("content") or []
-        result_text = "\n".join(
-            _content_block_text(c.get("content") or {})
-            for c in content
-            if isinstance(c, dict) and c.get("type") == "content"
-        )
-        # Structured diff content (file edits) gets first-class rendering.
-        diff = next(
-            (
-                {
-                    "path": c.get("path"),
-                    "oldText": c.get("oldText"),
-                    "newText": c.get("newText"),
-                }
-                for c in content
-                if isinstance(c, dict) and c.get("type") == "diff"
-            ),
-            None,
-        )
-        raw_output = update.get("rawOutput")
-        # Only terminal updates may fabricate a result from rawOutput: a
-        # truthy result marks the call finished in the UI, and ACP allows
-        # status-only progress updates carrying no content at all.
-        fallback = (
-            json.dumps(raw_output)[:4000]
-            if raw_output and status in ("completed", "failed")
-            else ""
-        )
-        # The initial tool_call often streams with empty/partial rawInput
-        # (content_block_start); the COMPLETE input arrives here on the
-        # refining tool_call_update. Forward it so the UI can fill in args it
-        # didn't have yet — notably the Workflow tool's script (meta.phases),
-        # which we parse into a structured `workflow` field here.
-        refined_input = update.get("rawInput")
-        if isinstance(refined_input, dict) and refined_input.get("script"):
-            refined_input = _with_workflow(refined_input)
-        # A content-bearing update with no explicit status IS a completion —
-        # mark it so the UI stops showing it as "running" (notably execute
-        # calls, which the frontend won't treat truthy-result alone as done
-        # because their output also streams via the append path).
-        effective_status = status or ("completed" if (result_text or fallback) else None)
-        return {
-            "event": "tool_result",
-            "data": {
-                "call_id": update.get("toolCallId", ""),
-                "status": effective_status,
-                "result": result_text or fallback,
-                **({"diff": diff} if diff else {}),
-                **(
-                    {"arguments": refined_input}
-                    if isinstance(refined_input, dict) and refined_input
-                    else {}
-                ),
-            },
-        }
-    if kind == "config_option_update":
-        return {
-            "event": "config_update",
-            "data": {"options": update.get("configOptions") or []},
-        }
-    if kind == "usage_update":
-        # Context window + cost, billed to the user's own agent account.
-        cost = update.get("cost") or {}
-        return {
-            "event": "agent_usage",
-            "data": {
-                "used": update.get("used"),
-                "size": update.get("size"),
-                "cost": cost.get("amount"),
-                "currency": cost.get("currency", "USD"),
-            },
-        }
-    if kind == "plan":
-        return {"event": "plan", "data": {"entries": update.get("entries") or []}}
-    if kind == "available_commands_update":
-        return {
-            "event": "commands_update",
-            "data": {"commands": update.get("availableCommands") or []},
-        }
-    if kind == "current_mode_update":
-        return {"event": "mode_update", "data": {"mode_id": update.get("currentModeId")}}
-    # user_message_chunk and unknown kinds: nothing to surface.
-    return None
-
-
-# claude-agent-acp re-emits raw Claude Agent SDK messages as a `_claude/sdkMessage`
-# notification when session/new opts in via `_meta.claudeCode.emitRawSDKMessages`.
-# `type` is a plain string in the filter schema, so listing both the documented
-# top-level shape (`type: "task_*"`) and the older system+subtype shape costs
-# nothing — whichever the running SDK uses matches, the other matches nothing.
-SDK_TASK_MESSAGE_FILTERS = [
-    {"type": "task_started"},
-    {"type": "task_progress"},
-    {"type": "task_updated"},
-    {"type": "task_notification"},
-    {"type": "system", "subtype": "task_started"},
-    {"type": "system", "subtype": "task_progress"},
-    {"type": "system", "subtype": "task_updated"},
-    {"type": "system", "subtype": "task_notification"},
-]
-
-_TASK_PHASES = {"task_started", "task_progress", "task_updated", "task_notification"}
-_TASK_TERMINAL = {"completed", "failed", "killed", "cancelled"}
-
-
-def _first_str(message: dict, *keys: str) -> str | None:
-    """First present, non-empty string value among `keys` (defensive: the SDK
-    task-message schema varies across versions / camel vs snake case)."""
-    for key in keys:
-        value = message.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def normalize_sdk_task_message(message: dict) -> list[dict]:
-    """Map a Claude Agent SDK task-lifecycle message into Harness SSE events.
-
-    Claude's Workflow tool (multi-agent orchestration) and Task subagents run
-    *inside* the agent; claude-agent-acp drops their ``task_started/progress/
-    updated/notification`` SDK messages, so their activity is otherwise
-    invisible. With emitRawSDKMessages on we receive them here and reuse the
-    existing subagent ``tool_call``/``tool_result`` vocabulary so each workflow
-    agent renders in the timeline and the Agents panel with live status.
-
-    Every field is read permissively — the exact schema is external and
-    version-dependent — and anything unrecognized degrades to ``[]``.
-    """
-    if not isinstance(message, dict):
-        return []
-    mtype = message.get("type")
-    phase = message.get("subtype") if mtype == "system" else mtype
-    if phase not in _TASK_PHASES:
-        return []
-    task_id = _first_str(message, "task_id", "taskId", "uuid")
-    if not task_id:
-        return []
-    # Namespaced so it can never collide with an ACP toolCallId from the normal
-    # session/update path (these are a parallel id space).
-    call_id = f"wf-task:{task_id}"
-    # If the spawning tool-use id is known, nest under it; the frontend falls
-    # back to top-level when the parent isn't present in the turn.
-    parent = _first_str(
-        message, "tool_use_id", "toolUseId", "parent_tool_use_id", "parentToolUseId"
-    )
-    parent_field = {"parent_id": parent} if parent else {}
-
-    if phase == "task_started":
-        subagent_type = _first_str(message, "subagent_type", "subagentType", "task_type")
-        desc = _first_str(message, "description", "prompt")
-        # Lead the row title with the agent type so "what each agent is" is
-        # visible at a glance (e.g. "reviewer: audit the diff").
-        if subagent_type and desc and subagent_type not in desc:
-            description = f"{subagent_type}: {desc}"
-        else:
-            description = desc or subagent_type or "Subagent"
-        args = {
-            k: v
-            for k, v in {
-                "subagent_type": subagent_type,
-                "description": _first_str(message, "description"),
-                "prompt": _first_str(message, "prompt"),
-            }.items()
-            if v
-        }
-        return [
-            {
-                "event": "tool_call",
-                "data": {
-                    "call_id": call_id,
-                    "tool": description,
-                    "arguments": args,
-                    "kind": "subagent",
-                    "status": "in_progress",
-                    "locations": [],
-                    **parent_field,
-                },
-            }
-        ]
-
-    # task_updated / task_notification can be terminal; task_progress never is.
-    status = message.get("status")
-    if isinstance(status, dict):  # tolerate a {status: {status: ...}} patch shape
-        status = status.get("status")
-    if not isinstance(status, str):
-        status = None
-    summary = _first_str(
-        message, "summary", "result", "description", "last_tool_name", "output"
-    )
-    output_file = _first_str(message, "output_file", "outputFile")
-
-    if phase != "task_progress" and status in _TASK_TERMINAL:
-        # The terminal `status` already marks the call done in the UI, so leave
-        # the result empty (rather than echoing the bare status word) when the
-        # message carries no real summary.
-        result = summary or ""
-        if output_file:
-            result = f"{result}\n\n→ {output_file}".strip()
-        return [
-            {
-                "event": "tool_result",
-                "data": {
-                    "call_id": call_id,
-                    "status": "failed" if status in {"failed", "killed"} else "completed",
-                    "result": result,
-                },
-            }
-        ]
-
-    # Non-terminal progress: append a live activity line, keep the call running.
-    # `append` never blanks an existing result and won't mark the call finished.
-    data: dict = {"call_id": call_id, "append": True, "status": "in_progress"}
-    if summary:
-        data["output_delta"] = summary.rstrip("\n") + "\n"
-    return [{"event": "tool_result", "data": data}]
-
-
-def parse_elicitation_fields(requested_schema: dict) -> list[dict]:
-    """Flatten an ACP form-elicitation JSON schema into UI-friendly fields.
-
-    claude-agent-acp encodes AskUserQuestion as one property per question
-    (string+oneOf for single-select, array+items.anyOf for multi-select)
-    plus an optional free-text "customAnswer" property. Generic MCP
-    elicitations may also use plain string/number/boolean properties.
-    """
-    fields: list[dict] = []
-    for key, prop in (requested_schema.get("properties") or {}).items():
-        if not isinstance(prop, dict):
-            continue
-        base = {
-            "key": key,
-            "title": prop.get("title"),
-            "description": prop.get("description"),
-        }
-        one_of = prop.get("oneOf")
-        any_of = (prop.get("items") or {}).get("anyOf") if prop.get("type") == "array" else None
-        choices = one_of if isinstance(one_of, list) else any_of
-        if isinstance(choices, list) and choices:
-            fields.append(
-                {
-                    **base,
-                    "kind": "multiselect" if any_of else "select",
-                    "options": [
-                        {
-                            "value": c.get("const"),
-                            "label": c.get("title") or str(c.get("const")),
-                        }
-                        for c in choices
-                        if isinstance(c, dict) and c.get("const") is not None
-                    ],
-                }
-            )
-        elif prop.get("type") == "boolean":
-            fields.append({**base, "kind": "boolean"})
-        else:
-            # Plain string/number inputs (incl. the customAnswer free-text).
-            fields.append({**base, "kind": "text"})
-    return fields
-
-
 def _build_replay_preamble(transcript: list[dict]) -> str:
-    """Context block replayed into a fresh ACP session after a harness switch."""
+    """Context block replayed into a fresh ACP session.
+
+    Two shapes: the usual harness-switch replay of the recent conversation, or
+    a "new session from summary" clone seeded with a single compaction summary
+    — detected by its canonical preamble and replayed IN FULL (not truncated at
+    4000 like the per-message switch replay) with summary-appropriate framing.
+    """
+    if (
+        len(transcript) == 1
+        and isinstance(transcript[0].get("content"), str)
+        and transcript[0]["content"].lstrip().startswith(COMPACTION_SUMMARY_PREAMBLE)
+    ):
+        summary = transcript[0]["content"]
+        if len(summary) > 16000:
+            summary = summary[:16000] + " …[truncated]"
+        return "\n".join(
+            [
+                "<conversation_history>",
+                "You are continuing a previous conversation. Below is a compacted",
+                "summary of everything that happened so far — treat it as full",
+                "context and continue naturally; do not mention this restoration:",
+                "",
+                summary,
+                "</conversation_history>",
+            ]
+        )
     lines = [
         "<conversation_history>",
         "You are continuing an ongoing conversation. The user has switched the",
@@ -804,7 +369,130 @@ class ParkedRuntime:
     # vars are baked in at spawn) — a session wanting different credentials
     # must never adopt this runtime.
     credential_id: str | None = None
+    # Fingerprint of the workspace env baked into the runtime at spawn. A
+    # session whose workspace credentials changed (different fingerprint) must
+    # not adopt this runtime — its env would be stale.
+    workspace_env_version: str = ""
     parked_at: float = field(default_factory=time.monotonic)
+
+
+def _result_token_categories(
+    usage: object, model_usage: object
+) -> dict[str, int]:
+    """Cumulative token counts by category from an SDK result message.
+
+    Prefers the top-level `usage` (snake_case, Messages-API shape); falls back to
+    summing the per-model `modelUsage` block (camelCase). Defensive: any missing
+    field reads as 0, so an unexpected shape degrades to zeros rather than error.
+    """
+    if isinstance(usage, dict):
+        return {
+            "input": int(usage.get("input_tokens") or 0),
+            "output": int(usage.get("output_tokens") or 0),
+            "cache_read": int(usage.get("cache_read_input_tokens") or 0),
+            "cache_creation": int(usage.get("cache_creation_input_tokens") or 0),
+        }
+    out = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
+    if isinstance(model_usage, dict):
+        for m in model_usage.values():
+            if not isinstance(m, dict):
+                continue
+            out["input"] += int(m.get("inputTokens") or 0)
+            out["output"] += int(m.get("outputTokens") or 0)
+            out["cache_read"] += int(m.get("cacheReadInputTokens") or 0)
+            out["cache_creation"] += int(m.get("cacheCreationInputTokens") or 0)
+    return out
+
+
+def _result_primary_model(model_usage: object) -> str | None:
+    """The model that produced the most output tokens in this result."""
+    if not isinstance(model_usage, dict):
+        return None
+    best: str | None = None
+    best_out = -1
+    for name, m in model_usage.items():
+        if not isinstance(m, dict):
+            continue
+        out = int(m.get("outputTokens") or 0)
+        if out > best_out:
+            best_out = out
+            best = name if isinstance(name, str) else None
+    return best
+
+
+def _session_model(session: "AgentSession") -> str | None:
+    """The model currently selected on the session's ACP config options."""
+    for opt in session.config_options:
+        if isinstance(opt, dict) and opt.get("id") == "model":
+            value = opt.get("currentValue")
+            return value if isinstance(value, str) else None
+    return None
+
+
+def _is_sdk_result_message(message: dict) -> bool:
+    """True for the SDK result message in either shape the adapter may use."""
+    if message.get("type") == "result":
+        return True
+    return message.get("type") == "system" and message.get("subtype") == "result"
+
+
+class ProvisioningContext:
+    """Bakes an agent session's full credential + context state behind one
+    interface.
+
+    The caller gets fully-materialized ``AgentCredentials`` plus the
+    workspace-env fingerprint from a single await, instead of sequencing three
+    order-sensitive steps and threading a half-built creds object — a sequence
+    ``create`` and ``_revive`` used to duplicate verbatim (the drift risk this
+    removes). The order is load-bearing and preserved exactly:
+
+      1. ``resolve_agent_credentials`` — resolve + decrypt (the ONLY step that
+         raises; a missing/foreign credential surfaces to the caller);
+      2. ``_inject_workspace_env`` — merges the workspace env into ``creds.env``
+         (``{**ws, **creds.env}`` so agent auth wins) and returns the
+         fingerprint;
+      3. ``_attach_skill_pack_context`` — stages skill-pack context files.
+
+    Steps 2-3 are best-effort (they degrade to empty rather than raise), so a
+    Convex/GitHub hiccup still lets a session start. NOTHING is memoized:
+    ``reprepare`` re-resolves on every revive, which is exactly where a
+    credential rotation/revocation takes effect for a previously-live session.
+    Daytona provisioning stays OUTSIDE this module — it is the caller's
+    ``asyncio.to_thread`` boundary, fed the baked ``creds``.
+    """
+
+    def __init__(self, manager: "AgentSessionManager") -> None:
+        self._manager = manager
+
+    async def prepare(
+        self, user_id: str, harness: HarnessConfig, agent_id: str,
+    ) -> PreparedProvisioning:
+        """Bake creds + context for a NEW session (``create``)."""
+        return await self._prepare(user_id, harness, agent_id)
+
+    async def reprepare(self, session: "AgentSession") -> PreparedProvisioning:
+        """Re-bake for a live session being revived. Re-resolves from scratch
+        (never cached) so a rotation/revocation lands on the revived session."""
+        return await self._prepare(
+            session.user_id, session.harness, session.agent_id,
+        )
+
+    async def _prepare(
+        self, user_id: str, harness: HarnessConfig, agent_id: str,
+    ) -> PreparedProvisioning:
+        creds = await resolve_agent_credentials(
+            self._manager._http_client(), agent_id, user_id,
+            credential_id=harness.agent_credential_id,
+        )
+        workspace_env_version = await self._manager._inject_workspace_env(
+            creds, harness, user_id,
+        )
+        await self._manager._attach_skill_pack_context(
+            creds, harness, agent_id, user_id,
+        )
+        return PreparedProvisioning(
+            creds=creds, workspace_env_version=workspace_env_version,
+        )
 
 
 class AgentSessionManager:
@@ -819,6 +507,13 @@ class AgentSessionManager:
         # Fire-and-forget usage-recording tasks; held so they aren't GC'd
         # mid-flight, discarded on completion.
         self._usage_tasks: set[asyncio.Task] = set()
+        # Per-credential debounce for the subscription-usage ping (monotonic ts
+        # of the last fetch) — the windows move slowly, so once a minute is plenty
+        # and keeps the extra inference calls negligible.
+        self._sub_usage_fetched_at: dict[str, float] = {}
+        # Bakes creds + workspace-env + skill-pack context behind one interface
+        # (used by both create and _revive, which used to duplicate the steps).
+        self._provisioning = ProvisioningContext(self)
 
     @staticmethod
     def _runtime_key(
@@ -836,6 +531,225 @@ class AgentSessionManager:
         if self._http is None:
             self._http = httpx.AsyncClient(timeout=30.0)
         return self._http
+
+    def _maybe_fetch_subscription_usage(
+        self, session: AgentSession, cred_id: str
+    ) -> None:
+        """Kick off a debounced subscription-usage fetch for this credential."""
+        now = time.monotonic()
+        if now - self._sub_usage_fetched_at.get(cred_id, 0.0) < 60.0:
+            return
+        # Set before firing so the many agent_usage events in one turn don't all
+        # queue a fetch; a failure simply waits out the TTL before retrying.
+        self._sub_usage_fetched_at[cred_id] = now
+        # Bound the map on a long-lived process: entries older than the TTL are
+        # dead weight (the debounce only consults the last `now`).
+        if len(self._sub_usage_fetched_at) > 256:
+            cutoff = now - 60.0
+            self._sub_usage_fetched_at = {
+                k: v for k, v in self._sub_usage_fetched_at.items() if v >= cutoff
+            }
+        task = asyncio.create_task(self._fetch_subscription_usage(session, cred_id))
+        self._usage_tasks.add(task)
+        task.add_done_callback(self._usage_tasks.discard)
+
+    async def _fetch_subscription_usage(
+        self, session: AgentSession, cred_id: str
+    ) -> None:
+        """Resolve the credential's OAuth token, read the live 5h + weekly
+        windows off Anthropic's rate-limit headers, and persist them onto the
+        credential. Only OAuth (subscription) credentials carry these windows;
+        api-key credentials are skipped. Best-effort."""
+        try:
+            from app.services.agents.credentials import resolve_agent_credentials
+            from app.services.usage import (
+                fetch_subscription_usage,
+                record_agent_rate_limit,
+            )
+
+            creds = await resolve_agent_credentials(
+                self._http_client(), "claude-code", session.user_id, cred_id
+            )
+            token = (creds.env or {}).get("CLAUDE_CODE_OAUTH_TOKEN")
+            if not token:
+                return  # api-key credential — no subscription windows to show
+            usage = await fetch_subscription_usage(self._http_client(), token)
+            # Skip the write when unchanged — the windows move slowly, so a long
+            # session would otherwise re-persist the same blob every minute.
+            if usage and usage != session.last_rate_limit:
+                session.last_rate_limit = usage
+                await record_agent_rate_limit(
+                    self._http_client(),
+                    user_id=session.user_id,
+                    agent_credential_id=cred_id,
+                    rate_limit=usage,
+                )
+        except Exception:
+            logger.warning(
+                "Subscription usage fetch failed for credential '%s'",
+                cred_id,
+                exc_info=True,
+            )
+
+    async def _inject_workspace_env(
+        self, creds, harness: HarnessConfig, user_id: str,
+    ) -> str:
+        """Merge the workspace's assigned credential env into `creds.env` and
+        return a fingerprint of that env.
+
+        Agent-auth keys win over workspace credentials (defense-in-depth — the
+        reserved-name denylist already prevents collisions). The fingerprint
+        identifies the exact env baked into the sandbox at spawn so a parked
+        runtime with stale credentials is never adopted. Returns "" when the
+        harness has no workspace or no assigned credentials.
+
+        NEVER log `creds.env` or the resolved values.
+        """
+        workspace_id = getattr(harness, "workspace_id", None)
+        if not workspace_id:
+            return ""
+        try:
+            ws_env = await resolve_workspace_env(
+                self._http_client(), workspace_id, user_id,
+            )
+        except Exception:
+            # Supplementary env must never block a session from starting.
+            logger.exception(
+                "Failed to resolve workspace credentials for workspace '%s'",
+                workspace_id,
+            )
+            return ""
+        if not ws_env:
+            return ""
+        # Agent auth (creds.env) overrides workspace-supplied names.
+        creds.env = {**ws_env, **creds.env}
+        return _workspace_env_fingerprint(ws_env)
+
+    async def _attach_skill_pack_context(
+        self, creds, harness: HarnessConfig, agent_id: str, user_id: str,
+    ) -> None:
+        """Resolve the harness's skill packs and stage their context files on
+        `creds` so provisioning writes them to the sandbox:
+
+          - AGENTS.md (all agentic harnesses);
+          - CLAUDE.md (claude-code only), optionally @-importing AGENTS.md;
+          - ~/.claude/skills/<name>/SKILL.md for each pack skill with cached
+            content (claude-code only) so the agent can load them.
+
+        Best-effort: skill packs are supplementary context — a Convex hiccup
+        must never block a session. `user_id` is the harness OWNER (the session
+        is created under the owner even for a collaborator's turn), so the
+        owner's packs resolve regardless of who triggered the run.
+        """
+        skill_pack_ids = getattr(harness, "skill_pack_ids", None)
+        if not skill_pack_ids:
+            return
+        from app.services.convex import resolve_skill_pack_context
+
+        try:
+            ctx = await resolve_skill_pack_context(
+                self._http_client(), user_id, skill_pack_ids,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to resolve skill packs for harness '%s'",
+                harness.harness_id,
+            )
+            return
+        if not ctx:
+            return
+
+        # Every Harness-written file is marked so a re-provision can prune ONLY
+        # our files (removed skills / detached packs actually clear) without
+        # touching anything the user authored. See provision_agent_sandbox.
+        marker = HARNESS_MANAGED_MARKER
+        is_claude = agent_id == "claude-code"
+        agents_md = (ctx.get("agentsMd") or "").strip()
+        claude_md = (ctx.get("claudeMd") or "").strip()
+        if agents_md:
+            creds.context_files[f"{SANDBOX_HOME}/AGENTS.md"] = (
+                f"{marker}\n{agents_md}\n"
+            )
+        if is_claude and (claude_md or (agents_md and ctx.get("claudeImportsAgents"))):
+            # @AGENTS.md pulls AGENTS.md into Claude Code's context via its
+            # @-import; only emit it when AGENTS.md actually exists.
+            prefix = (
+                "@AGENTS.md\n\n"
+                if agents_md and ctx.get("claudeImportsAgents")
+                else ""
+            )
+            body = f"{prefix}{claude_md}".strip()
+            creds.context_files[f"{SANDBOX_HOME}/CLAUDE.md"] = (
+                f"{marker}\n{body}\n"
+            )
+        if is_claude:
+            skills = ctx.get("skills") or []
+            # Fetch SKILL.md for skills whose detail isn't cached yet, so a
+            # freshly-added skill still materializes (mirrors the default loop's
+            # GitHub fallback) instead of being silently skipped on a race with
+            # the frontend's ensureSkillDetails.
+            uncached = [
+                s.get("name")
+                for s in skills
+                if s.get("name") and not (s.get("detail") or "").strip()
+            ]
+            fetched = await self._fetch_uncached_skill_md(uncached)
+            used_slugs: dict[str, str] = {}
+            for skill in skills:
+                name = skill.get("name") or ""
+                detail = (skill.get("detail") or "").strip() or fetched.get(name, "")
+                if not detail:
+                    continue  # SKILL.md couldn't be resolved anywhere — skip
+                slug = _skill_dir_slug(skill.get("skillName") or name)
+                if not slug:
+                    continue
+                # Two skills sharing a trailing id from different repos would
+                # collide on the same dir (and silently overwrite). Disambiguate
+                # the loser with the full-id slug.
+                if used_slugs.get(slug, name) != name:
+                    slug = _skill_dir_slug(name) or slug
+                used_slugs[slug] = name
+                dir_path = f"{SANDBOX_HOME}/.claude/skills/{slug}"
+                creds.context_files[f"{dir_path}/SKILL.md"] = detail + "\n"
+                creds.context_files[f"{dir_path}/{HARNESS_MANAGED_SKILL_FILE}"] = ""
+
+    async def _fetch_uncached_skill_md(
+        self, names: list[str],
+    ) -> dict[str, str]:
+        """Best-effort GitHub fetch of SKILL.md for skills missing a cached
+        detail. Bounded by an overall time budget AND a count cap so a cold
+        session (or a slow/unreachable GitHub) can NEVER stall provisioning —
+        whatever isn't fetched in time self-heals once the frontend's
+        ensureSkillDetails caches it. Returns {full_id: markdown}."""
+        if not names:
+            return {}
+        from app.services.skill_content import fetch_skill_md
+
+        capped = names[:20]
+        out: dict[str, str] = {}
+        sem = asyncio.Semaphore(4)
+
+        async def one(name: str) -> None:
+            async with sem:
+                try:
+                    md = await fetch_skill_md(self._http_client(), name)
+                except Exception:
+                    md = None
+            if md and md.strip():
+                out[name] = md.strip()
+
+        try:
+            # gather mutates `out` as each completes; a timeout cancels the rest
+            # but keeps whatever already landed.
+            await asyncio.wait_for(
+                asyncio.gather(*(one(n) for n in capped)), timeout=8.0,
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning(
+                "Skill SKILL.md back-fill timed out (%d/%d fetched)",
+                len(out), len(capped),
+            )
+        return out
 
     def get(self, session_id: str, user_id: str) -> AgentSession:
         session = self._sessions.get(session_id)
@@ -898,11 +812,9 @@ class AgentSessionManager:
                     "Sandbox not found or not owned by this user"
                 )
 
-        creds = await resolve_agent_credentials(
-            self._http_client(), agent_id, user_id,
-            credential_id=harness.agent_credential_id,
-        )
-
+        # Resolve credentials + workspace env + skill-pack context in one baked
+        # step (resolve -> inject workspace env -> materialize skill packs).
+        prepared = await self._provisioning.prepare(user_id, harness, agent_id)
         session = AgentSession(
             id=uuid.uuid4().hex,
             user_id=user_id,
@@ -910,9 +822,12 @@ class AgentSessionManager:
             harness=harness,
             conversation_id=conversation_id,
         )
+        # Record the workspace-env fingerprint BEFORE provisioning so
+        # _claim_parked can compare it (refuse a runtime with stale credentials).
+        session.workspace_env_version = prepared.workspace_env_version
         self._sessions[session.id] = session
         self._ensure_reaper()
-        asyncio.create_task(self._provision(session, creds, user_ctx))
+        asyncio.create_task(self._provision(session, prepared.creds, user_ctx))
         return session
 
     def _claim_parked(self, session: AgentSession, attach_sandbox_id: str | None):
@@ -928,13 +843,16 @@ class AgentSessionManager:
         key = self._runtime_key(session.user_id, session.agent_id, attach_sandbox_id)
         parked = self._parked.pop(key, None)
         if parked is not None:
-            if parked.credential_id == session.harness.agent_credential_id:
+            if (
+                parked.credential_id == session.harness.agent_credential_id
+                and parked.workspace_env_version == session.workspace_env_version
+            ):
                 return parked
-            # The runtime's agent was launched with DIFFERENT credentials
-            # (env vars are fixed at spawn) — adopting it would keep e.g. a
-            # rotated-away token alive. Destroy it and provision fresh.
+            # The runtime's agent was launched with DIFFERENT credentials or
+            # workspace env (both fixed at spawn) — adopting it would keep e.g.
+            # a rotated-away token alive. Destroy it and provision fresh.
             logger.info(
-                "Discarding parked %s runtime (sandbox=%s): credential link "
+                "Discarding parked %s runtime (sandbox=%s): credentials "
                 "changed", parked.agent_id, parked.runtime.sandbox_id,
             )
             destroy = asyncio.create_task(
@@ -948,6 +866,7 @@ class AgentSessionManager:
             and s.user_id == session.user_id
             and s.agent_id == session.agent_id
             and s.harness.agent_credential_id == session.harness.agent_credential_id
+            and s.workspace_env_version == session.workspace_env_version
             and s.status == "ready"
             and not s.lock.locked()
             and s.turn_guard == 0
@@ -1059,24 +978,41 @@ class AgentSessionManager:
                     with contextlib.suppress(Exception):
                         await session.connection.close()
                     session.connection = None
+                # Reclaim an OWNED box from the failed attempt before retrying.
+                # Sandbox registration runs only AFTER conn.start()/initialize,
+                # so a transient failure there leaves a freshly-created, owned,
+                # unlinked box; the next attempt provisions a new one and
+                # overwrites session.runtime, orphaning the first. Attached
+                # (non-owned) boxes are left in place for the retry to re-attach.
+                if session.runtime is not None and session.runtime.owns_sandbox:
+                    with contextlib.suppress(Exception):
+                        await self._destroy_runtime(
+                            session.runtime, session.agent_id,
+                        )
+                    session.runtime = None
                 await asyncio.sleep(1.0 * attempt)
 
     async def _provision_once(self, session: AgentSession, creds, user_ctx) -> None:
         agent = get_agent(session.agent_id)
-        # Deeper unification: harnesses with a sandbox run the agent
-        # INSIDE that sandbox (user's real files, persistent), instead
-        # of a session-owned scratch sandbox.
-        attach_sandbox_id = (
-            session.harness.sandbox_id
-            if session.harness.sandbox_enabled and session.harness.sandbox_id
-            else None
+        # Deeper unification: harnesses with a sandbox (explicit, or the
+        # per-workspace unified one) run the agent INSIDE that sandbox — the
+        # user's real files, persistent — instead of a session-owned scratch
+        # sandbox. create_persistent means "create the workspace's unified box".
+        attach_sandbox_id, create_persistent = await self._resolve_sandbox_plan(
+            session,
         )
 
         # Warm path: adopt a parked runtime (or steal an idle session's)
-        # before paying for a cold sandbox.
+        # before paying for a cold sandbox. Skipped when we must create the
+        # workspace's unified sandbox — adopting a scratch runtime would defeat
+        # the unification on that first run.
         session.user_ctx = user_ctx  # revive-during-adopt opens with it
         adopted = False
-        claim = self._claim_parked(session, attach_sandbox_id)
+        claim = (
+            None
+            if create_persistent
+            else self._claim_parked(session, attach_sandbox_id)
+        )
         if isinstance(claim, tuple):
             victim, key = claim
             await self._teardown(victim, park=True)
@@ -1092,13 +1028,39 @@ class AgentSessionManager:
         if not adopted:
             if attach_sandbox_id is None:
                 await self._check_sandbox_cap(session.user_id)
-            session.runtime = await asyncio.to_thread(
-                provision_agent_sandbox,
-                session.user_id,
-                agent,
-                creds,
-                attach_sandbox_id,
-            )
+            try:
+                session.runtime = await asyncio.to_thread(
+                    provision_agent_sandbox,
+                    session.user_id,
+                    agent,
+                    creds,
+                    attach_sandbox_id,
+                    None,
+                    create_persistent,
+                )
+            except DaytonaNotFoundError:
+                # The box we tried to attach is gone from Daytona — auto-delete
+                # reclaimed an abandoned one, or it was removed out-of-band —
+                # while Convex still linked it (verify_sandbox_owner checks the
+                # Convex record, not Daytona). Heal instead of dead-ending: drop
+                # the stale link, and for a workspace-unification attach create
+                # a fresh persistent box to relink. An explicit, user-chosen
+                # harness sandbox can't be fabricated, so that re-raises.
+                if attach_sandbox_id is None or not await (
+                    self._recover_from_missing_attach(session, attach_sandbox_id)
+                ):
+                    raise
+                attach_sandbox_id, create_persistent = None, True
+                await self._check_sandbox_cap(session.user_id)
+                session.runtime = await asyncio.to_thread(
+                    provision_agent_sandbox,
+                    session.user_id,
+                    agent,
+                    creds,
+                    None,
+                    None,
+                    True,
+                )
             conn = AcpConnection(
                 session.runtime.base_url, session.runtime.headers,
             )
@@ -1112,19 +1074,23 @@ class AgentSessionManager:
             session.agent_capabilities = init.get("agentCapabilities") or {}
             await self._open_acp_session(session, user_ctx)
 
-        # Register in the sandboxes table so the agent's sandbox shows up
-        # in Manage Sandboxes and the existing terminal/file tooling works
-        # against it (attached harness sandboxes are already registered).
-        # Best-effort: a cap or Convex hiccup must not block the session.
-        if not adopted and session.runtime.owns_sandbox:
-            # Fire-and-forget: registration is bookkeeping, not part of
-            # the user's cold-start wait. Adopted runtimes are already
-            # registered from their first provisioning.
-            asyncio.create_task(
-                self._register_sandbox_record(
-                    session.user_id, session.runtime.sandbox_id, agent.name,
+        # Register the agent's sandbox so it appears in Manage Sandboxes and the
+        # terminal/file tooling works against it. The per-workspace unified
+        # sandbox is linked to its harness + workspace (AWAITED so a Convex
+        # failure can demote it to session-owned and never orphan the box); a
+        # plain scratch sandbox is bookkeeping only (fire-and-forget).
+        if not adopted:
+            if create_persistent:
+                # Just created the workspace's unified box (owned-by-default, so
+                # any failure reclaims it). Link it and, on success, flip it to
+                # persistent. Handles a lost race / Convex failure internally.
+                await self._register_workspace_sandbox(session, agent)
+            elif session.runtime.owns_sandbox:
+                asyncio.create_task(
+                    self._register_sandbox_record(
+                        session.user_id, session.runtime.sandbox_id, agent.name,
+                    )
                 )
-            )
 
         session.status = "ready"
         logger.info(
@@ -1177,12 +1143,14 @@ class AgentSessionManager:
         )
         await self._teardown(holder, park=True)
         parked = self._parked.pop(key, None)
-        if (
-            parked is not None
-            and parked.credential_id != session.harness.agent_credential_id
+        if parked is not None and (
+            parked.credential_id != session.harness.agent_credential_id
+            or parked.workspace_env_version != session.workspace_env_version
         ):
-            # Launched with different credentials — provision fresh into the
-            # sandbox instead (the launcher replaces the shim anyway).
+            # Launched with different agent credentials OR different workspace
+            # env (both baked in at spawn) — provision fresh into the sandbox
+            # instead (the launcher replaces the shim anyway), so a rotated or
+            # revoked credential takes effect immediately. Mirrors _claim_parked.
             await self._destroy_runtime(parked.runtime, parked.agent_id)
             return None
         return parked
@@ -1198,6 +1166,129 @@ class AgentSessionManager:
                 "delete a sandbox in Manage Sandboxes before starting "
                 "another agent session."
             )
+
+    async def _resolve_sandbox_plan(
+        self, session: AgentSession,
+    ) -> tuple[str | None, bool]:
+        """Decide which sandbox this ACP session runs in.
+
+        Returns ``(attach_sandbox_id, create_persistent)``:
+          - an explicit harness sandbox, or a workspace's already-linked
+            sandbox, is attached → ``(daytona_id, False)``;
+          - an agent harness in a workspace that has NO sandbox yet creates a
+            persistent one to unify on → ``(None, True)`` (registered + linked
+            back, so later sessions take the attach path above);
+          - anything else (e.g. no workspace) keeps a session-owned scratch
+            sandbox → ``(None, False)``.
+        """
+        harness = session.harness
+        # 1. An explicit harness sandbox wins (ownership verified in create()).
+        if harness.sandbox_enabled and harness.sandbox_id:
+            return harness.sandbox_id, False
+        # 2. Per-workspace unification only applies inside a workspace.
+        workspace_id = getattr(harness, "workspace_id", None)
+        if not workspace_id:
+            return None, False
+        from app.services.convex import (
+            resolve_workspace_sandbox,
+            verify_sandbox_owner,
+        )
+
+        ws = await resolve_workspace_sandbox(self._http_client(), workspace_id)
+        daytona_id = (ws or {}).get("daytonaSandboxId")
+        if daytona_id and await verify_sandbox_owner(daytona_id, session.user_id):
+            # Workspace already has a box — attach the agent to it.
+            return daytona_id, False
+        # No workspace sandbox yet (or a stale/foreign link) — create one and
+        # link it back so it becomes the workspace's unified sandbox.
+        return None, True
+
+    async def _recover_from_missing_attach(
+        self, session: AgentSession, attach_sandbox_id: str,
+    ) -> bool:
+        """A box we tried to attach is gone from Daytona while Convex still
+        linked it (auto-deleted after its grace period, or removed out-of-band).
+
+        Drop the dead link so it stops being attached and stops counting
+        against the per-user cap. Return True if the caller should recover by
+        creating a fresh persistent box — a workspace-unification attach, which
+        is transparently re-created and re-linked. Return False for an explicit,
+        user-chosen harness sandbox: fabricating a replacement would silently
+        discard the box the user pointed the harness at, so surface the loss.
+        """
+        explicit = bool(
+            session.harness.sandbox_enabled
+            and session.harness.sandbox_id == attach_sandbox_id
+        )
+        await self._unlink_dead_sandbox(attach_sandbox_id)
+        logger.warning(
+            "Attached sandbox '%s' is gone (%s) — %s",
+            attach_sandbox_id,
+            "explicit harness sandbox" if explicit else "workspace unified box",
+            "surfacing the loss" if explicit else "creating a fresh one",
+        )
+        return not explicit
+
+    async def _unlink_dead_sandbox(self, daytona_id: str) -> None:
+        """Best-effort: drop the Convex sandbox row + workspace/harness links
+        for a Daytona box that no longer exists. The caller recovers regardless
+        (a fresh box is created), so a Convex hiccup here must not abort it."""
+        from app.services.convex import ConvexMutationError, run_convex_mutation
+
+        with contextlib.suppress(ConvexMutationError):
+            await run_convex_mutation(
+                self._http_client(),
+                "sandboxes:removeByDaytonaId",
+                {"daytonaSandboxId": daytona_id},
+            )
+
+    async def _register_workspace_sandbox(
+        self, session: AgentSession, agent,
+    ) -> None:
+        """Link the freshly-created unified box to its harness + workspace, then
+        flip it to persistent.
+
+        The box is OWNED-by-default (reclaimed on teardown); it survives ONLY
+        once Convex confirms the link. So a Convex failure, OR a None result —
+        which means a sibling session won the race to create the workspace's box
+        — leaves it owned, and teardown reclaims the duplicate. No orphan."""
+        from app.services.convex import create_sandbox_record
+
+        harness = session.harness
+        name = (
+            f"{agent.name} · {harness.name}"
+            if harness.name
+            else f"{agent.name} · agent session"
+        )
+        try:
+            doc_id = await create_sandbox_record(
+                self._http_client(),
+                session.user_id,
+                harness.harness_id,
+                session.runtime.sandbox_id,
+                name,
+                "python",
+                False,
+                {"cpu": 2, "memoryGB": 4, "diskGB": 10},
+                workspace_id=getattr(harness, "workspace_id", None),
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not link unified sandbox '%s' (reclaiming on teardown): "
+                "%s", session.runtime.sandbox_id, e,
+            )
+            return  # owns_sandbox stays True → teardown reclaims it
+        if doc_id is None:
+            logger.info(
+                "Lost the race to create the workspace sandbox; reclaiming "
+                "duplicate box '%s' on teardown", session.runtime.sandbox_id,
+            )
+            return  # owns_sandbox stays True → teardown reclaims it
+        session.runtime.owns_sandbox = False  # linked → persist past teardown
+        logger.info(
+            "Linked unified workspace sandbox '%s' (%s) to harness '%s'",
+            session.runtime.sandbox_id, name, harness.harness_id,
+        )
 
     async def _register_sandbox_record(
         self, user_id: str, sandbox_id: str, agent_name: str,
@@ -1260,10 +1351,12 @@ class AgentSessionManager:
             session.connection = None
 
         agent = get_agent(session.agent_id)
-        creds = await resolve_agent_credentials(
-            self._http_client(), session.agent_id, session.user_id,
-            credential_id=session.harness.agent_credential_id,
-        )
+        # Re-bake credentials + workspace env + skill-pack context. Re-resolved
+        # every time (never cached), so this is where a credential rotation or
+        # revocation takes effect for a previously-live session.
+        prepared = await self._provisioning.reprepare(session)
+        session.workspace_env_version = prepared.workspace_env_version
+        creds = prepared.creds
         owns = session.runtime.owns_sandbox
         old_sandbox_id = session.runtime.sandbox_id
         try:
@@ -1434,7 +1527,9 @@ class AgentSessionManager:
             meta=session_meta,
         )
         session.acp_session_id = result["sessionId"]
-        # Fresh ACP session → the SDK's cumulative cost restarts at ~0.
+        # Fresh ACP session → the thin usage_update's cumulative cost restarts at
+        # ~0, so reset its running baseline. (Result-message usage is per-turn,
+        # so it keeps no cross-turn baseline.)
         session.last_cost_usd = 0.0
         session.config_options = result.get("configOptions") or []
         # Replay notifications that raced the session/new response: Claude
@@ -1449,6 +1544,7 @@ class AgentSessionManager:
             await self._reapply_config(session, prior_config)
         else:
             await self._apply_harness_model(session)
+            await self._apply_harness_config(session)
 
     @staticmethod
     def _config_value_offered(option: dict, value: str) -> bool:
@@ -1494,6 +1590,47 @@ class AgentSessionManager:
                 logger.warning(
                     "Could not re-apply %s=%r on session '%s': %s",
                     option_id, value, session.id, e,
+                )
+
+    async def _apply_harness_config(self, session: AgentSession) -> None:
+        """Best-effort: seed the harness's persisted ACP mode/effort defaults on
+        a fresh session (like _apply_harness_model). Forwarded VERBATIM (not
+        gated on the advertised choices) so a valid-but-unadvertised value such
+        as bypassPermissions still applies — the wrapper validates and any
+        rejection is caught/logged."""
+        if session.connection is None or session.acp_session_id is None:
+            return
+        desired: dict[str, str] = {}
+        mode = (session.harness.agent_mode or "").strip()
+        if mode:
+            desired["mode"] = mode
+        effort = (session.harness.reasoning_effort or "").strip()
+        if effort:
+            # The wrapper names the option either "effort" or "reasoning_effort".
+            for oid in ("effort", "reasoning_effort"):
+                if any(o.get("id") == oid for o in session.config_options):
+                    desired[oid] = effort
+                    break
+        for option_id, value in desired.items():
+            option = next(
+                (o for o in session.config_options if o.get("id") == option_id),
+                None,
+            )
+            if option and option.get("currentValue") == value:
+                continue
+            try:
+                result = await session.connection.set_config_option(
+                    session.acp_session_id, option_id, value,
+                )
+                if result.get("configOptions") is not None:
+                    session.config_options = result["configOptions"]
+                logger.info(
+                    "Applied harness %s=%r to session '%s'",
+                    option_id, value, session.id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Could not apply harness %s=%r: %s", option_id, value, e,
                 )
 
     async def _apply_harness_model(self, session: AgentSession) -> None:
@@ -1617,9 +1754,51 @@ class AgentSessionManager:
             session.available_commands = update.get("availableCommands") or []
         event = normalize_session_update(update)
         if event is not None:
+            # Capture the latest Anthropic rate-limit snapshot off ANY usage
+            # update (even one without cost). A rate_limit_event arrives as a
+            # cost-less usage_update, and a hard-limit turn records no usage at
+            # all, so persist the snapshot directly onto the credential here
+            # (not just via the usage row) — that's when the user most needs to
+            # see the reset time.
+            if event["event"] == "agent_usage":
+                rl = (update.get("_meta") or {}).get("_claude/rateLimit")
+                cred_id = session.harness.agent_credential_id
+                # `if rl:` (not `is not None`): an empty `{}` snapshot carries no
+                # data, so treat it like an absent one — don't persist it (which
+                # would clobber a good prior snapshot) and let the fetch fall
+                # through below.
+                if rl:
+                    changed = rl != session.last_rate_limit
+                    session.last_rate_limit = rl
+                    # Only persist when the snapshot actually changed — avoids a
+                    # credential-row write on every usage_update that merely
+                    # repeats the same rate-limit state.
+                    if cred_id and changed:
+                        from app.services.usage import record_agent_rate_limit
+
+                        rl_task = asyncio.create_task(
+                            record_agent_rate_limit(
+                                self._http_client(),
+                                user_id=session.user_id,
+                                agent_credential_id=cred_id,
+                                rate_limit=rl,
+                            )
+                        )
+                        self._usage_tasks.add(rl_task)
+                        rl_task.add_done_callback(self._usage_tasks.discard)
+                elif cred_id and session.agent_id == "claude-code":
+                    # The Claude Agent SDK doesn't surface subscription usage in
+                    # the stream (the _meta snapshot is empty), so fetch the 5h +
+                    # weekly windows ourselves — debounced per credential. Scoped
+                    # to claude-code: only its OAuth creds have these windows, and
+                    # _fetch_subscription_usage resolves the cred as claude-code,
+                    # which would raise (logged) for a codex/cursor credential.
+                    self._maybe_fetch_subscription_usage(session, cred_id)
             # Persist per-credential agent usage on the terminal usage_update
-            # (the only one carrying cost). Informational only — never gates a
-            # turn — and fail-soft, so it can't disturb streaming.
+            # (the only one carrying cost). Thin: no cache tokens, cache-excluded
+            # cost — for claude-code the SDK result message upgrades this row in
+            # place (see _record_result_usage). Informational only — never gates
+            # a turn — and fail-soft, so it can't disturb streaming.
             if (
                 event["event"] == "agent_usage"
                 and event["data"].get("cost") is not None
@@ -1657,12 +1836,7 @@ class AgentSessionManager:
         cred_id = session.harness.agent_credential_id
         if not cred_id:
             return
-        model: str | None = None
-        for opt in session.config_options:
-            if isinstance(opt, dict) and opt.get("id") == "model":
-                value = opt.get("currentValue")
-                model = value if isinstance(value, str) else None
-                break
+        model = _session_model(session)
         # Authoritative-ish Anthropic per-account quota snapshot, if present.
         rate_limit = (update.get("_meta") or {}).get("_claude/rateLimit")
         from app.services.usage import record_agent_usage
@@ -1681,6 +1855,107 @@ class AgentSessionManager:
             currency=data.get("currency") or "USD",
             turn_key=f"{session.acp_session_id}:{session.turn_index}",
             rate_limit=rate_limit,
+        )
+
+    @staticmethod
+    def _result_usage_payload(
+        session: AgentSession, message: dict
+    ) -> dict | None:
+        """Extract THIS turn's authoritative usage from an SDK `result` message.
+
+        The result message fires once per ACP prompt turn — each turn is its own
+        SDK `query()` call — so its `total_cost_usd` and token usage are PER-TURN
+        totals (cumulative across the steps WITHIN the turn, not across turns).
+        We therefore record them directly; no cross-turn deltas. Returns None
+        when the message carries no real signal (cost ~0 AND zero tokens, e.g. an
+        error/aborted turn), so a hollow result can't clobber the thin
+        usage_update row already written for this turnKey.
+        """
+        usage = message.get("usage")
+        model_usage = message.get("modelUsage")
+        tokens = _result_token_categories(usage, model_usage)
+        raw_cost = message.get("total_cost_usd")
+        cost = max(0.0, float(raw_cost)) if isinstance(raw_cost, (int, float)) else 0.0
+        if cost <= 0.0 and sum(tokens.values()) == 0:
+            return None
+        return {
+            "model": _result_primary_model(model_usage) or _session_model(session),
+            "cost": cost,
+            "tokens": tokens,
+            "rate_limit": session.last_rate_limit,
+            "turn_key": f"{session.acp_session_id}:{session.turn_index}",
+        }
+
+    async def _record_result_usage(
+        self, session: AgentSession, payload: dict
+    ) -> None:
+        """Persist the precomputed authoritative result-message usage to Convex
+        (per-credential, fail-soft). Tagged `authoritative`, it upgrades the thin
+        usage_update row written for the same turnKey. Only claude-code emits
+        result messages.
+        """
+        cred_id = session.harness.agent_credential_id
+        if not cred_id:
+            return
+        tokens = payload["tokens"]
+        from app.services.usage import record_agent_usage
+
+        await record_agent_usage(
+            self._http_client(),
+            user_id=session.user_id,
+            agent_credential_id=cred_id,
+            agent=session.agent_id,
+            conversation_id=session.conversation_id,
+            acp_session_id=session.acp_session_id,
+            model=payload["model"],
+            used_tokens=sum(tokens.values()),
+            context_size=None,
+            cost=payload["cost"],
+            currency="USD",
+            turn_key=payload["turn_key"],
+            rate_limit=payload["rate_limit"],
+            input_tokens=tokens["input"],
+            output_tokens=tokens["output"],
+            cache_read_tokens=tokens["cache_read"],
+            cache_creation_tokens=tokens["cache_creation"],
+            authoritative=True,
+        )
+
+    async def _handle_sdk_compaction(self, session: AgentSession, message: dict) -> None:
+        """Merge the two compaction SDK frames into one `compaction` SSE event.
+
+        The `compact_boundary` (metadata: trigger, token deltas) arrives first;
+        the summary prose follows as a synthetic user-message. Stash the
+        metadata on the boundary, then emit the merged event when the summary
+        lands — gated on a preceding boundary so a user message that merely
+        starts with the same preamble can't be mistaken for a compaction.
+        Best-effort; exceptions here are swallowed by the notification caller.
+        """
+        parsed = parse_sdk_compaction(message)
+        if parsed is None:
+            return
+        if parsed["kind"] == "boundary":
+            session.pending_compaction = {
+                "trigger": parsed.get("trigger"),
+                "pre_tokens": parsed.get("pre_tokens"),
+                "post_tokens": parsed.get("post_tokens"),
+            }
+            return
+        # kind == "summary": only real if a boundary was just seen this turn.
+        meta = session.pending_compaction
+        if meta is None:
+            return
+        session.pending_compaction = None
+        await session.event_queue.put(
+            {
+                "event": "compaction",
+                "data": {
+                    "summary": parsed["summary"],
+                    "trigger": meta.get("trigger") or "manual",
+                    "pre_tokens": meta.get("pre_tokens"),
+                    "post_tokens": meta.get("post_tokens"),
+                },
+            }
         )
 
     async def _handle_cursor_notification(
@@ -1743,8 +2018,24 @@ class AgentSessionManager:
                 # Workflow/subagent task lifecycle that the adapter otherwise
                 # drops. These arrive mid-turn, so the session id is assigned.
                 if params.get("sessionId") == session.acp_session_id:
-                    for event in normalize_sdk_task_message(params.get("message") or {}):
+                    raw = params.get("message") or {}
+                    for event in normalize_sdk_task_message(raw):
                         await session.event_queue.put(event)
+                    await self._handle_sdk_compaction(session, raw)
+                    # Authoritative usage (real cost + cache tokens) rides the
+                    # result message; record it (fail-soft) when a credential is
+                    # linked. Upgrades the thin usage_update row for this turn.
+                    if (
+                        _is_sdk_result_message(raw)
+                        and session.harness.agent_credential_id
+                    ):
+                        payload = self._result_usage_payload(session, raw)
+                        if payload is not None:
+                            task = asyncio.create_task(
+                                self._record_result_usage(session, payload)
+                            )
+                            self._usage_tasks.add(task)
+                            task.add_done_callback(self._usage_tasks.discard)
                 return
             if method != "session/update":
                 return
@@ -2024,6 +2315,10 @@ class AgentSessionManager:
             # Drain any stale events from a previous turn.
             while not session.event_queue.empty():
                 session.event_queue.get_nowait()
+            # A compaction's boundary→summary pair always lands within a single
+            # turn; clear any stale boundary metadata so it can't be paired with
+            # a later turn's user message that merely echoes the summary preamble.
+            session.pending_compaction = None
 
             outgoing = message
             if session.pending_replay and session.transcript:
@@ -2227,6 +2522,36 @@ class AgentSessionManager:
         session = self.get(session_id, user_id)
         await self._teardown(session, park=True)
 
+    async def reset_conversation(self, user_id: str, conversation_id: str) -> int:
+        """Tear down any live ACP session for a conversation so the NEXT prompt
+        opens a fresh session, re-seeded from the (now-truncated) history.
+
+        Used by rewind: a Convex message delete can't touch the agent's
+        in-sandbox context, and reusing the warm session would keep the rewound
+        turns (its transcript is non-empty, so seed-from-history is skipped).
+        Tearing the session down (parking the runtime so the next prompt stays
+        warm) forces a fresh session + fresh ACP session that drops them.
+        Keyed by conversation, not agent, so a session-only agent override is
+        never missed. Returns how many sessions were reset.
+        """
+        # Only tear down IDLE sessions: a session that's prompting/provisioning,
+        # has a turn starting (turn_guard), or holds its lock must not be ripped
+        # out from under a live turn — same guard the reaper/_claim_parked use.
+        # (The client already blocks rewind while streaming; this is the
+        # server-side backstop.)
+        targets = [
+            s
+            for s in self._sessions.values()
+            if s.user_id == user_id
+            and s.conversation_id == conversation_id
+            and s.status == "ready"
+            and s.turn_guard == 0
+            and not s.lock.locked()
+        ]
+        for session in targets:
+            await self._teardown(session, park=True)
+        return len(targets)
+
     async def _teardown(self, session: AgentSession, park: bool = False) -> None:
         """End a session. With park=True a healthy runtime is kept warm for
         the user's next conversation instead of being destroyed."""
@@ -2258,6 +2583,7 @@ class AgentSessionManager:
             agent_capabilities=session.agent_capabilities,
             msg_id_floor=session.msg_id_floor + 1_000_000,
             credential_id=session.harness.agent_credential_id,
+            workspace_env_version=session.workspace_env_version,
         )
         logger.info(
             "Parked %s runtime (sandbox=%s) for user '%s'",

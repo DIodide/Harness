@@ -42,6 +42,7 @@ import { PrincetonConnectRow } from "../components/princeton-connect-row";
 import { RecommendedSkillsGrid } from "../components/recommended-skills-grid";
 import { RoseCurveSpinner } from "../components/rose-curve-spinner";
 import { SandboxConfigForm } from "../components/sandbox/sandbox-config-form";
+import { SkillPackPicker } from "../components/skill-pack-picker";
 import { SkillsBrowser } from "../components/skills-browser";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -142,6 +143,8 @@ function OnboardingPage() {
 	const [agentCredentialId, setAgentCredentialId] = useState<string | null>(
 		null,
 	);
+	const [agentMode, setAgentMode] = useState("default");
+	const [reasoningEffort, setReasoningEffort] = useState("high");
 	const [systemPrompt, setSystemPrompt] = useState("");
 	const [customMcpServers, setCustomMcpServers] = useState<McpServerEntry[]>(
 		[],
@@ -162,6 +165,9 @@ function OnboardingPage() {
 	const [selectedSkills, setSelectedSkills] = useState<SkillEntry[]>(
 		_prefill?.skills ?? [],
 	);
+	const [selectedSkillPackIds, setSelectedSkillPackIds] = useState<
+		Id<"skillPacks">[]
+	>([]);
 
 	const [stepIndex, setStepIndex] = useState(0);
 	const [aiAssistantOpen, setAiAssistantOpen] = useState(false);
@@ -253,9 +259,12 @@ function OnboardingPage() {
 			status: "started" | "stopped" | "draft";
 			mcpServers: HarnessMcpServerInput[];
 			skills: SkillEntry[];
+			skillPackIds?: Id<"skillPacks">[];
 			systemPrompt?: string;
 			agent?: string;
 			agentCredentialId?: Id<"agentCredentials">;
+			agentMode?: string;
+			reasoningEffort?: string;
 			sandboxEnabled?: boolean;
 			sandboxConfig?: SandboxConfig;
 			defaultSandbox?: {
@@ -511,12 +520,16 @@ function OnboardingPage() {
 				status,
 				mcpServers: mcpServersForMutation,
 				skills: selectedSkills,
+				skillPackIds:
+					selectedSkillPackIds.length > 0 ? selectedSkillPackIds : undefined,
 				systemPrompt: systemPrompt.trim() || undefined,
 				agent: agent !== "default" ? agent : undefined,
 				agentCredentialId:
 					agent !== "default" && agentCredentialId
 						? (agentCredentialId as Id<"agentCredentials">)
 						: undefined,
+				agentMode: agent === "claude-code" ? agentMode : undefined,
+				reasoningEffort: agent === "claude-code" ? reasoningEffort : undefined,
 				sandboxEnabled: sandboxEnabled || undefined,
 				sandboxConfig: sandboxEnabled ? defaultSandbox?.config : undefined,
 				defaultSandbox: sandboxEnabled ? defaultSandbox : undefined,
@@ -735,6 +748,10 @@ function OnboardingPage() {
 									setAgent={setAgent}
 									agentCredentialId={agentCredentialId}
 									setAgentCredentialId={setAgentCredentialId}
+									agentMode={agentMode}
+									setAgentMode={setAgentMode}
+									reasoningEffort={reasoningEffort}
+									setReasoningEffort={setReasoningEffort}
 									systemPrompt={systemPrompt}
 									setSystemPrompt={setSystemPrompt}
 								/>
@@ -782,6 +799,8 @@ function OnboardingPage() {
 												: [...prev, skill],
 										)
 									}
+									selectedSkillPackIds={selectedSkillPackIds}
+									onSkillPackIdsChange={setSelectedSkillPackIds}
 								/>
 							)}
 						</motion.div>
@@ -850,6 +869,10 @@ function StepNameModel({
 	setAgent,
 	agentCredentialId,
 	setAgentCredentialId,
+	agentMode,
+	setAgentMode,
+	reasoningEffort,
+	setReasoningEffort,
 	systemPrompt,
 	setSystemPrompt,
 }: {
@@ -861,6 +884,10 @@ function StepNameModel({
 	setAgent: (v: AgentMode) => void;
 	agentCredentialId: string | null;
 	setAgentCredentialId: (v: string | null) => void;
+	agentMode: string;
+	setAgentMode: (v: string) => void;
+	reasoningEffort: string;
+	setReasoningEffort: (v: string) => void;
 	systemPrompt: string;
 	setSystemPrompt: (v: string) => void;
 }) {
@@ -894,6 +921,10 @@ function StepNameModel({
 				onCredentialChange={setAgentCredentialId}
 				model={model}
 				onModelChange={setModel}
+				agentMode={agentMode}
+				onAgentModeChange={setAgentMode}
+				reasoningEffort={reasoningEffort}
+				onReasoningEffortChange={setReasoningEffort}
 			/>
 			<div>
 				<label
@@ -1546,9 +1577,13 @@ function StepSandbox({
 function StepSkills({
 	selected,
 	onToggle,
+	selectedSkillPackIds,
+	onSkillPackIdsChange,
 }: {
 	selected: SkillEntry[];
 	onToggle: (skill: SkillEntry) => void;
+	selectedSkillPackIds: Id<"skillPacks">[];
+	onSkillPackIdsChange: (ids: Id<"skillPacks">[]) => void;
 }) {
 	return (
 		<div className="space-y-4">
@@ -1566,6 +1601,18 @@ function StepSkills({
 					Browse All Skills
 				</h3>
 				<SkillsBrowser currentSkills={selected} onToggle={onToggle} />
+			</div>
+			<div className="border-t border-border pt-4">
+				<h3 className="mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+					Skill Packs
+				</h3>
+				<p className="mb-2 text-xs text-muted-foreground">
+					Attach reusable bundles of skills and context to this harness.
+				</p>
+				<SkillPackPicker
+					selectedIds={selectedSkillPackIds}
+					onChange={onSkillPackIdsChange}
+				/>
 			</div>
 		</div>
 	);

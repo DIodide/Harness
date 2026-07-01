@@ -1,6 +1,6 @@
 """Tests for ACP form-elicitation parsing (AskUserQuestion support)."""
 
-from app.services.agents.session_manager import parse_elicitation_fields
+from app.services.agents.event_encoder import parse_elicitation_fields
 
 
 def ask_user_question_schema() -> dict:

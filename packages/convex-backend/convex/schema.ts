@@ -25,10 +25,20 @@ export default defineSchema({
 			}),
 		),
 		skills: v.array(v.object({ name: v.string(), description: v.string() })),
+		// Skill packs attached to this harness. A pack bundles a set of skills
+		// plus optional AGENTS.md / CLAUDE.md context written to the sandbox
+		// root. The harness's own `skills` above stay for backward-compat; the
+		// effective skill set is the union of both. Order is preserved (the
+		// packs' AGENTS.md/CLAUDE.md are concatenated in this order).
+		skillPackIds: v.optional(v.array(v.id("skillPacks"))),
 		systemPrompt: v.optional(v.string()),
 		suggestedPrompts: v.optional(v.array(v.string())),
 		userId: v.string(),
 		lastUsedAt: v.optional(v.number()),
+		// When shared, the owner can LOCK the harness: recipients may view and
+		// clone it but never edit it in place. Single source of truth for the
+		// lock (unambiguous across multiple grants). Absent = unlocked.
+		sharedLocked: v.optional(v.boolean()),
 		// Agent loop this harness runs on: "default" (Harness via OpenRouter)
 		// or an ACP agent id ("claude-code" | "codex" | "cursor"). Absent =
 		// default.
@@ -36,6 +46,13 @@ export default defineSchema({
 		// The stored credential this harness uses for its ACP agent (one
 		// credential per harness; credentials are reusable across harnesses).
 		agentCredentialId: v.optional(v.id("agentCredentials")),
+		// Persisted ACP session defaults (Claude Code et al), seeded into a new
+		// session and editable in the harness forms / chat bar before any session
+		// exists. The agent MODEL reuses the existing `model` field. Absent = the
+		// agent's own default. `agentMode` = the ACP "mode" config value (e.g.
+		// "default", "plan"); `reasoningEffort` = the ACP "effort" value.
+		agentMode: v.optional(v.string()),
+		reasoningEffort: v.optional(v.string()),
 		// Daytona sandbox configuration
 		sandboxEnabled: v.optional(v.boolean()),
 		sandboxId: v.optional(v.id("sandboxes")),
@@ -110,6 +127,14 @@ export default defineSchema({
 		harnessId: v.optional(v.id("harnesses")),
 		sandboxId: v.optional(v.id("sandboxes")),
 		color: v.optional(v.string()),
+		// The account's Default workspace — exactly one per user, CANNOT be
+		// deleted (its harness/sandbox stay editable). A conversation always has
+		// a workspace home; the Default is the fallback.
+		isDefault: v.optional(v.boolean()),
+		// Manual sidebar ordering (ascending). Optional: accounts that have never
+		// reordered fall back to lastUsedAt. Set for every workspace once the user
+		// drags to reorder.
+		order: v.optional(v.number()),
 		createdAt: v.number(),
 		lastUsedAt: v.number(),
 	})
@@ -131,14 +156,50 @@ export default defineSchema({
 		editParentConversationId: v.optional(v.id("conversations")),
 		editParentMessageCount: v.optional(v.number()),
 		isCreationSession: v.optional(v.boolean()),
+		// Set on a conversation cloned from a compaction summary ("new session
+		// from summary") — provenance + lets the agent route seed its context
+		// from the summary instead of the full transcript.
+		seededFromCompactionId: v.optional(v.id("compactions")),
+		// Timestamp the conversation was pinned (Date.now()); undefined = not
+		// pinned. A number (not a bool) so pinned chats sort by most-recently
+		// pinned. Pinned chats render in a dedicated "Pinned" sidebar section.
+		pinnedAt: v.optional(v.number()),
 	})
 		.index("by_user", ["userId"])
 		.index("by_user_last_message", ["userId", "lastMessageAt"])
 		.index("by_workspace_last_message", ["workspaceId", "lastMessageAt"])
+		// Pinned chats are fetched independently of the recency window so they
+		// never fall out of the sidebar once a user has 50+ newer chats.
+		.index("by_user_pinned", ["userId", "pinnedAt"])
+		.index("by_workspace_pinned", ["workspaceId", "pinnedAt"])
+		// Exact title-prefix scan for fork-sibling naming (avoids an unordered
+		// global cap that could miss recent forks on large accounts).
+		.index("by_user_title", ["userId", "title"])
 		.searchIndex("search_title", {
 			searchField: "title",
 			filterFields: ["userId", "workspaceId"],
 		}),
+
+	// Claude Code context-compaction events. Append-only — a record per
+	// /compact (manual) or auto-compaction, captured from the ACP stream. Drives
+	// observability (the dev can SEE the summary) and the clone-from-summary
+	// flow. Kept OUT of messages.parts so it's never copied by the fork mutation.
+	compactions: defineTable({
+		conversationId: v.id("conversations"),
+		workspaceId: v.optional(v.id("workspaces")),
+		userId: v.string(),
+		// The compaction summary prose (may be "" if only metadata was captured).
+		summary: v.string(),
+		trigger: v.union(v.literal("manual"), v.literal("auto")),
+		// Thread position when it fired — the clone-seed anchor + timeline slot.
+		atMessageCount: v.optional(v.number()),
+		preTokens: v.optional(v.number()),
+		postTokens: v.optional(v.number()),
+		model: v.optional(v.string()),
+		createdAt: v.number(),
+	})
+		.index("by_conversation", ["conversationId"])
+		.index("by_user", ["userId"]),
 
 	messages: defineTable({
 		conversationId: v.id("conversations"),
@@ -232,9 +293,47 @@ export default defineSchema({
 		label: v.optional(v.string()),
 		createdAt: v.number(),
 		lastUsedAt: v.optional(v.number()),
+		// Latest Anthropic per-account rate-limit snapshot (the SDK's
+		// rate_limit_info: {rateLimitType, status, resetsAt, utilization?, …}).
+		// Account-level CURRENT state, not per-turn — updated whenever a
+		// rate_limit_event arrives (incl. a silent hard-limit turn that records no
+		// usage). Shape is upstream-defined so kept opaque.
+		lastRateLimit: v.optional(v.any()),
+		lastRateLimitAt: v.optional(v.number()),
 	})
 		.index("by_user", ["userId"])
 		.index("by_user_agent", ["userId", "agent"]),
+
+	// Per-user named env-var secrets ("credentials"), assignable to workspaces and
+	// injected into the workspace/agent sandbox at run time. `name` is the env var
+	// NAME (e.g. GITHUB_TOKEN) — NOT secret; `ciphertext` is AES-256-GCM(value)
+	// encrypted by FastAPI with the same AGENT_CREDENTIALS_KEY as agentCredentials.
+	// Convex and the browser never see the plaintext value.
+	workspaceCredentials: defineTable({
+		userId: v.string(),
+		name: v.string(),
+		ciphertext: v.string(),
+		label: v.optional(v.string()),
+		createdAt: v.number(),
+		lastUsedAt: v.optional(v.number()),
+	})
+		.index("by_user", ["userId"])
+		// One credential per env-var name per user (dedupe / upsert-by-name).
+		.index("by_user_name", ["userId", "name"]),
+
+	// Join: which credentials are assigned to which workspace (M:N). A dedicated
+	// table (not an array field) keeps the workspace→creds inject-time lookup a
+	// single index scan and makes per-row ownership re-checks + cascade-delete
+	// clean.
+	credentialAssignments: defineTable({
+		userId: v.string(),
+		credentialId: v.id("workspaceCredentials"),
+		workspaceId: v.id("workspaces"),
+		createdAt: v.number(),
+	})
+		.index("by_workspace", ["workspaceId"])
+		.index("by_credential", ["credentialId"])
+		.index("by_workspace_credential", ["workspaceId", "credentialId"]),
 
 	mcpOAuthTokens: defineTable({
 		userId: v.string(),
@@ -279,7 +378,46 @@ export default defineSchema({
 	})
 		.index("by_token", ["publicToken"])
 		.index("by_conversation", ["conversationId"])
-		.index("by_grantee", ["grantedToUserId"]),
+		.index("by_grantee", ["grantedToUserId"])
+		// All grants a user owns, across conversations — powers the Manage
+		// Sharing page (added to an existing populated table; reads are wrapped
+		// in tolerateBackfill during the index backfill window).
+		.index("by_owner", ["ownerUserId"]),
+
+	// Harness sharing grants. Mirrors `shareGrants` exactly (same auth model:
+	// authorization is ALWAYS resolved through an ACTIVE grant here, never a
+	// denormalized field), for harnesses instead of conversations. Three grant
+	// modes: public link (publicToken), bound per-user grant (grantedToUserId),
+	// or an email invite awaiting bind (granteeEmail — an invite POINTER, never
+	// an authorization key; it's bound to grantedToUserId only after the
+	// recipient's email is server-verified). Lock lives on the harness
+	// (`sharedLocked`), not here, so it's unambiguous across multiple grants.
+	harnessShareGrants: defineTable({
+		harnessId: v.id("harnesses"),
+		// = harness.userId at mint time (denormalized: cheap revoke + by_owner
+		// listing, and the public query never exposes the owner id).
+		ownerUserId: v.string(),
+		// Owner's public profile snapshot (name + avatar ONLY, never email),
+		// clamped at write time. Best-effort.
+		ownerName: v.optional(v.string()),
+		ownerImageUrl: v.optional(v.string()),
+		role: v.union(v.literal("viewer"), v.literal("editor")),
+		// Exactly one of these identifies the grantee.
+		grantedToUserId: v.optional(v.string()),
+		// Normalized (trim+lowercase) email invite pointer for a not-yet-bound
+		// recipient; replaced by grantedToUserId on first verified sign-in.
+		granteeEmail: v.optional(v.string()),
+		publicToken: v.optional(v.string()),
+		createdAt: v.number(),
+		expiresAt: v.optional(v.number()),
+		revokedAt: v.optional(v.number()),
+		lastAccessedAt: v.optional(v.number()),
+	})
+		.index("by_token", ["publicToken"])
+		.index("by_harness", ["harnessId"])
+		.index("by_grantee", ["grantedToUserId"])
+		.index("by_grantee_email", ["granteeEmail"])
+		.index("by_owner", ["ownerUserId"]),
 
 	skillDetails: defineTable({
 		name: v.string(),
@@ -288,6 +426,27 @@ export default defineSchema({
 		detail: v.string(),
 		code: v.string(),
 	}).index("by_name", ["name"]),
+
+	// A reusable bundle of skills + optional context files (AGENTS.md /
+	// CLAUDE.md) that a user attaches to harnesses instead of picking loose
+	// skills. For agentic (ACP) harnesses the context files are written to the
+	// sandbox root and each skill's SKILL.md is materialized under
+	// ~/.claude/skills so the agent can actually load them.
+	skillPacks: defineTable({
+		userId: v.string(),
+		name: v.string(),
+		description: v.optional(v.string()),
+		skills: v.array(v.object({ name: v.string(), description: v.string() })),
+		// Markdown written to <sandbox>/AGENTS.md (all agentic harnesses).
+		agentsMd: v.optional(v.string()),
+		// Markdown written to <sandbox>/CLAUDE.md (claude-code harnesses only).
+		claudeMd: v.optional(v.string()),
+		// Prepend an `@AGENTS.md` import line to CLAUDE.md so Claude Code pulls
+		// AGENTS.md into context via its @-import mechanism.
+		claudeImportsAgents: v.optional(v.boolean()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+	}).index("by_user", ["userId"]),
 
 	skillsIndex: defineTable({
 		skillId: v.string(),
@@ -327,6 +486,9 @@ export default defineSchema({
 		workspacesMode: v.optional(
 			v.union(v.literal("basic"), v.literal("workspaces")),
 		),
+		// Show the mid-message rewind "seams" (cut points between an assistant
+		// message's blocks). Defaults on; absent = on.
+		rewindSeams: v.optional(v.boolean()),
 	}).index("by_user", ["userId"]),
 
 	usageBudgets: defineTable({
@@ -406,11 +568,23 @@ export default defineSchema({
 		conversationId: v.id("conversations"),
 		acpSessionId: v.optional(v.string()),
 		model: v.optional(v.string()),
-		usedTokens: v.number(), // usage_update.used (this turn's token total)
+		usedTokens: v.number(), // total tokens this turn (input+output, +cache when authoritative)
 		contextSize: v.optional(v.number()), // usage_update.size (context window)
+		// Per-category token deltas, present only on authoritative rows sourced
+		// from the SDK result message (claude-code). The thin usage_update path
+		// leaves these unset. cache-read tokens dominate raw counts but are cheap.
+		inputTokens: v.optional(v.number()),
+		outputTokens: v.optional(v.number()),
+		cacheReadTokens: v.optional(v.number()),
+		cacheCreationTokens: v.optional(v.number()),
 		costUsd: v.number(),
 		currency: v.string(),
 		isEstimate: v.boolean(), // SDK client-side estimate, not a bill
+		// True when sourced from the SDK result message's total_cost_usd + full
+		// token usage (authoritative). False/absent = the thin ACP usage_update
+		// (no cache tokens, cache-excluded cost). An authoritative row may replace
+		// a non-authoritative one for the same turnKey.
+		authoritative: v.optional(v.boolean()),
 		// Latest Anthropic per-account rate-limit snapshot (_meta._claude/rateLimit),
 		// authoritative-ish quota state; shape is upstream-defined so kept opaque.
 		rateLimit: v.optional(v.any()),

@@ -78,6 +78,20 @@ jobs:
   fastapi:
     name: FastAPI (pytest)
     runs-on: ubuntu-latest
+    # Redis service for the live-stream fan-out integration tests
+    # (test_stream_bus_integration). They skip when REDIS_URL_TEST is
+    # unreachable, so locals without Redis aren't blocked — CI always has it.
+    services:
+      redis:
+        # Match the prod box's redis6.2 (op set is stable, but test what we ship).
+        image: redis:6.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -96,6 +110,8 @@ jobs:
 
       - name: Run tests with coverage
         working-directory: packages/fastapi
+        env:
+          REDIS_URL_TEST: redis://localhost:6379/15
         run: pytest --cov --cov-report=term --cov-report=xml --cov-report=html
 
       - name: Upload coverage artifact

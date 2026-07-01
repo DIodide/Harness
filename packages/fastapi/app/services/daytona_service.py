@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from daytona_sdk import (
+    CodeRunParams,
     CreateSandboxFromSnapshotParams,
     Daytona,
     DaytonaConfig,
@@ -171,10 +172,17 @@ class DaytonaService:
             **(labels or {}),
         }
 
+        # User-visible workspace/code-exec boxes hold the user's files, so give
+        # them the long grace period before Daytona reclaims an untouched one —
+        # the bound that stops stopped/archived boxes from accumulating without
+        # surprise-deleting an actively-used sandbox. Clamp non-positive to -1
+        # (disabled): Daytona reads 0 as "delete immediately on stop".
+        auto_delete = settings.acp_persistent_sandbox_auto_delete_minutes
         params = CreateSandboxFromSnapshotParams(
             snapshot=snapshot,
             language=language,
             auto_stop_interval=15,
+            auto_delete_interval=auto_delete if auto_delete > 0 else -1,
             labels=sandbox_labels,
             ephemeral=False,
         )
@@ -315,8 +323,13 @@ class DaytonaService:
         code: str,
         language: str = "python",
         timeout: int = 30,
+        env: dict[str, str] | None = None,
     ) -> CodeExecutionResult:
-        """Execute code in a sandbox (stateless)."""
+        """Execute code in a sandbox (stateless).
+
+        `env` (e.g. resolved workspace credentials) is passed only to the SDK
+        call — it is never logged. NEVER add it to any log line below.
+        """
         sandbox = self._ensure_running(sandbox_id)
         logger.info(
             "Executing %s code in sandbox '%s' (timeout=%ds)",
@@ -325,7 +338,9 @@ class DaytonaService:
 
         start = time.time()
         response = sandbox.process.code_run(
-            code, timeout=timeout,
+            code,
+            params=CodeRunParams(env=env) if env else None,
+            timeout=timeout,
         )
         elapsed = time.time() - start
 
@@ -358,15 +373,20 @@ class DaytonaService:
         command: str,
         cwd: str = "/home/daytona",
         timeout: int = 60,
+        env: dict[str, str] | None = None,
     ) -> CommandResult:
-        """Execute a shell command in a sandbox."""
+        """Execute a shell command in a sandbox.
+
+        `env` (e.g. resolved workspace credentials) is passed only to the SDK
+        call — it is never logged. NEVER add it to the command log line.
+        """
         sandbox = self._ensure_running(sandbox_id)
         logger.info(
             "Running command in sandbox '%s': %s",
             sandbox_id, command[:100],
         )
         response = sandbox.process.exec(
-            command, cwd=cwd, timeout=timeout,
+            command, cwd=cwd, timeout=timeout, env=env or None,
         )
         return CommandResult(
             exit_code=response.exit_code,

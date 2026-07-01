@@ -29,6 +29,10 @@ class HarnessConfig(BaseModel):
     model: str
     mcp_servers: list[McpServer] = []
     skills: list[SkillRef] = []
+    # Skill packs attached to this harness. For agentic harnesses the gateway
+    # resolves these (via Convex) into AGENTS.md / CLAUDE.md context files and
+    # materialized ~/.claude/skills/<name>/SKILL.md written to the sandbox.
+    skill_pack_ids: list[str] = []
     name: str
     harness_id: str | None = None
     system_prompt: str | None = Field(default=None, max_length=4000)
@@ -36,9 +40,17 @@ class HarnessConfig(BaseModel):
     agent: str | None = None
     # The stored credential this harness's agent runs with.
     agent_credential_id: str | None = None
+    # Persisted ACP session defaults (Claude Code et al), seeded into a new
+    # session; applied only if the wrapper offers the value. The agent MODEL
+    # reuses `model` above.
+    agent_mode: str | None = None
+    reasoning_effort: str | None = None
     sandbox_enabled: bool = False
     sandbox_id: str | None = None
     sandbox_config: SandboxConfig | None = None
+    # The workspace this run belongs to. Used to resolve and inject assigned
+    # workspace credentials (env vars) into whatever sandbox runs the code.
+    workspace_id: str | None = None
 
 
 class MessagePayload(BaseModel):
@@ -87,6 +99,7 @@ def harness_config_from_resolved(resolved: dict) -> "HarnessConfig":
             SkillRef(name=s["name"], description=s.get("description", ""))
             for s in resolved.get("skills", [])
         ],
+        skill_pack_ids=resolved.get("skillPackIds", []),
         mcp_servers=[
             McpServer(
                 name=s["name"],
@@ -98,10 +111,13 @@ def harness_config_from_resolved(resolved: dict) -> "HarnessConfig":
         ],
         agent=resolved.get("agent"),
         agent_credential_id=resolved.get("agentCredentialId"),
+        agent_mode=resolved.get("agentMode"),
+        reasoning_effort=resolved.get("reasoningEffort"),
         harness_id=resolved.get("harnessId"),
         sandbox_enabled=resolved.get("sandboxEnabled", False),
         sandbox_id=resolved.get("sandboxId"),
         sandbox_config=sandbox_config,
+        workspace_id=resolved.get("workspaceId"),
     )
 
 
@@ -118,12 +134,18 @@ class SandboxExecuteRequest(BaseModel):
     code: str
     language: Literal["python", "javascript", "typescript", "bash"] = "python"
     timeout: int = Field(default=30, gt=0, le=300)
+    # Workspace whose assigned credentials to inject as env vars (ownership
+    # re-checked server-side before any value is resolved).
+    workspace_id: str | None = None
 
 
 class SandboxCommandRequest(BaseModel):
     command: str
     working_directory: str = "/home/daytona"
     timeout: int = Field(default=60, gt=0, le=300)
+    # Workspace whose assigned credentials to inject as env vars (ownership
+    # re-checked server-side before any value is resolved).
+    workspace_id: str | None = None
 
 
 class SandboxFileWriteRequest(BaseModel):
@@ -219,6 +241,16 @@ class AgentCredentialStoreRequest(BaseModel):
     value: str  # plaintext secret; encrypted server-side, never echoed back
     label: str | None = Field(default=None, max_length=80)
     # Replace this existing credential's secret instead of creating a new one.
+    credential_id: str | None = None
+
+
+class WorkspaceCredentialStoreRequest(BaseModel):
+    # Env-var name (e.g. GITHUB_TOKEN). Validated server-side against a
+    # denylist of reserved/dangerous names.
+    name: str = Field(max_length=128)
+    value: str  # plaintext secret; encrypted server-side, never echoed back
+    label: str | None = Field(default=None, max_length=80)
+    # Rotate this existing credential's secret instead of creating a new one.
     credential_id: str | None = None
 
 

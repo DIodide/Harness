@@ -17,3 +17,19 @@ export function getWorkspaceColorHex(
 	if (!key) return null;
 	return WORKSPACE_COLORS.find((c) => c.key === key)?.hex ?? null;
 }
+
+/**
+ * Tint hex for a conversation row in the /chat list: the color of its workspace,
+ * but only when that workspace is a NON-Default, colored one. Returns null for
+ * unassigned chats and for the Default workspace (no tint). Used to give
+ * workspace-assigned chats a subtle background tint in the global list.
+ */
+export function getConversationTintHex(
+	workspaceId: string | null | undefined,
+	workspaces: Array<{ _id: string; color?: string; isDefault?: boolean }>,
+): string | null {
+	if (!workspaceId) return null;
+	const ws = workspaces.find((w) => w._id === workspaceId);
+	if (!ws || ws.isDefault) return null;
+	return getWorkspaceColorHex(ws.color);
+}
